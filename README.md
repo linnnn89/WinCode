@@ -28,15 +28,18 @@
 Instead of forcing AI coding agents (such as Codex, Claude Code, etc.) to master dozens of low-level tools, WinCode exposes a curated set of **high-level, semantic, and reasoning-oriented MCP tools**. Agents connect to a single endpoint to gain repository understanding, symbol-level intelligence, change-impact analysis, and Windows-native developer tooling.
 
 ```
-Coding Agent (Codex / Claude Code / etc.)
+Coding Agent (Codex / Claude Code / Cursor / Windsurf)
                     │
-                    ▼  (Single MCP Endpoint)
-┌────────────────────────────────────────────────────────┐
-│               WinCode MCP Agent Gateway                │
-├──────────────────┬──────────────────┬──────────────────┤
-│ Code Intelligence│ Context Packing  │ Impact & Health  │
-│  (via Serena)    │  (via Repomix)   │ (Composite Tools)│
-└──────────────────┴──────────────────┴──────────────────┘
+                    ▼  (Single High-Level MCP Gateway)
+┌────────────────────────────────────────────────────────────────────────┐
+│                       WinCode MCP Agent Gateway                        │
+├───────────────────────────────────┬────────────────────────────────────┤
+│         🟢 Current (Implemented)  │         🟡 Planned (Roadmap)       │
+├─────────────────┬─────────────────┼──────────────────┬─────────────────┤
+│Code Intelligence│ Context Packing │Desktop Automation│ Diagnostics &   │
+│  (via Serena)   │  (via Repomix)  │   (via FlaUI)    │ Performance     │
+│                 │                 │                  │ (Snoop/PerfView)│
+└─────────────────┴─────────────────┴──────────────────┴─────────────────┘
 ```
 
 ### 🏛️ Key Principles
@@ -48,17 +51,40 @@ Coding Agent (Codex / Claude Code / etc.)
 
 ---
 
+### 🗺️ Roadmap
+
+#### v0.1 (Delivered)
+- [x] **MCP server foundation**: Standard `stdio` JSON-RPC transport and heartbeat verification.
+- [x] **Workspace management**: `workspace_open` for .NET solutions, project counting, git detection, and safe `trash/` audit policy.
+- [x] **Repomix integration**: `wincode_prepare_context` with AST compression and task-driven context snapshots.
+
+#### v0.2 (Delivered)
+- [x] **Serena integration**: Connected via MCP Client protocol with resilient built-in AST fallback engine.
+- [x] **Symbol navigation**: `wincode_find_code_symbol` with signatures across C#, TypeScript, and Python.
+- [x] **Reference analysis**: `wincode_find_references` with word-boundary call site tracking.
+
+#### v0.3 (Delivered)
+- [x] **Change impact analysis**: `analyze_change_impact` killer tool calculates blast radius, affected components, and coupling risk.
+- [x] **Refactoring assistant**: `wincode_plan_refactoring` generates structured migration steps and safety boundaries.
+
+#### Future (Planned)
+- [ ] **Windows UI automation**: Desktop automation & UI testing via FlaUI extension.
+- [ ] **WPF diagnostics**: Deep runtime Visual Tree inspection via Snoop.
+- [ ] **Performance tooling**: CPU & memory ETW trace diagnostics via PerfView.
+
+---
+
 ### 🛠️ High-Level MCP Tools
 
 | Tool | Description | Value to Agent |
 | :--- | :--- | :--- |
 | `workspace_open` | Opens and analyzes a project directory (.NET sln, Node, Python, Git status, metadata, file tree). | Flagship entry point to open & switch target codebases. |
+| `analyze_change_impact` | Evaluates blast radius, caller count, and risk levels (`LOW` to `CRITICAL`). | **Killer Feature**: Solves agent uncertainty before modifying code. |
 | `wincode_hello_world` | Minimal heartbeat & connectivity test tool. | Instant verification of MCP server health. |
 | `wincode_analyze_workspace` | Analyzes project structure, .NET solutions, and architectural layers. | High-level overview without token flooding. |
 | `wincode_prepare_context` | Generates goal-oriented, distilled code context for specific tasks. | Minimizes token usage, focuses agent attention. |
 | `wincode_find_code_symbol` | Locates symbols (classes, interfaces, methods) with signatures. | Fast and precise symbol navigation. |
 | `wincode_find_references` | Finds references and call sites across workspace files. | Accurate dependency and usage tracking. |
-| `wincode_analyze_change_impact` | Evaluates blast radius, caller count, and risk levels (`LOW` to `CRITICAL`). | Prevents breaking changes before modifying code. |
 | `wincode_diagnose_project` | Diagnoses .NET SDK, Windows toolchains, and project integrity. | Instant health check on developer prerequisites. |
 | `wincode_plan_refactoring` | Formulates safe refactoring steps and migration boundaries. | Structured guidance for complex code refactors. |
 | `wincode_safe_move_to_trash` | Safely archives files to `trash/` with metadata instead of hard deletion. | Prevents accidental data loss. |
@@ -147,15 +173,17 @@ Add WinCode to your MCP client configuration (`claude_desktop_config.json`):
 核心理念在于：**不要让 Agent 被动学习调用几十个低层散碎工具，而是提供少量、高语义、高可靠性的工程决策接口。** Agent 仅需连接一个 MCP 入口，即可一站式获得项目结构分析、代码语义理解、修改影响面评估以及 Windows 原生开发支撑能力。
 
 ```
-Coding Agent (Codex / Claude Code / 等)
+Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
                     │
-                    ▼  (统一高语义 MCP 入口)
-┌────────────────────────────────────────────────────────┐
-│               WinCode MCP Agent Gateway                │
-├──────────────────┬──────────────────┬──────────────────┤
-│  代码语义理解    │  工程上下文打包  │  影响面与健康度  │
-│  (基于 Serena)   │  (基于 Repomix)  │ (Composite Tools)│
-└──────────────────┴──────────────────┴──────────────────┘
+                    ▼  (统一高语义 MCP 网关入口)
+┌────────────────────────────────────────────────────────────────────────┐
+│                       WinCode MCP Agent Gateway                        │
+├───────────────────────────────────┬────────────────────────────────────┤
+│         🟢 Current (已实现)       │         🟡 Planned (规划中)        │
+├─────────────────┬─────────────────┼──────────────────┬─────────────────┤
+│  代码语义理解   │  工程上下文打包 │  Windows 自动化  │ 深度诊断与调优  │
+│  (基于 Serena)  │ (基于 Repomix)  │  (基于 FlaUI)    │(Snoop/PerfView) │
+└─────────────────┴─────────────────┴──────────────────┴─────────────────┘
 ```
 
 ### 🏛️ 核心架构原则
@@ -167,17 +195,40 @@ Coding Agent (Codex / Claude Code / 等)
 
 ---
 
+### 🗺️ 研发路线图 (Roadmap)
+
+#### v0.1 (已交付)
+- [x] **MCP 服务端底座**：基于标准 `stdio` JSON-RPC 协议通信与心跳握手。
+- [x] **工作区精准纳管**：`workspace_open` 识别 .NET 解决方案（.sln）、项目数、Git 状态与安全 `trash/` 机制。
+- [x] **Repomix 上下文打包集成**：`wincode_prepare_context` 实现任务级精炼打包与代码压缩。
+
+#### v0.2 (已交付)
+- [x] **Serena 语义服务接入**：通过 MCP 客户端协议对接 Serena，并内置多语言（C# / TS / Python）降级解析引擎。
+- [x] **符号检索导航**：`wincode_find_code_symbol` 提取符号定义、签名与代码行。
+- [x] **跨文件引用追踪**：`wincode_find_references` 词边界精准查找调用点与代码上下文。
+
+#### v0.3 (已交付)
+- [x] **变更影响面分析杀手功能**：`analyze_change_impact` 计算下游爆炸半径、自动聚合受影响组件、多因子风险定级并生成架构解耦建议。
+- [x] **渐进式重构助手**：`wincode_plan_refactoring` 生成规范化重构路径与防破坏边界。
+
+#### Future (规划中)
+- [ ] **Windows 桌面 UI 自动化**：基于 FlaUI 扩展插件实现 Windows 桌面窗口交互与自动化验证。
+- [ ] **WPF / XAML 运行时诊断**：深度集成 Snoop 实现 Visual Tree 与数据绑定可视化排查。
+- [ ] **性能分析与 ETW 追踪**：集成 PerfView 工具链实现 CPU/内存热点与底层事件分析。
+
+---
+
 ### 🛠️ 对外核心 MCP 工具
 
 | 工具名称 | 功能描述 | 核心价值 |
 | :--- | :--- | :--- |
 | `workspace_open` | 打开并全面分析指定工程（识别 .NET sln、Node、Python、Git 状态、文件树与元数据） | 一号核心工具：动态切换与精准识别目标代码库。 |
+| `analyze_change_impact` | 评估变更爆炸半径、受影响组件与风险等级（`LOW` ~ `CRITICAL`） | **杀手级工具**：解决“AI 动手改代码不敢信”的痛点，输出解耦建议。 |
 | `wincode_hello_world` | 极简心跳与连通性验证工具 | 即刻验证 MCP 服务端运行状态与可用能力。 |
 | `wincode_analyze_workspace` | 工作区与架构分层识别 | 快速提取项目结构、.NET 方案分层与核心入口点。 |
 | `wincode_prepare_context` | 针对特定任务精炼语义上下文 | 提炼目标符号与强相关代码，极大降低 Token 消耗。 |
 | `wincode_find_code_symbol` | 全局代码符号（Symbol）检索 | 精确索引类、接口、方法签名及对应代码行。 |
 | `wincode_find_references` | 跨文件符号引用与调用链路追踪 | 精确定位符号在整个代码库中的所有被调用位置。 |
-| `wincode_analyze_change_impact` | 代码变更影响度与风险评估 | 计算调用密集度与爆炸半径，评定风险等级（`LOW` ~ `CRITICAL`）。 |
 | `wincode_diagnose_project` | Windows / .NET 工程环境健康诊断 | 检查 Windows 原生环境、.NET SDK 与配置完整性。 |
 | `wincode_plan_refactoring` | 组件重构方案生成与安全边界规划 | 给出渐进式重构路径与防破坏约束建议。 |
 | `wincode_safe_move_to_trash` | 安全文件移动至 `trash/` 目录 | 规范化移入项目回收站并附加元数据，防止误删。 |

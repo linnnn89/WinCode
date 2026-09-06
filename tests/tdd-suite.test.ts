@@ -267,9 +267,75 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
 
     it('ImpactAnalyzer should calculate blast radius and correct risk level', async () => {
       const impact = await router.impact.analyzeImpact('ToolRouter');
+      assert.strictEqual(impact.target, 'ToolRouter');
+      assert.ok(impact.targetFile.includes('ToolRouter.ts'));
       assert.ok(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(impact.riskLevel));
-      assert.ok(impact.recommendations.length > 0);
-      assert.ok(impact.affectedFiles.length > 0);
+      assert.ok(impact.referencesCount > 0);
+      assert.ok(Array.isArray(impact.affected));
+      assert.ok(impact.recommendations.length >= 3);
+      assert.ok(impact.formattedReport.includes('# Impact Analysis'));
+      assert.ok(impact.formattedReport.includes('Target:'));
+      assert.ok(impact.formattedReport.includes('References:'));
+      assert.ok(impact.formattedReport.includes('Affected:'));
+      assert.ok(impact.formattedReport.includes('Risk:'));
+      assert.ok(impact.formattedReport.includes('Recommended:'));
+    });
+
+    it('Phase 5: ImpactAnalyzer accurately resolves target, affected callers, and recommendations for .NET projects', async () => {
+      const tavernConfig = getDefaultConfig('d:/CODEX PROJECT/New-tavern');
+      tavernConfig.cacheDir = testCacheDir;
+      const tavernCache = new CacheManager(testCacheDir);
+      const tavernSerena = new SerenaAdapter(tavernConfig, tavernCache);
+      const tavernImpact = new ImpactAnalyzer(tavernSerena, tavernConfig);
+
+      // Analyze target by file or symbol
+      const result = await tavernImpact.analyzeImpact('MainWindow.xaml.cs');
+      assert.strictEqual(result.targetFile, 'MainWindow.xaml.cs');
+      assert.ok(result.referencesCount > 0);
+      assert.ok(result.affected.includes('App'));
+      assert.ok(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(result.riskLevel));
+      assert.ok(result.recommendations.length >= 3);
+      assert.ok(result.formattedReport.includes('MainWindow.xaml.cs'));
+      assert.ok(result.formattedReport.includes('App'));
+    });
+
+    it('Phase 5: accurately matches the exact user showcase scenario (MemoryService)', async () => {
+      const mockSerena: any = {
+        findSymbols: async (q: string) => [
+          { name: 'MemoryService', kind: 'class', file: 'D:/project/Game/MemoryService.cs', line: 10 },
+        ],
+        findReferences: async (sym: string) => [
+          { symbolName: sym, file: 'D:/project/Game/GameSession.cs', line: 15, preview: 'MemoryService mem' },
+          { symbolName: sym, file: 'D:/project/Game/GameSession.cs', line: 20, preview: 'mem.Save()' },
+          { symbolName: sym, file: 'D:/project/Game/GameSession.cs', line: 25, preview: 'mem.Load()' },
+          { symbolName: sym, file: 'D:/project/Game/GameSession.cs', line: 30, preview: 'mem.Flush()' },
+          { symbolName: sym, file: 'D:/project/Game/SaveManager.cs', line: 40, preview: 'new MemoryService()' },
+          { symbolName: sym, file: 'D:/project/Game/SaveManager.cs', line: 45, preview: 'MemoryService.Instance' },
+          { symbolName: sym, file: 'D:/project/Game/SaveManager.cs', line: 50, preview: 'mem.Backup()' },
+          { symbolName: sym, file: 'D:/project/Game/SaveManager.cs', line: 55, preview: 'mem.Sync()' },
+          { symbolName: sym, file: 'D:/project/Game/ExportService.cs', line: 60, preview: 'MemoryService exporter' },
+          { symbolName: sym, file: 'D:/project/Game/ExportService.cs', line: 65, preview: 'exporter.Dump()' },
+          { symbolName: sym, file: 'D:/project/Game/ExportService.cs', line: 70, preview: 'exporter.Serialize()' },
+          { symbolName: sym, file: 'D:/project/Game/ExportService.cs', line: 75, preview: 'exporter.Archive()' },
+        ],
+      };
+
+      const analyzer = new ImpactAnalyzer(mockSerena);
+      const impact = await analyzer.analyzeImpact('MemoryService');
+
+      assert.strictEqual(impact.targetFile, 'MemoryService.cs');
+      assert.strictEqual(impact.referencesCount, 12);
+      assert.deepStrictEqual(impact.affected, ['GameSession', 'SaveManager', 'ExportService']);
+      assert.strictEqual(impact.riskLevel, 'HIGH');
+      assert.ok(impact.recommendations.some((r) => r.includes('Add interface')));
+      assert.ok(impact.recommendations.some((r) => r.includes('Split persistence layer')));
+      assert.ok(impact.recommendations.some((r) => r.includes('Update tests')));
+
+      // Check formatted report matches format exactly
+      assert.ok(impact.formattedReport.includes('Target:\nMemoryService.cs'));
+      assert.ok(impact.formattedReport.includes('References:\n12'));
+      assert.ok(impact.formattedReport.includes('Affected:\n- GameSession\n- SaveManager\n- ExportService'));
+      assert.ok(impact.formattedReport.includes('Risk:\nHIGH'));
     });
 
     it('ProjectDiagnostics should verify Windows and SDK health', async () => {
@@ -371,10 +437,10 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       });
     };
 
-    it('MCP tools/list should list all 10 high-level tools', async () => {
+    it('MCP tools/list should list all registered high-level tools', async () => {
       const res = await callMcp('tools/list', {});
       const tools = res.result?.tools || [];
-      assert.strictEqual(tools.length, 10, 'Must expose exactly 10 registered high-level tools');
+      assert.ok(tools.length >= 10, 'Must expose at least 10 registered high-level tools');
       const toolNames = tools.map((t: any) => t.name);
       assert.ok(toolNames.includes('workspace_open'));
       assert.ok(toolNames.includes('wincode_hello_world'));
@@ -382,6 +448,7 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(toolNames.includes('wincode_prepare_context'));
       assert.ok(toolNames.includes('wincode_find_code_symbol'));
       assert.ok(toolNames.includes('wincode_find_references'));
+      assert.ok(toolNames.includes('analyze_change_impact'));
       assert.ok(toolNames.includes('wincode_analyze_change_impact'));
       assert.ok(toolNames.includes('wincode_diagnose_project'));
       assert.ok(toolNames.includes('wincode_plan_refactoring'));
@@ -467,14 +534,25 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(data.references.length > 0);
     });
 
-    it('Tool 6: wincode_analyze_change_impact works', async () => {
+    it('Tool 6: analyze_change_impact and alias wincode_analyze_change_impact work', async () => {
       const res = await callMcp('tools/call', {
-        name: 'wincode_analyze_change_impact',
+        name: 'analyze_change_impact',
         arguments: { target: 'ToolRouter' },
       });
       const impact = JSON.parse(res.result?.content?.[0]?.text);
       assert.strictEqual(impact.target, 'ToolRouter');
+      assert.ok(impact.targetFile.includes('ToolRouter.ts'));
       assert.ok(impact.riskLevel);
+      assert.ok(impact.recommendations.length >= 3);
+      assert.ok(res.result?.content?.[1]?.text.includes('# Impact Analysis'));
+
+      // Alias verification
+      const aliasRes = await callMcp('tools/call', {
+        name: 'wincode_analyze_change_impact',
+        arguments: { target: 'ToolRouter' },
+      });
+      const aliasImpact = JSON.parse(aliasRes.result?.content?.[0]?.text);
+      assert.strictEqual(aliasImpact.target, 'ToolRouter');
     });
 
     it('Tool 7: wincode_diagnose_project works', async () => {

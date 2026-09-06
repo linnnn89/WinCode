@@ -107,8 +107,22 @@ export const WINCODE_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'analyze_change_impact',
+    description: 'Analyzes downstream blast radius, affected caller components, risk rating, and architectural decoupling recommendations before modifying code (AI change safety guard).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Name of the class, component, or file to evaluate (e.g. "MemoryService" or "MemoryService.cs").',
+        },
+      },
+      required: ['target'],
+    },
+  },
+  {
     name: 'wincode_analyze_change_impact',
-    description: 'Analyzes the downstream blast radius, coupling, and risk level before modifying or refactoring a symbol/component.',
+    description: 'Alias for analyze_change_impact. Analyzes blast radius, affected callers, and risk rating before modifying code.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -176,14 +176,22 @@ export class WinCodeMcpServer {
             };
           }
 
+          case 'analyze_change_impact':
           case 'wincode_analyze_change_impact': {
             const target = String(args.target || '');
+            if (!target) {
+              throw new Error('Parameter "target" is required for analyze_change_impact.');
+            }
             const impact = await this.router.impact.analyzeImpact(target);
             return {
               content: [
                 {
                   type: 'text',
                   text: JSON.stringify(impact, null, 2),
+                },
+                {
+                  type: 'text',
+                  text: impact.formattedReport,
                 },
               ],
             };

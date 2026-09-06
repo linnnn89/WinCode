@@ -31,7 +31,7 @@ export class ToolRouter {
     this.serena = new SerenaAdapter(config, this.cache);
     this.context = new ContextManager(config, this.workspace, this.repomix, this.serena);
     this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
-    this.impact = new ImpactAnalyzer(this.serena);
+    this.impact = new ImpactAnalyzer(this.serena, this.config);
     this.refactor = new RefactorAssistant(this.workspace, this.serena, this.impact);
     this.diagnostics = new ProjectDiagnostics(this.workspace, this.config);
     this.extensions = new ExtensionManager(config);
@@ -55,7 +55,7 @@ export class ToolRouter {
     await this.serena.initialize();
     this.context = new ContextManager(this.config, this.workspace, this.repomix, this.serena);
     this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
-    this.impact = new ImpactAnalyzer(this.serena);
+    this.impact = new ImpactAnalyzer(this.serena, this.config);
     this.refactor = new RefactorAssistant(this.workspace, this.serena, this.impact);
     this.diagnostics = new ProjectDiagnostics(this.workspace, this.config);
     return result;

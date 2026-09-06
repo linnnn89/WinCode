@@ -1,5 +1,13 @@
 import path from 'path';
-import { SerenaAdapter, CodeSymbol, SymbolReference, SERENA_DEGRADED_LIMITATIONS } from '../Adapters/SerenaAdapter.js';
+import {
+  SerenaAdapter,
+  CodeSymbol,
+  SymbolReference,
+  SERENA_DEGRADED_LIMITATIONS,
+  computeTypeMatchStats,
+  FindSymbolsResult,
+  FindReferencesResult,
+} from '../Adapters/SerenaAdapter.js';
 import { WinCodeConfig } from '../Core/Config.js';
 
 export interface AffectedComponent {
@@ -20,8 +28,10 @@ export interface ImpactReport {
   riskReason: string;
   confidence: 'HIGH' | 'MEDIUM' | 'UNCERTAIN';
   source: 'serena-mcp' | 'serena-adapter-fallback' | 'unknown';
-  analysisCompleteness: 'semantic' | 'degraded' | 'unindexed';
+  analysisCompleteness: 'semantic' | 'degraded' | 'unindexed' | 'incomplete';
   limitations: string[];
+  uniqueResolution: boolean;
+  queryComplete: boolean;
   recommendations: string[];
   formattedReport: string;
 
@@ -34,6 +44,16 @@ export interface ImpactReport {
   }[];
 }
 
+interface QueryAssessment {
+  source: 'serena-mcp' | 'serena-adapter-fallback' | 'unknown';
+  queryComplete: boolean;
+  queryError?: string;
+  unique: boolean;
+  typeMatchCount: number;
+  truncated: boolean;
+  limitations: string[];
+}
+
 export class ImpactAnalyzer {
   private serena: SerenaAdapter;
   private config?: WinCodeConfig;
@@ -44,8 +64,9 @@ export class ImpactAnalyzer {
   }
 
   /**
-   * Analyzes downstream blast radius, affected components, coupling risk,
-   * and provides architectural recommendations before modifying code.
+   * Estimates blast radius from uniquely resolved symbols.
+   * Confidence is not derived from source alone. Zero refs / ambiguity / incomplete
+   * queries return UNKNOWN and must not be treated as safe to delete.
    */
   async analyzeImpact(target: string): Promise<ImpactReport> {
     const rawTarget = target.trim();
@@ -53,7 +74,6 @@ export class ImpactAnalyzer {
       throw new Error('Target parameter is required for impact analysis.');
     }
 
-    // 1. Target resolution
     let symbolName = rawTarget;
     let explicitFileHint: string | undefined = undefined;
 
@@ -66,17 +86,51 @@ export class ImpactAnalyzer {
       symbolName = base;
     }
 
-    // Resolve matching symbols with source tracking
     let symbols: CodeSymbol[] = [];
-    let source: 'serena-mcp' | 'serena-adapter-fallback' | 'unknown' = 'unknown';
+    const assessment: QueryAssessment = {
+      source: 'unknown',
+      queryComplete: true,
+      unique: false,
+      typeMatchCount: 0,
+      truncated: false,
+      limitations: [],
+    };
 
     if (typeof (this.serena as any).findSymbolsDetailed === 'function') {
-      const symRes = await (this.serena as any).findSymbolsDetailed(symbolName);
+      const symRes: FindSymbolsResult = await (this.serena as any).findSymbolsDetailed(symbolName);
       symbols = symRes.symbols || [];
-      source = symRes.source;
+      assessment.source = symRes.source || 'serena-adapter-fallback';
+      assessment.queryComplete = symRes.queryComplete !== false;
+      assessment.queryError = symRes.queryError;
+      assessment.truncated = Boolean(symRes.truncated);
+      assessment.limitations.push(...(symRes.limitations || []));
+      const stats = computeTypeMatchStats(symbols, symbolName);
+      assessment.typeMatchCount = stats.typeMatchCount;
+      assessment.unique = stats.uniqueTypeMatch;
     } else {
       symbols = await this.serena.findSymbols(symbolName);
-      source = 'serena-adapter-fallback';
+      assessment.source = 'serena-adapter-fallback';
+      const stats = computeTypeMatchStats(symbols, symbolName);
+      assessment.typeMatchCount = stats.typeMatchCount;
+      assessment.unique = stats.uniqueTypeMatch;
+    }
+
+    if (explicitFileHint) {
+      const hintBase = path.basename(explicitFileHint).replace(/\\/g, '/').toLowerCase();
+      const inFile = symbols.filter((s) => path.basename(s.file || '').toLowerCase() === hintBase);
+      if (inFile.length > 0) {
+        symbols = inFile;
+        const stats = computeTypeMatchStats(inFile, symbolName);
+        assessment.typeMatchCount = stats.typeMatchCount;
+        assessment.unique = stats.uniqueTypeMatch || inFile.some((s) => s.name.toLowerCase() === symbolName.toLowerCase());
+      } else {
+        assessment.unique = true;
+      }
+    } else if (!assessment.unique) {
+      const exact = symbols.filter((s) => s.name.toLowerCase() === symbolName.toLowerCase());
+      if (assessment.typeMatchCount === 0 && exact.length === 1) {
+        assessment.unique = true;
+      }
     }
 
     let matchedSymbol: CodeSymbol | undefined;
@@ -91,57 +145,17 @@ export class ImpactAnalyzer {
         symbols[0];
     }
 
-    // [P1 Fix]: If symbol is not declared / found in workspace index and no explicit file matches
     const isSymbolDeclared = Boolean(matchedSymbol || explicitFileHint);
     if (!isSymbolDeclared) {
-      const riskLevel: 'UNKNOWN' = 'UNKNOWN';
-      const confidence: 'UNCERTAIN' = 'UNCERTAIN';
-      const analysisCompleteness: 'unindexed' = 'unindexed';
-      const limitations = [
-        '未在工作区索引中找到符号声明，无法验证下游影响，切勿直接假设可安全重构或删除。',
-        '本地正则扫描仅作为文本检索降级方案，不保证符号身份、重载区分或跨文件引用完整性。',
-      ];
-      const riskReason = `Symbol "${symbolName}" was not found in workspace index. Downstream impact and references cannot be reliably verified. Do NOT assume it is safe to refactor or delete.`;
-      const recommendations = [
-        `Verify symbol spelling ("${symbolName}") or ensure the defining file is indexed.`,
-        `Check if the symbol is dynamically loaded, reflected, or defined in an external dependency.`,
-        `Perform manual call site verification before modifying or deleting code.`,
-      ];
-      const targetFile = `${symbolName} (unresolved)`;
-      const formattedReport = this.formatReport({
-        targetFile,
-        referencesCount: 0,
-        affected: [],
-        riskLevel,
-        recommendations,
-        source,
-        confidence,
-        analysisCompleteness,
-        limitations,
-      });
-
-      return {
-        target: rawTarget,
-        targetFile,
-        targetKind: undefined,
-        referencesCount: 0,
-        affected: [],
-        affectedComponents: [],
-        riskLevel,
-        riskReason,
-        confidence,
-        source,
-        analysisCompleteness,
-        limitations,
-        recommendations,
-        formattedReport,
-        matchedSymbols: [],
-        affectedFiles: [],
-        downstreamImpacts: [],
-      };
+      return this.unresolvedReport(rawTarget, symbolName, assessment, symbols);
     }
 
-    // Determine targetFile
+    if (!assessment.unique) {
+      assessment.limitations.unshift(
+        `目标 "${symbolName}" 未能唯一解析（${assessment.typeMatchCount} 个同名类型）。混合引用不能作为影响面证据。`
+      );
+    }
+
     let targetFile = '';
     if (matchedSymbol?.file) {
       targetFile = path.basename(matchedSymbol.file);
@@ -151,18 +165,30 @@ export class ImpactAnalyzer {
       targetFile = `${symbolName}.cs`;
     }
 
-    // 2. Discover references with source awareness
     let refs: SymbolReference[] = [];
     if (typeof (this.serena as any).findReferencesDetailed === 'function') {
-      const refRes = await (this.serena as any).findReferencesDetailed(symbolName);
+      const refRes: FindReferencesResult = await (this.serena as any).findReferencesDetailed(
+        symbolName,
+        matchedSymbol?.file
+      );
       refs = refRes.references || [];
-      if (refRes.source) source = refRes.source;
+      if (refRes.source) assessment.source = refRes.source;
+      if (refRes.queryComplete === false) {
+        assessment.queryComplete = false;
+        assessment.queryError = refRes.queryError || assessment.queryError;
+      }
+      if (refRes.truncated) {
+        assessment.truncated = true;
+        assessment.queryComplete = false;
+      }
+      if (refRes.limitations) {
+        assessment.limitations.push(...refRes.limitations);
+      }
     } else {
       refs = await this.serena.findReferences(symbolName);
     }
-    const referencesCount = refs.length;
 
-    // 3. Resolve affected callers / components
+    const referencesCount = refs.length;
     const componentMap = new Map<string, AffectedComponent>();
     const fileMap = new Map<string, number>();
 
@@ -170,14 +196,12 @@ export class ImpactAnalyzer {
       const normalizedFile = ref.file.replace(/\\/g, '/');
       fileMap.set(normalizedFile, (fileMap.get(normalizedFile) || 0) + 1);
 
-      // Check if reference is in the definition file itself (internal vs external)
       const baseFile = path.basename(normalizedFile);
       const isInternal =
         targetFile &&
         (baseFile.toLowerCase() === targetFile.toLowerCase() ||
           normalizedFile.toLowerCase().endsWith(targetFile.toLowerCase()));
 
-      // Extract component name from file
       const compName = this.extractComponentName(normalizedFile);
 
       if (!isInternal) {
@@ -201,49 +225,45 @@ export class ImpactAnalyzer {
       (a, b) => b.references - a.references
     );
     const affected = affectedComponents.map((c) => c.name);
-
     const affectedFiles = Array.from(fileMap.keys());
     const downstreamImpacts = Array.from(fileMap.entries()).map(([file, occurrences]) => ({
       file,
       occurrences,
     }));
 
-    // 4. Calculate Risk Rating
     const { riskLevel, riskReason, confidence } = this.calculateRisk(
       symbolName,
       targetFile,
       referencesCount,
       affectedComponents.length,
       affected,
-      source
+      assessment
     );
 
-    const analysisCompleteness: 'semantic' | 'degraded' =
-      source === 'serena-mcp' ? 'semantic' : 'degraded';
-    const limitations =
-      source === 'serena-mcp' ? [] : [...SERENA_DEGRADED_LIMITATIONS];
+    const analysisCompleteness = this.completeness(isSymbolDeclared, assessment);
+    const limitations = this.mergeLimitations(assessment, referencesCount, riskLevel);
 
-    // 5. Generate Architectural Recommendations
     const recommendations = this.generateRecommendations(
       symbolName,
       targetFile,
       riskLevel,
       affected,
       referencesCount,
-      source
+      assessment
     );
 
-    // 6. Generate Clean Markdown Formatted Report
     const formattedReport = this.formatReport({
       targetFile,
       referencesCount,
       affected,
       riskLevel,
       recommendations,
-      source,
+      source: assessment.source,
       confidence,
       analysisCompleteness,
       limitations,
+      uniqueResolution: assessment.unique,
+      queryComplete: assessment.queryComplete,
     });
 
     return {
@@ -256,9 +276,11 @@ export class ImpactAnalyzer {
       riskLevel,
       riskReason,
       confidence,
-      source,
+      source: assessment.source,
       analysisCompleteness,
       limitations,
+      uniqueResolution: assessment.unique,
+      queryComplete: assessment.queryComplete,
       recommendations,
       formattedReport,
       matchedSymbols: symbols,
@@ -267,14 +289,106 @@ export class ImpactAnalyzer {
     };
   }
 
-  /**
-   * Extracts clean component or class name from a file path
-   */
+  private unresolvedReport(
+    rawTarget: string,
+    symbolName: string,
+    assessment: QueryAssessment,
+    symbols: CodeSymbol[]
+  ): ImpactReport {
+    const riskLevel: 'UNKNOWN' = 'UNKNOWN';
+    const confidence: 'UNCERTAIN' = 'UNCERTAIN';
+    const analysisCompleteness: 'unindexed' = 'unindexed';
+    const limitations = [
+      '未在工作区索引中找到符号声明，无法验证下游影响，切勿直接假设可安全重构或删除。',
+      ...SERENA_DEGRADED_LIMITATIONS,
+      ...assessment.limitations,
+    ];
+    const riskReason = `Symbol "${symbolName}" was not found in workspace index. Downstream impact and references cannot be reliably verified. Do NOT assume it is safe to refactor or delete.`;
+    const recommendations = [
+      `Verify symbol spelling ("${symbolName}") or ensure the defining file is indexed.`,
+      `Check if the symbol is dynamically loaded, reflected, or defined in an external dependency.`,
+      `Perform manual call site verification before modifying or deleting code.`,
+    ];
+    const targetFile = `${symbolName} (unresolved)`;
+    const formattedReport = this.formatReport({
+      targetFile,
+      referencesCount: 0,
+      affected: [],
+      riskLevel,
+      recommendations,
+      source: assessment.source,
+      confidence,
+      analysisCompleteness,
+      limitations,
+      uniqueResolution: false,
+      queryComplete: assessment.queryComplete,
+    });
+
+    return {
+      target: rawTarget,
+      targetFile,
+      targetKind: undefined,
+      referencesCount: 0,
+      affected: [],
+      affectedComponents: [],
+      riskLevel,
+      riskReason,
+      confidence,
+      source: assessment.source,
+      analysisCompleteness,
+      limitations,
+      uniqueResolution: false,
+      queryComplete: assessment.queryComplete,
+      recommendations,
+      formattedReport,
+      matchedSymbols: symbols,
+      affectedFiles: [],
+      downstreamImpacts: [],
+    };
+  }
+
+  private completeness(
+    declared: boolean,
+    assessment: QueryAssessment
+  ): ImpactReport['analysisCompleteness'] {
+    if (!declared) return 'unindexed';
+    if (!assessment.queryComplete || assessment.truncated) return 'incomplete';
+    if (assessment.source === 'serena-mcp') return 'semantic';
+    return 'degraded';
+  }
+
+  private mergeLimitations(
+    assessment: QueryAssessment,
+    referencesCount: number,
+    riskLevel: ImpactReport['riskLevel']
+  ): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of assessment.limitations) {
+      if (item && !seen.has(item)) {
+        seen.add(item);
+        out.push(item);
+      }
+    }
+    if (!assessment.unique) {
+      const msg = '目标符号未唯一解析，不得将当前引用集合当作完整影响面。';
+      if (!seen.has(msg)) out.push(msg);
+    }
+    if (referencesCount === 0 || riskLevel === 'UNKNOWN') {
+      const msg = '未找到引用不得直接解释为“无影响”或“低风险”，也不得视为可安全删除。';
+      if (!seen.has(msg)) out.push(msg);
+    }
+    if (assessment.source === 'serena-mcp' && (!assessment.queryComplete || assessment.truncated)) {
+      const msg = 'Serena 已返回结果，但查询不完整或可能截断，可信度不能只看供应方。';
+      if (!seen.has(msg)) out.push(msg);
+    }
+    return out;
+  }
+
   private extractComponentName(filePath: string): string {
     const base = path.basename(filePath);
     const withoutExt = base.replace(/\.[^.]+$/, '');
 
-    // Handle generic names like index.ts or mod.rs
     if (['index', 'mod', 'main', 'program'].includes(withoutExt.toLowerCase())) {
       const parentDir = path.basename(path.dirname(filePath));
       if (parentDir && parentDir !== '.' && parentDir !== '/') {
@@ -282,12 +396,12 @@ export class ImpactAnalyzer {
       }
     }
 
-    // Strip XAML extension if WPF (e.g. MainWindow.xaml.cs -> MainWindow)
     return withoutExt.replace(/\.xaml$/i, '');
   }
 
   /**
-   * Risk assessment considering references, affected fan-out, and module semantics
+   * Confidence is derived from unique resolution and query completeness, not from source alone.
+   * Zero references never become LOW / safe-to-refactor.
    */
   private calculateRisk(
     symbolName: string,
@@ -295,12 +409,38 @@ export class ImpactAnalyzer {
     referencesCount: number,
     affectedComponentsCount: number,
     affected: string[],
-    source: 'serena-mcp' | 'serena-adapter-fallback' | 'unknown'
+    assessment: QueryAssessment
   ): {
     riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN';
     riskReason: string;
     confidence: 'HIGH' | 'MEDIUM' | 'UNCERTAIN';
   } {
+    const confidence = this.deriveConfidence(assessment, referencesCount);
+
+    if (!assessment.unique) {
+      return {
+        riskLevel: 'UNKNOWN',
+        riskReason: `Symbol "${symbolName}" is not uniquely resolved (${assessment.typeMatchCount} type matches). Do not treat mixed hits as a blast radius.`,
+        confidence: 'UNCERTAIN',
+      };
+    }
+
+    if (!assessment.queryComplete || assessment.truncated) {
+      return {
+        riskLevel: 'UNKNOWN',
+        riskReason: `Impact query is incomplete${assessment.queryError ? ` (${assessment.queryError})` : ''}. Zero or partial references are not evidence of low risk.`,
+        confidence: 'UNCERTAIN',
+      };
+    }
+
+    if (referencesCount === 0) {
+      return {
+        riskLevel: 'UNKNOWN',
+        riskReason: `No references were returned for "${symbolName}". This is not proof of zero impact or that the symbol is safe to refactor or delete.`,
+        confidence: 'UNCERTAIN',
+      };
+    }
+
     const isCoreModule =
       /(Service|Manager|Store|Repository|Gateway|Context|Router|Core|Client)$/i.test(symbolName) ||
       /(Core|Gateway|Services|Data|Database|Infrastructure)/i.test(targetFile);
@@ -309,7 +449,7 @@ export class ImpactAnalyzer {
       return {
         riskLevel: 'CRITICAL',
         riskReason: `Massive blast radius: ${referencesCount} references across ${affectedComponentsCount} external components. High danger of cascading failures.`,
-        confidence: source === 'serena-mcp' ? 'HIGH' : 'MEDIUM',
+        confidence,
       };
     }
 
@@ -321,7 +461,7 @@ export class ImpactAnalyzer {
       return {
         riskLevel: 'HIGH',
         riskReason: `High coupling detected: ${referencesCount} references across ${affectedComponentsCount} components (${affected.slice(0, 3).join(', ')}). Breaking changes will ripple into consumers.`,
-        confidence: source === 'serena-mcp' ? 'HIGH' : 'MEDIUM',
+        confidence,
       };
     }
 
@@ -329,68 +469,56 @@ export class ImpactAnalyzer {
       return {
         riskLevel: 'MEDIUM',
         riskReason: `Moderate coupling: ${referencesCount} references in ${affectedComponentsCount} components. Call sites require coordinated updates.`,
-        confidence: source === 'serena-mcp' ? 'HIGH' : 'MEDIUM',
-      };
-    }
-
-    if (referencesCount === 0) {
-      if (source !== 'serena-mcp') {
-        // [User Rule]: 降级或未连接真实 Serena 时，不得将“未找到引用”直接解释为“无影响”或“低风险”
-        return {
-          riskLevel: 'UNKNOWN',
-          riskReason: `本地正则文本降级扫描下未匹配到显式引用。由于文本扫描不保证符号身份、重载区分、跨文件引用完整性或安全重命名，不得将“未找到引用”直接解释为“无影响”或“低风险”。建议连接真实 Serena 语义服务进行完整分析。`,
-          confidence: 'UNCERTAIN',
-        };
-      }
-      return {
-        riskLevel: 'LOW',
-        riskReason: `Serena 语义分析未发现跨工程外部引用，属于高置信度的局部影响。`,
-        confidence: 'HIGH',
-      };
-    }
-
-    // 1-3 references
-    if (source !== 'serena-mcp') {
-      return {
-        riskLevel: 'LOW',
-        riskReason: `本地文本检索检测到 ${referencesCount} 处匹配引用（降级模式仅供参考，不保证跨文件引用完整性，重构时请保持公共契约并进行必要人工核查）。`,
-        confidence: 'MEDIUM',
+        confidence,
       };
     }
 
     return {
       riskLevel: 'LOW',
-      riskReason: `Localized impact: ${referencesCount} references verified via Serena semantic analysis. Safe for targeted in-place refactoring.`,
-      confidence: 'HIGH',
+      riskReason: `Localized impact: ${referencesCount} references in ${affectedComponentsCount} external component(s). Public contracts should still be preserved.`,
+      confidence,
     };
   }
 
-  /**
-   * Contextual architectural guidance to prevent blind modifications
-   */
+  private deriveConfidence(
+    assessment: QueryAssessment,
+    referencesCount: number
+  ): 'HIGH' | 'MEDIUM' | 'UNCERTAIN' {
+    if (!assessment.unique || !assessment.queryComplete || assessment.truncated || referencesCount === 0) {
+      return 'UNCERTAIN';
+    }
+    if (assessment.source === 'serena-mcp') {
+      return 'HIGH';
+    }
+    return 'MEDIUM';
+  }
+
   private generateRecommendations(
     symbolName: string,
     targetFile: string,
     riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN',
     affected: string[],
     referencesCount: number,
-    source?: 'serena-mcp' | 'serena-adapter-fallback' | 'unknown'
+    assessment: QueryAssessment
   ): string[] {
     const recs: string[] = [];
 
-    // Recommendation 1: Interface abstraction
+    if (riskLevel === 'UNKNOWN' || !assessment.unique || !assessment.queryComplete || referencesCount === 0) {
+      recs.push(`Locate the exact symbol definition and verify call sites before modifying "${symbolName}".`);
+      recs.push('Do not delete or rename based on a missing or incomplete reference list.');
+      recs.push(`Run tests and search for reflection/DI registrations that mention ${symbolName}.`);
+      return recs;
+    }
+
     if (riskLevel === 'CRITICAL' || riskLevel === 'HIGH') {
       const interfaceName = symbolName.startsWith('I') ? symbolName : `I${symbolName}`;
       recs.push(`Add interface (${interfaceName}) before modifying concrete implementation to decouple callers.`);
     } else if (riskLevel === 'MEDIUM') {
       recs.push(`Preserve existing method signatures or add non-breaking overloads to maintain compatibility.`);
-    } else if (riskLevel === 'UNKNOWN') {
-      recs.push(`Locate the exact symbol definition or verify if defined in external packages before modifying.`);
     } else {
       recs.push(`Perform targeted modifications while keeping public contract intact.`);
     }
 
-    // Recommendation 2: Decoupling persistence/layering or semantic caution
     const hasPersistence = affected.some((a) =>
       /(Save|Store|Memory|Db|Database|Repo|Persistence|Session|Cache)/i.test(a)
     );
@@ -404,22 +532,12 @@ export class ImpactAnalyzer {
       recs.push(`Decouple UI presentation components from domain logic using command patterns or event buses.`);
     } else if (affected.length >= 3) {
       recs.push(`Isolate high-impact callers (${affected.slice(0, 2).join(', ')}) with adapter layers or facade boundaries.`);
-    } else if (source !== 'serena-mcp' && referencesCount === 0) {
-      recs.push('连接真实 Serena 语义服务或启动 Roslyn/TypeScript LSP，防止遗漏反射或跨项目间接调用。');
-    } else if (riskLevel === 'UNKNOWN') {
-      recs.push(`Avoid deleting or renaming without checking runtime reflections or DI registrations.`);
     } else {
       recs.push(`Verify caller assumptions in ${affected.length > 0 ? affected[0] : 'local module'}.`);
     }
 
-    // Recommendation 3: Verification & Test strategy
     if (affected.length > 0) {
-      const targetCallers = affected.slice(0, 3).join(', ');
-      recs.push(`Update tests covering caller workflows in: ${targetCallers}.`);
-    } else if (source !== 'serena-mcp' && referencesCount === 0) {
-      recs.push('切勿仅因降级文本扫描未匹配到引用就假定变更无影响或低风险，修改前请核对调用点。');
-    } else if (riskLevel === 'UNKNOWN') {
-      recs.push(`Run full project test suite and verify if any tests mention ${symbolName}.`);
+      recs.push(`Update tests covering caller workflows in: ${affected.slice(0, 3).join(', ')}.`);
     } else {
       recs.push(`Run existing unit and regression tests to verify zero behavioral regressions.`);
     }
@@ -427,9 +545,6 @@ export class ImpactAnalyzer {
     return recs;
   }
 
-  /**
-   * Formats report into concise, high-visibility Markdown
-   */
   private formatReport(data: {
     targetFile: string;
     referencesCount: number;
@@ -440,11 +555,13 @@ export class ImpactAnalyzer {
     confidence?: string;
     analysisCompleteness?: string;
     limitations?: string[];
+    uniqueResolution?: boolean;
+    queryComplete?: boolean;
   }): string {
     const affectedLines =
       data.affected.length > 0
         ? data.affected.map((a) => `- ${a}`).join('\n')
-        : '- (None - localized within file)';
+        : '- (None reported; not proof of zero impact)';
 
     const recLines = data.recommendations.map((r, i) => `${i + 1}. ${r}`).join('\n');
 
@@ -465,7 +582,19 @@ export class ImpactAnalyzer {
     ];
 
     if (data.confidence) {
-      lines.push(``, `Confidence:`, `${data.confidence}${data.source ? ` (${data.source})` : ''}`);
+      lines.push(``, `Confidence:`, `${data.confidence}`);
+    }
+
+    if (data.source) {
+      lines.push(``, `Source:`, `${data.source}`);
+    }
+
+    if (data.uniqueResolution !== undefined) {
+      lines.push(``, `Unique Resolution:`, `${data.uniqueResolution}`);
+    }
+
+    if (data.queryComplete !== undefined) {
+      lines.push(``, `Query Complete:`, `${data.queryComplete}`);
     }
 
     if (data.analysisCompleteness) {
@@ -476,13 +605,8 @@ export class ImpactAnalyzer {
       lines.push(``, `Limitations:`, data.limitations.map((l) => `- ${l}`).join('\n'));
     }
 
-    lines.push(
-      ``,
-      `Recommended:`,
-      `${recLines}`,
-    );
+    lines.push(``, `Recommended:`, `${recLines}`);
 
     return lines.join('\n');
   }
 }
-

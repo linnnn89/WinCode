@@ -1,7 +1,7 @@
 # WinCode
 
 <p align="center">
-  <strong>A Windows-first MCP gateway that provides AI coding agents unified access to code intelligence, repository understanding, desktop automation, and engineering tools.</strong>
+  <strong>A Windows-first MCP gateway that gives coding agents a small set of high-level tools: workspace graph, evidence-bounded context, and change-impact reports that stay honest when analysis is incomplete.</strong>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 ### 🌟 Project Vision
 **WinCode** is not just a tool wrapper; it is an **engineering capability gateway built specifically for Windows development environments**.
 
-Instead of forcing AI coding agents (such as Codex, Claude Code, etc.) to master dozens of low-level tools, WinCode exposes a curated set of **high-level, semantic, and reasoning-oriented MCP tools**. Agents connect to a single endpoint to gain repository understanding, symbol-level intelligence, change-impact analysis, and Windows-native developer tooling.
+Instead of forcing AI coding agents (such as Codex, Claude Code, etc.) to master dozens of low-level tools, WinCode exposes a curated set of **high-level MCP tools**. Agents connect to one endpoint for workspace graphs, file-backed context, and change-impact reports. Serena and Repomix are optional upstreams; when they are missing or incomplete, WinCode keeps running and **labels the gap**.
 
 ```
 Coding Agent (Codex / Claude Code / Cursor / Windsurf)
@@ -34,61 +34,61 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 ┌────────────────────────────────────────────────────────────────────────┐
 │                       WinCode MCP Agent Gateway                        │
 ├───────────────────────────────────┬────────────────────────────────────┤
-│         🟢 Current (Implemented)  │         🟡 Planned (Roadmap)       │
+│         🟢 Current (v0.4)         │         🟡 Planned (not started)   │
 ├─────────────────┬─────────────────┼──────────────────┬─────────────────┤
-│Code Intelligence│ Context Packing │Desktop Automation│ Diagnostics &   │
-│  (via Serena)   │  (via Repomix)  │   (via FlaUI)    │ Performance     │
-│                 │                 │                  │ (Snoop/PerfView)│
+│ .NET sln/csproj │ Evidence-bounded│Desktop Automation│ Diagnostics &   │
+│ graph + impact  │ context + health│   (FlaUI)        │ Performance     │
+│ (Serena optional│ (Repomix CLI    │                  │ (Snoop/PerfView)│
+│  / text fallback)│  optional)     │                  │                 │
 └─────────────────┴─────────────────┴──────────────────┴─────────────────┘
 ```
 
 ### 🏛️ Key Principles
-1. **Upstream First**: External dependencies like **Serena** and **Repomix** are integrated through adapters without modifying upstream source code, featuring resilient built-in fallbacks.
-2. **High-Level Semantics**: Prevents "information dumps" (e.g., streaming 50,000 lines of raw code). WinCode distills decisions, call graphs, and risk assessments.
-3. **Windows First**: Tailored for Windows 10/11, .NET (WPF, WinUI, WinForms, MSBuild), with future extensibility for FlaUI, Snoop, and PerfView.
-4. **Safe Workspace Policy**: Prohibits destructive file deletions. Obsolete files are safely moved to the project's `trash/` directory with complete audit metadata.
-5. **Multi-Level Caching**: Uses fingerprinting and mtime hashing to minimize token consumption and avoid redundant project scans.
-6. **Semantic Priority & Degraded Integrity**: Local regex scanning serves strictly as a text-retrieval fallback and does not guarantee symbol identity, overload distinction, or cross-file reference completeness. When a real Serena service is connected, semantic queries take strict precedence. Under degraded mode or query failure, source, limitations, and analysis completeness must be clearly labeled, and finding 0 references must never be directly interpreted as "zero impact" or "low risk".
+1. **Upstream First**: **Serena** and **Repomix** are optional adapters. A found `serena` binary is not a connection. Handshake, project activation, and a successful semantic query are reported separately.
+2. **Evidence over summaries**: Default context is file snippets with path/symbol/line, inside a token budget. Missing evidence is declared; the server will not dump the whole repo or invent architecture advice.
+3. **Windows First**: Reads real `.sln` / `.csproj` graphs (ProjectReference, WPF/WinUI/WinForms, entry points). `dotnet` on PATH is not semantic analysis. Extra Roslyn integration is **not** committed.
+4. **Safe Workspace Policy**: No hard deletes. Obsolete files move to `trash/` with audit metadata. Only relative in-workspace paths are accepted.
+5. **Caching**: Fingerprints (git HEAD / dirty mtime) avoid repeat scans. Incomplete Serena queries are not cached.
+6. **Source ≠ confidence**: `source` is the provider. Confidence for impact analysis requires unique resolution and a complete query. Zero references, ambiguity, or incomplete queries return `UNKNOWN` — never "safe to delete". Local regex fallback does not guarantee symbol identity, overloads, or complete cross-file references.
 
 ---
 
 ### 🗺️ Roadmap
 
-#### v0.1 (Delivered)
-- [x] **MCP server foundation**: Standard `stdio` JSON-RPC transport and heartbeat verification.
-- [x] **Workspace management**: `workspace_open` for .NET solutions, project counting, git detection, and safe `trash/` audit policy.
-- [x] **Repomix integration**: `wincode_prepare_context` with AST compression and task-driven context snapshots.
+#### v0.1–v0.3 (Delivered)
+- [x] MCP `stdio` server, `workspace_open`, safe `trash/` policy, fingerprint cache.
+- [x] Serena MCP adapter **when handshake succeeds**; otherwise labeled text fallback (not an AST/Roslyn engine).
+- [x] Repomix CLI packing **when installed**; otherwise a capped builtin file packer (not Tree-sitter compression unless the CLI `--compress` path runs).
+- [x] `analyze_change_impact` with risk levels; `wincode_plan_refactoring` is a checklist on top of impact, not an automated refactorer.
 
-#### v0.2 (Delivered)
-- [x] **Serena integration**: Connected via MCP Client protocol with resilient built-in AST fallback engine.
-- [x] **Symbol navigation**: `wincode_find_code_symbol` with signatures across C#, TypeScript, and Python.
-- [x] **Reference analysis**: `wincode_find_references` with word-boundary call site tracking.
+#### v0.4 (Delivered)
+- [x] Layered adapter status: `commandFound` / `handshakeOk` / `projectActive` / `semanticQueryUsable` / `mode`. `available: true` + fallback means local tools work, not "Serena connected".
+- [x] `.sln` / `.csproj` project graph and entry points from project files (`projectGraph`). Folder names are hints only.
+- [x] Impact `confidence` from unique resolution + query completeness. Ambiguous types, incomplete queries, and 0 references return `UNKNOWN`.
+- [x] `wincode_prepare_context` returns evidence snippets by default; `includeFullText` packs only the related file set; empty related set does not dump the repo.
+- [x] Portable fixture `tests/fixtures/dotnet-mini` (MiniDesk, 3 projects). Optional live repo via `WINCODE_TAVERN_PATH`.
 
-#### v0.3 (Delivered)
-- [x] **Change impact analysis**: `analyze_change_impact` killer tool calculates blast radius, affected components, and coupling risk.
-- [x] **Refactoring assistant**: `wincode_plan_refactoring` generates structured migration steps and safety boundaries.
-
-#### Future (Planned)
-- [ ] **Windows UI automation**: Desktop automation & UI testing via FlaUI extension.
-- [ ] **WPF diagnostics**: Deep runtime Visual Tree inspection via Snoop.
-- [ ] **Performance tooling**: CPU & memory ETW trace diagnostics via PerfView.
+#### Later (not in v0.4)
+- [ ] FlaUI / Snoop / PerfView.
+- [ ] Extra Roslyn host (only after measuring Serena gaps on real C# repos).
+- [ ] Removing existing tool names.
 
 ---
 
 ### 🛠️ High-Level MCP Tools
 
-| Tool | Description | Value to Agent |
+| Tool | Description | Notes |
 | :--- | :--- | :--- |
-| `workspace_open` | Opens and analyzes a project directory (.NET sln, Node, Python, Git status, metadata, file tree). | Flagship entry point to open & switch target codebases. |
-| `analyze_change_impact` | Evaluates blast radius, caller count, and risk levels (`LOW` to `CRITICAL`). | **Killer Feature**: Solves agent uncertainty before modifying code. |
-| `wincode_hello_world` | Minimal heartbeat & connectivity test tool. | Instant verification of MCP server health. |
-| `wincode_analyze_workspace` | Analyzes project structure, .NET solutions, and architectural layers. | High-level overview without token flooding. |
-| `wincode_prepare_context` | Generates goal-oriented, distilled code context for specific tasks. | Minimizes token usage, focuses agent attention. |
-| `wincode_find_code_symbol` | Locates symbols (classes, interfaces, methods) with signatures. | Fast and precise symbol navigation. |
-| `wincode_find_references` | Finds references and call sites across workspace files. | Accurate dependency and usage tracking. |
-| `wincode_diagnose_project` | Diagnoses .NET SDK, Windows toolchains, and project integrity. | Instant health check on developer prerequisites. |
-| `wincode_plan_refactoring` | Formulates safe refactoring steps and migration boundaries. | Structured guidance for complex code refactors. |
-| `wincode_safe_move_to_trash` | Safely archives files to `trash/` with metadata instead of hard deletion. | Prevents accidental data loss. |
+| `workspace_open` | Open a directory; detect type, sln/csproj, git, metadata, tree. | Switches the active workspace. |
+| `wincode_hello_world` | Heartbeat **and** layered adapter status. | Fallback ≠ Serena connected. |
+| `wincode_analyze_workspace` | Workspace overview + `.NET` `projectGraph` from sln/csproj. | Directory layers are hints, not architecture judgments. |
+| `wincode_prepare_context` | Task-related evidence (path, symbol, line, snippet) within `maxTokens`. | Set `includeFullText` to pack **related** files only. Declares insufficient evidence. |
+| `wincode_find_code_symbol` | Symbol search with `source`, `queryComplete`, `uniqueTypeMatch`. | Serena when usable; otherwise text scan. |
+| `wincode_find_references` | Call-site / usage list with the same honesty fields. | 0 hits is not "no impact". |
+| `analyze_change_impact` | Blast radius + risk. Alias: `wincode_analyze_change_impact`. | `UNKNOWN` when not uniquely resolved or query incomplete. Confidence is not `source`. |
+| `wincode_diagnose_project` | Windows / SDK / git / Serena status. | `dotnet --version` ≠ semantic references. |
+| `wincode_plan_refactoring` | Checklist derived from impact + trash policy. | Not an automated refactor engine. |
+| `wincode_safe_move_to_trash` | Move a relative in-workspace path to `trash/` with metadata. | Absolute / `..` / symlink escape rejected. |
 
 ---
 
@@ -104,23 +104,26 @@ WinCode/
 │   ├── Core/
 │   │   ├── Config.ts                 # Workspace & adapter configuration
 │   │   ├── Workspace.ts              # Project detection & safe trash policy
-│   │   ├── Cache.ts                  # Multi-level memory & disk caching
-│   │   ├── Context.ts                # Semantic context synthesis
+│   │   ├── Cache.ts                  # Memory/disk cache with fingerprints
+│   │   ├── DotNetGraph.ts            # sln/csproj ProjectReference graph
+│   │   ├── Context.ts                # Evidence-bounded context (budget + snippets)
 │   │   └── ToolRouter.ts             # Central execution router
 │   ├── Adapters/
-│   │   ├── IAdapter.ts               # Base adapter contract
-│   │   ├── RepomixAdapter.ts         # Repomix adapter with resilient fallback
-│   │   └── SerenaAdapter.ts          # Serena adapter with built-in AST indexer
+│   │   ├── IAdapter.ts               # Adapter contract + layered upstream status
+│   │   ├── RepomixAdapter.ts         # Repomix CLI or closed-set builtin packer
+│   │   └── SerenaAdapter.ts          # Serena MCP client or regex fallback
 │   ├── CompositeTools/
-│   │   ├── ArchitectureAnalyzer.ts   # Layer & entry-point analysis
-│   │   ├── ImpactAnalyzer.ts         # Blast radius & risk calculation
-│   │   ├── ProjectDiagnostics.ts     # Windows & .NET environment diagnostics
-│   │   └── RefactorAssistant.ts      # Refactor roadmap & safe boundaries
+│   │   ├── ArchitectureAnalyzer.ts   # File-derived graph + directory hints
+│   │   ├── ImpactAnalyzer.ts         # Blast radius; UNKNOWN when incomplete
+│   │   ├── ProjectDiagnostics.ts     # SDK/git/Serena status (no overclaim)
+│   │   └── RefactorAssistant.ts      # Impact-based checklist + trash policy
 │   └── Extensions/
-│       └── ExtensionManager.ts       # Pluggable Windows desktop extensions
+│       └── ExtensionManager.ts       # Reserved; no FlaUI/Snoop plugins yet
 ├── tests/
-│   └── verify.ts                     # Automated end-to-end verification
-└── trash/                            # Safe archive for deleted files (.gitignore)
+│   ├── fixtures/dotnet-mini/         # Portable MiniDesk .NET fixture (3 projects)
+│   ├── tdd-suite.test.ts             # Default CI suite
+│   └── verify.ts                     # Smoke verification
+└── trash/                            # Safe archive (.gitignore)
 ```
 
 ---
@@ -140,9 +143,17 @@ npm install
 npm run build
 ```
 
-#### 2. Run Verification
+#### 2. Tests
 ```bash
-npx tsx tests/verify.ts
+npm test
+npm run test:verify
+```
+
+Default tests use `tests/fixtures/dotnet-mini`. To optionally exercise a local live solution:
+
+```bash
+set WINCODE_TAVERN_PATH=C:\path\to\your.sln-folder
+npm test
 ```
 
 #### 3. Connect to AI Agents (Claude Desktop / Codex / Windsurf / Cursor)
@@ -171,69 +182,70 @@ Add WinCode to your MCP client configuration (`claude_desktop_config.json`):
 ### 🌟 项目愿景
 **WinCode** 不是简单的底层工具转发器，而是专为 **Windows 桌面与工程环境打造的 Agent 开发能力网关**。
 
-核心理念在于：**不要让 Agent 被动学习调用几十个低层散碎工具，而是提供少量、高语义、高可靠性的工程决策接口。** Agent 仅需连接一个 MCP 入口，即可一站式获得项目结构分析、代码语义理解、修改影响面评估以及 Windows 原生开发支撑能力。
+核心理念：**不要让 Agent 学习几十个低层工具，而是给少量高语义接口。** 当前 v0.4 交付的是可证伪的查询链：.NET 项目图、带依据的上下文、改前影响面。Serena / Repomix 是可选上游；缺失或不完整时继续运行，并**标明缺口**，而不是写成“已连接”。
 
 ```
 Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
                     │
-                    ▼  (统一高语义 MCP 网关入口)
+                    ▼  (统一 MCP 网关入口)
 ┌────────────────────────────────────────────────────────────────────────┐
 │                       WinCode MCP Agent Gateway                        │
 ├───────────────────────────────────┬────────────────────────────────────┤
-│         🟢 Current (已实现)       │         🟡 Planned (规划中)        │
+│         🟢 Current (v0.4)         │         🟡 规划（尚未开工）        │
 ├─────────────────┬─────────────────┼──────────────────┬─────────────────┤
-│  代码语义理解   │  工程上下文打包 │  Windows 自动化  │ 深度诊断与调优  │
-│  (基于 Serena)  │ (基于 Repomix)  │  (基于 FlaUI)    │(Snoop/PerfView) │
+│ .NET sln/csproj │ 预算内证据上下文 │  Windows 自动化  │ 深度诊断与调优  │
+│ 图 + 影响面     │ + 分层健康状态  │   (FlaUI)        │(Snoop/PerfView) │
+│ (Serena 可选/   │ (Repomix CLI    │                  │                 │
+│  文本降级)      │  可选)          │                  │                 │
 └─────────────────┴─────────────────┴──────────────────┴─────────────────┘
 ```
 
 ### 🏛️ 核心架构原则
-1. **不修改上游源码**：**Serena** 与 **Repomix** 作为外部适配器（Adapters）引入，并内置韧性降级引擎，外部依赖缺失时仍能平滑运行。
-2. **高层能力优先**：拒绝向 Agent “倾倒”几万行无序的原始代码，转而输出决策级的关键 Symbol、引用链和风险评级。
-3. **Windows 优先**：深度服务 Windows 10/11、.NET 生态（WPF、WinUI、WinForms、MSBuild），预留 FlaUI、Snoop、PerfView 插件扩展点。
-4. **安全防误删机制**：代码层严格禁止硬删除文件，所有废弃文件自动归档至项目内的 `trash/` 目录并生成审计元数据。
-5. **多级指纹缓存**：内置基于 Git Commit、文件指纹与 mtime 的多级缓存，避免 Agent 在长周期任务中重复扫描，极大节约 Token。
-6. **语义优先与降级契约**：本地正则扫描仅作为文本检索降级方案，不保证符号身份、重载区分、跨文件引用完整性或安全重命名。连接真实 Serena 服务且所需能力可用时，优先使用其语义符号与引用查询，并根据实际返回数据分析影响范围。降级或查询失败时必须明确标注来源、限制和分析完整性，不得将“未找到引用”直接解释为“无影响”或“低风险”；本地正则扫描无法替代完整 Roslyn/TypeScript LSP 语义层面的跨文件重命名与重载解析。
+1. **不修改上游源码**：**Serena** 与 **Repomix** 走适配器。命令在 PATH 上 ≠ 已握手。命令存在、握手成功、项目激活、语义查询可用必须分开报告。
+2. **证据优先于摘要**：默认返回带路径/符号/行号的片段，受 token 预算约束。证据不足就声明不足；禁止无相关文件时倾倒整个仓库，也不编造架构结论。
+3. **Windows 优先**：从真实 `.sln` / `.csproj` 生成项目依赖和入口。`dotnet` 在 PATH 上 ≠ 具备语义引用能力。额外 Roslyn 集成本里程碑**未承诺**。
+4. **安全防误删**：禁止硬删除，归档到 `trash/` 并写审计元数据；只接受工作区内相对路径。
+5. **指纹缓存**：基于 git HEAD / dirty mtime。不完整的 Serena 查询不入库。
+6. **source 不能决定 confidence**：`source` 只说明供应方。影响分析的可信度看目标是否唯一解析、查询是否完整。0 引用、同名歧义、查询不完整必须返回 `UNKNOWN`，不得写成可安全删除。本地正则降级不保证符号身份、重载区分或跨文件引用完整性。
 
 ---
 
 ### 🗺️ 研发路线图 (Roadmap)
 
-#### v0.1 (已交付)
-- [x] **MCP 服务端底座**：基于标准 `stdio` JSON-RPC 协议通信与心跳握手。
-- [x] **工作区精准纳管**：`workspace_open` 识别 .NET 解决方案（.sln）、项目数、Git 状态与安全 `trash/` 机制。
-- [x] **Repomix 上下文打包集成**：`wincode_prepare_context` 实现任务级精炼打包与代码压缩。
+#### v0.1–v0.3 (已交付)
+- [x] MCP `stdio` 服务、`workspace_open`、安全 `trash/`、指纹缓存。
+- [x] Serena MCP 适配器（**握手成功才算上游**）；否则为标明限制的文本降级，不是 AST/Roslyn 引擎。
+- [x] Repomix CLI（已安装时）；否则为有上限的内置打包器。Tree-sitter 压缩仅在 CLI `--compress` 路径上存在。
+- [x] `analyze_change_impact` 风险定级；`wincode_plan_refactoring` 是基于 impact 的检查清单，不是自动重构器。
 
-#### v0.2 (已交付)
-- [x] **Serena 语义服务接入**：通过 MCP 客户端协议对接 Serena，并内置多语言（C# / TS / Python）降级解析引擎。
-- [x] **符号检索导航**：`wincode_find_code_symbol` 提取符号定义、签名与代码行。
-- [x] **跨文件引用追踪**：`wincode_find_references` 词边界精准查找调用点与代码上下文。
+#### v0.4 (已交付)
+- [x] 分层状态：`commandFound` / `handshakeOk` / `projectActive` / `semanticQueryUsable` / `mode`。`available: true` 且 fallback 只表示本地功能可用，不表示 Serena 已连接。
+- [x] 从 `.sln` / `.csproj` 生成项目依赖图与入口（`projectGraph`）。目录名分层只是提示。
+- [x] 影响分析 `confidence` 由唯一解析 + 查询完整性决定。歧义、查询不完整、0 引用返回 `UNKNOWN`。
+- [x] `wincode_prepare_context` 默认返回证据片段；`includeFullText` 只打包相关文件；无相关文件时拒绝倾倒仓库。
+- [x] 可移植夹具 `tests/fixtures/dotnet-mini`（MiniDesk，3 个项目）。真实仓库可通过 `WINCODE_TAVERN_PATH` 可选接入。
 
-#### v0.3 (已交付)
-- [x] **变更影响面分析杀手功能**：`analyze_change_impact` 计算下游爆炸半径、自动聚合受影响组件、多因子风险定级并生成架构解耦建议。
-- [x] **渐进式重构助手**：`wincode_plan_refactoring` 生成规范化重构路径与防破坏边界。
-
-#### Future (规划中)
-- [ ] **Windows 桌面 UI 自动化**：基于 FlaUI 扩展插件实现 Windows 桌面窗口交互与自动化验证。
-- [ ] **WPF / XAML 运行时诊断**：深度集成 Snoop 实现 Visual Tree 与数据绑定可视化排查。
-- [ ] **性能分析与 ETW 追踪**：集成 PerfView 工具链实现 CPU/内存热点与底层事件分析。
+#### 之后（不在 v0.4）
+- [ ] FlaUI / Snoop / PerfView。
+- [ ] 额外 Roslyn 宿主（须先在真实 C# 仓库上量 Serena 缺口）。
+- [ ] 删除现有工具名。
 
 ---
 
 ### 🛠️ 对外核心 MCP 工具
 
-| 工具名称 | 功能描述 | 核心价值 |
+| 工具名称 | 功能描述 | 说明 |
 | :--- | :--- | :--- |
-| `workspace_open` | 打开并全面分析指定工程（识别 .NET sln、Node、Python、Git 状态、文件树与元数据） | 一号核心工具：动态切换与精准识别目标代码库。 |
-| `analyze_change_impact` | 评估变更爆炸半径、受影响组件与风险等级（`LOW` ~ `CRITICAL`） | **杀手级工具**：解决“AI 动手改代码不敢信”的痛点，输出解耦建议。 |
-| `wincode_hello_world` | 极简心跳与连通性验证工具 | 即刻验证 MCP 服务端运行状态与可用能力。 |
-| `wincode_analyze_workspace` | 工作区与架构分层识别 | 快速提取项目结构、.NET 方案分层与核心入口点。 |
-| `wincode_prepare_context` | 针对特定任务精炼语义上下文 | 提炼目标符号与强相关代码，极大降低 Token 消耗。 |
-| `wincode_find_code_symbol` | 全局代码符号（Symbol）检索 | 精确索引类、接口、方法签名及对应代码行。 |
-| `wincode_find_references` | 跨文件符号引用与调用链路追踪 | 精确定位符号在整个代码库中的所有被调用位置。 |
-| `wincode_diagnose_project` | Windows / .NET 工程环境健康诊断 | 检查 Windows 原生环境、.NET SDK 与配置完整性。 |
-| `wincode_plan_refactoring` | 组件重构方案生成与安全边界规划 | 给出渐进式重构路径与防破坏约束建议。 |
-| `wincode_safe_move_to_trash` | 安全文件移动至 `trash/` 目录 | 规范化移入项目回收站并附加元数据，防止误删。 |
+| `workspace_open` | 打开目录，识别类型、sln/csproj、git、元数据与目录树 | 切换当前工作区。 |
+| `wincode_hello_world` | 心跳 **以及** 分层适配器状态 | fallback ≠ Serena 已连接。 |
+| `wincode_analyze_workspace` | 工作区概览 + 从 sln/csproj 得到的 `projectGraph` | 目录分层只是提示，不是架构判断。 |
+| `wincode_prepare_context` | 任务相关证据（路径、符号、行、片段），受 `maxTokens` 约束 | `includeFullText` 只打包**相关**文件。证据不足会声明。 |
+| `wincode_find_code_symbol` | 符号检索，带 `source` / `queryComplete` / `uniqueTypeMatch` | Serena 可用时走上游，否则文本扫描。 |
+| `wincode_find_references` | 引用/调用点列表，同样的诚实字段 | 0 命中不是“无影响”。 |
+| `analyze_change_impact` | 爆炸半径与风险。别名：`wincode_analyze_change_impact` | 无法唯一解析或查询不完整时为 `UNKNOWN`。confidence 不由 source 决定。 |
+| `wincode_diagnose_project` | Windows / SDK / git / Serena 状态 | `dotnet --version` ≠ 语义引用能力。 |
+| `wincode_plan_refactoring` | 基于 impact 的检查清单 + trash 策略 | 不是自动重构引擎。 |
+| `wincode_safe_move_to_trash` | 将工作区内相对路径移入 `trash/` 并写元数据 | 拒绝绝对路径 / `..` / 符号链接逃逸。 |
 
 ---
 
@@ -247,25 +259,28 @@ WinCode/
 │   │   ├── McpServer.ts              # MCP 服务端核心实现
 │   │   └── Protocol.ts               # MCP 高层工具契约定义
 │   ├── Core/
-│   │   ├── Config.ts                 # 工作区配置与默认设置
-│   │   ├── Workspace.ts              # 工作区检测与安全 trash 机制
-│   │   ├── Cache.ts                  # 多级内存/磁盘缓存管理器
-│   │   ├── Context.ts                # Agent 语义上下文提炼引擎
-│   │   └── ToolRouter.ts             # 模块调度中枢
+│   │   ├── Config.ts                 # 工作区与适配器配置
+│   │   ├── Workspace.ts              # 工作区检测与安全 trash
+│   │   ├── Cache.ts                  # 带指纹的内存/磁盘缓存
+│   │   ├── DotNetGraph.ts            # sln/csproj ProjectReference 图
+│   │   ├── Context.ts                # 预算内证据上下文
+│   │   └── ToolRouter.ts             # 调度中枢
 │   ├── Adapters/
-│   │   ├── IAdapter.ts               # 适配器基础契约与健康检查
-│   │   ├── RepomixAdapter.ts         # Repomix 上下文打包（支持内置降级引擎）
-│   │   └── SerenaAdapter.ts          # Serena 语义与引用追踪（支持内置多语言解析器）
+│   │   ├── IAdapter.ts               # 适配器契约 + 分层上游状态
+│   │   ├── RepomixAdapter.ts         # Repomix CLI 或闭集内置打包
+│   │   └── SerenaAdapter.ts          # Serena MCP 客户端或正则降级
 │   ├── CompositeTools/
-│   │   ├── ArchitectureAnalyzer.ts   # 架构分层与工程定位分析
-│   │   ├── ImpactAnalyzer.ts         # 修改爆炸半径与风险等级分析
-│   │   ├── ProjectDiagnostics.ts     # Windows/.NET 与运行环境健康诊断
-│   │   └── RefactorAssistant.ts      # 重构边界评估与操作规划
+│   │   ├── ArchitectureAnalyzer.ts   # 文件派生图 + 目录提示
+│   │   ├── ImpactAnalyzer.ts         # 爆炸半径；不完整则为 UNKNOWN
+│   │   ├── ProjectDiagnostics.ts     # SDK/git/Serena 状态（不夸大）
+│   │   └── RefactorAssistant.ts      # 基于 impact 的清单 + trash 策略
 │   └── Extensions/
-│       └── ExtensionManager.ts       # Pluggable Windows 桌面扩展管理器
+│       └── ExtensionManager.ts       # 预留；尚无 FlaUI/Snoop 插件
 ├── tests/
-│   └── verify.ts                     # 端到端自动化验证套件
-└── trash/                            # 安全回收站（.gitignore 忽略）
+│   ├── fixtures/dotnet-mini/         # 可移植 MiniDesk .NET 夹具（3 个项目）
+│   ├── tdd-suite.test.ts             # 默认 CI 套件
+│   └── verify.ts                     # 冒烟验证
+└── trash/                            # 安全回收站（.gitignore）
 ```
 
 ---
@@ -285,9 +300,17 @@ npm install
 npm run build
 ```
 
-#### 2. 执行端到端测试验证
+#### 2. 测试
 ```bash
-npx tsx tests/verify.ts
+npm test
+npm run test:verify
+```
+
+默认测试使用 `tests/fixtures/dotnet-mini`。若要可选跑本地真实解决方案：
+
+```bash
+set WINCODE_TAVERN_PATH=C:\path\to\your.sln-folder
+npm test
 ```
 
 #### 3. 接入 Agent 客户端 (Claude Desktop / Codex / Windsurf / Cursor 等)

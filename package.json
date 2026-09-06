@@ -1,7 +1,7 @@
 {
   "name": "wincode-mcp",
-  "version": "0.1.0",
-  "description": "WinCode Agent Gateway - Windows-first MCP Gateway for Coding Agents",
+  "version": "0.4.0",
+  "description": "Windows-first MCP gateway: .NET project graph, evidence-bounded context, honest change-impact",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {

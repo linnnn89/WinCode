@@ -1,6 +1,7 @@
 import { test, describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { CacheManager } from '../src/Core/Cache.js';
@@ -20,6 +21,11 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
   const testCacheDir = path.join(root, '.cache', 'test_cache_tdd');
   const config = getDefaultConfig(root);
   config.cacheDir = testCacheDir;
+  const FIXTURE_DOTNET = path.resolve(root, 'tests/fixtures/dotnet-mini');
+  const TAVERN_PATH = process.env.WINCODE_TAVERN_PATH
+    ? path.resolve(process.env.WINCODE_TAVERN_PATH)
+    : path.resolve('d:/CODEX PROJECT/New-tavern');
+  const HAS_TAVERN = existsSync(path.join(TAVERN_PATH, 'TavernDesk.sln'));
 
   // Clean up test cache
   before(async () => {
@@ -278,54 +284,47 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       }
     });
 
-    it('Phase 2: openWorkspace accurately parses .NET solutions, projects, git, metadata and tree', async () => {
-      const tavernPath = path.resolve('d:/CODEX PROJECT/New-tavern');
-      const result = await ws.openWorkspace(tavernPath);
+    it('Phase 2: openWorkspace parses the portable .NET fixture sln, projects, metadata and tree', async () => {
+      const result = await ws.openWorkspace(FIXTURE_DOTNET);
       assert.strictEqual(result.type, 'dotnet');
-      assert.strictEqual(result.solution, 'TavernDesk.sln');
+      assert.strictEqual(result.solution, 'MiniDesk.sln');
       assert.strictEqual(result.language, 'C#');
-      assert.strictEqual(result.projects, 4);
-      assert.strictEqual(result.git.isGit, true);
+      assert.strictEqual(result.projects, 3);
+      assert.ok(result.metadata.frameworks.includes('WPF'));
       assert.ok(result.metadata.totalFiles > 0);
       assert.ok(result.fileTree.children && result.fileTree.children.length > 0);
 
-      // Restore root to current workspace
       ws.setRoot(root);
     });
 
     it('Workspace switching: openWorkspace and setRoot must synchronize trashDir and isolate cross-project deletions', async () => {
-      const tavernPath = path.resolve('d:/CODEX PROJECT/New-tavern');
       const initialTrash = path.resolve(ws.trashDir);
       assert.strictEqual(initialTrash, path.join(root, 'trash'));
 
-      // Switch to project B
-      await ws.openWorkspace(tavernPath);
-      assert.strictEqual(path.resolve(ws.root), tavernPath);
+      await ws.openWorkspace(FIXTURE_DOTNET);
+      assert.strictEqual(path.resolve(ws.root), FIXTURE_DOTNET);
       const switchedTrash = path.resolve(ws.trashDir);
-      assert.strictEqual(switchedTrash, path.join(tavernPath, 'trash'), 'trashDir must update to project B');
+      assert.strictEqual(switchedTrash, path.join(FIXTURE_DOTNET, 'trash'), 'trashDir must update to fixture workspace');
 
-      // Attempting to delete a file from project A while in project B must be rejected
-      const rejectCrossProject = await ws.moveToTrash('../WinCode MCP/file_belonging_to_a.txt', 'Try deleting A file from B');
+      const rejectCrossProject = await ws.moveToTrash('../../../package.json', 'Try deleting host file from fixture');
       assert.strictEqual(rejectCrossProject.success, false);
       assert.ok(rejectCrossProject.message.includes('outside the workspace boundary'));
 
-      // Deleting a file in project B moves it into project B's trash, not project A's trash
-      const tempBFile = path.join(tavernPath, 'temp_test_b_file.txt');
-      await fs.writeFile(tempBFile, 'File in B project', 'utf-8');
+      const tempBFile = path.join(FIXTURE_DOTNET, 'temp_test_b_file.txt');
+      await fs.writeFile(tempBFile, 'File in fixture project', 'utf-8');
 
-      const trashBResult = await ws.moveToTrash('temp_test_b_file.txt', 'Safe deletion in project B');
+      const trashBResult = await ws.moveToTrash('temp_test_b_file.txt', 'Safe deletion in fixture');
       assert.strictEqual(trashBResult.success, true);
-      assert.ok(trashBResult.trashPath.startsWith(path.join(tavernPath, 'trash')), 'Must move to project B trash');
-      assert.ok(!trashBResult.trashPath.startsWith(path.join(root, 'trash')), 'Must NOT move to project A trash');
+      assert.ok(trashBResult.trashPath.startsWith(path.join(FIXTURE_DOTNET, 'trash')), 'Must move to fixture trash');
+      assert.ok(!trashBResult.trashPath.startsWith(path.join(root, 'trash')), 'Must NOT move to host trash');
 
-      // Clean up temp trash in B
       await fs.rm(trashBResult.trashPath, { force: true }).catch(() => {});
       await fs.rm(`${trashBResult.trashPath}.meta.json`, { force: true }).catch(() => {});
+      await fs.rm(path.join(FIXTURE_DOTNET, 'trash'), { recursive: true, force: true }).catch(() => {});
 
-      // Switch back to project A
       ws.setRoot(root);
       assert.strictEqual(path.resolve(ws.root), root);
-      assert.strictEqual(path.resolve(ws.trashDir), path.join(root, 'trash'), 'trashDir must restore to project A');
+      assert.strictEqual(path.resolve(ws.trashDir), path.join(root, 'trash'), 'trashDir must restore to host workspace');
     });
   });
 
@@ -367,17 +366,20 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.deepStrictEqual(missingRefs, []);
     });
 
-    it('Phase 4: SerenaAdapter should index and resolve C# classes and methods in .NET projects', async () => {
-      const tavernConfig = getDefaultConfig('d:/CODEX PROJECT/New-tavern');
-      tavernConfig.cacheDir = testCacheDir;
-      const tavernSerena = new SerenaAdapter(tavernConfig, cache);
-      const symResult = await tavernSerena.findSymbolsDetailed('MainWindow');
+    it('Phase 4: SerenaAdapter should index C# classes and references in the portable .NET fixture', async () => {
+      const fixtureConfig = getDefaultConfig(FIXTURE_DOTNET);
+      fixtureConfig.cacheDir = testCacheDir;
+      const fixtureSerena = new SerenaAdapter(fixtureConfig, cache);
+      const symResult = await fixtureSerena.findSymbolsDetailed('MainWindow');
       assert.ok(symResult.symbols.length > 0);
       assert.ok(symResult.symbols.some((s) => s.name === 'MainWindow' && s.kind === 'class'));
+      assert.strictEqual(symResult.uniqueTypeMatch, true);
+      assert.strictEqual(symResult.queryComplete, true);
 
-      const refResult = await tavernSerena.findReferencesDetailed('MainWindow');
+      const refResult = await fixtureSerena.findReferencesDetailed('MemoryService');
       assert.ok(refResult.totalReferences > 0);
-      assert.ok(refResult.references.some((r) => r.file.includes('App.xaml.cs')));
+      assert.ok(refResult.references.some((r) => r.file.replace(/\\/g, '/').includes('SaveManager.cs')));
+      assert.ok(refResult.references.some((r) => r.file.replace(/\\/g, '/').includes('MainWindow.xaml.cs')));
     });
 
     it('should correctly map Serena official upstream format for symbols (name_path, relative_path, body_location)', () => {
@@ -474,8 +476,13 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
 
       const result = await mockSerena.findSymbolsDetailed('ToolRouter');
       assert.strictEqual(result.source, 'serena-adapter-fallback', 'Source must fall back to local adapter');
+      assert.strictEqual(result.queryComplete, false, 'Serena isError means the semantic query is incomplete');
+      assert.strictEqual(result.analysisCompleteness, 'incomplete');
       assert.ok(result.symbols.length > 0, 'Local indexing should have found ToolRouter symbols');
       assert.strictEqual(result.symbols[0].name, 'ToolRouter');
+      const status = mockSerena.getUpstreamStatus();
+      assert.strictEqual(status.projectActive, false);
+      assert.notStrictEqual(status.mode, 'connected');
 
       const refResult = await mockSerena.findReferencesDetailed('ToolRouter');
       assert.strictEqual(refResult.source, 'serena-adapter-fallback', 'References source must fall back to local adapter');
@@ -598,10 +605,9 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       const prep = await context.prepareContext({ task: '分析这个项目架构' });
       assert.strictEqual(prep.task, '分析这个项目架构');
       assert.ok(prep.project.name);
-      assert.ok(prep.metrics.packedFiles > 0);
       assert.ok(prep.guidance.length > 0);
       assert.ok(prep.executiveSummary.includes('Target Task'));
-      assert.ok(prep.formattedContent.includes('Repomix'));
+      assert.ok(prep.formattedContent.includes('Evidence'));
     });
 
     it('Resilience: checkHealth should respect timeout, terminate hung process tree, and gracefully fallback', async () => {
@@ -653,6 +659,12 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(xmlResult.content.includes('</project_context>'));
     });
 
+    it('v0.4: empty candidateFiles is a closed set and must not dump the workspace', async () => {
+      const empty = await (repomix as any).packWithFallback({ candidateFiles: [], maxFiles: 20 });
+      assert.strictEqual(empty.fileCount, 0);
+      assert.ok(!empty.content.includes('src/Core/ToolRouter.ts'));
+    });
+
     it('P2 Fix: candidateFiles and focusAreas filtering must be respected', async () => {
       const candResult = await (repomix as any).packWithFallback({
         candidateFiles: ['package.json'],
@@ -694,11 +706,34 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(layerNames.includes('Composite Tools'));
     });
 
+    it('ArchitectureAnalyzer should emit .NET project graph from fixture sln/csproj files', async () => {
+      const fixtureConfig = getDefaultConfig(FIXTURE_DOTNET);
+      fixtureConfig.cacheDir = testCacheDir;
+      const fixtureRouter = new ToolRouter(fixtureConfig);
+      const arch = await fixtureRouter.architecture.analyze();
+      assert.ok(arch.projectGraph);
+      assert.deepStrictEqual(arch.projectGraph!.solutions, ['MiniDesk.sln']);
+      assert.strictEqual(arch.projectGraph!.projects.length, 3);
+      const names = arch.projectGraph!.projects.map((p) => p.name).sort();
+      assert.deepStrictEqual(names, ['App', 'Core', 'Infra']);
+      const app = arch.projectGraph!.projects.find((p) => p.name === 'App');
+      assert.ok(app?.isWpf);
+      assert.ok(app?.projectReferences.includes('Core'));
+      assert.ok(app?.projectReferences.includes('Infra'));
+      assert.ok(arch.projectGraph!.edges.some((e) => e.from === 'App' && e.to === 'Core'));
+      assert.ok(arch.projectGraph!.edges.some((e) => e.from === 'Infra' && e.to === 'Core'));
+      assert.ok(arch.keyEntryPoints.some((e) => e.replace(/\\/g, '/').includes('App.xaml.cs')));
+      assert.ok(arch.recommendedAgentFocus.includes('file-derived structure'));
+    });
+
     it('ImpactAnalyzer should calculate blast radius and correct risk level', async () => {
       const impact = await router.impact.analyzeImpact('ToolRouter');
       assert.strictEqual(impact.target, 'ToolRouter');
       assert.ok(impact.targetFile.includes('ToolRouter.ts'));
-      assert.ok(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(impact.riskLevel));
+      assert.ok(
+        ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(impact.riskLevel),
+        `expected ranked risk, got ${impact.riskLevel} (${impact.riskReason})`
+      );
       assert.ok(impact.referencesCount > 0);
       assert.ok(Array.isArray(impact.affected));
       assert.ok(impact.recommendations.length >= 3);
@@ -708,24 +743,25 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(impact.formattedReport.includes('Affected:'));
       assert.ok(impact.formattedReport.includes('Risk:'));
       assert.ok(impact.formattedReport.includes('Recommended:'));
+      assert.notStrictEqual(impact.confidence, 'HIGH');
+      assert.ok(!impact.formattedReport.includes('Safe for targeted in-place refactoring'));
     });
 
-    it('Phase 5: ImpactAnalyzer accurately resolves target, affected callers, and recommendations for .NET projects', async () => {
-      const tavernConfig = getDefaultConfig('d:/CODEX PROJECT/New-tavern');
-      tavernConfig.cacheDir = testCacheDir;
-      const tavernCache = new CacheManager(testCacheDir);
-      const tavernSerena = new SerenaAdapter(tavernConfig, tavernCache);
-      const tavernImpact = new ImpactAnalyzer(tavernSerena, tavernConfig);
+    it('Phase 5: ImpactAnalyzer resolves MemoryService callers in the portable .NET fixture', async () => {
+      const fixtureConfig = getDefaultConfig(FIXTURE_DOTNET);
+      fixtureConfig.cacheDir = testCacheDir;
+      const fixtureCache = new CacheManager(testCacheDir);
+      const fixtureSerena = new SerenaAdapter(fixtureConfig, fixtureCache);
+      const fixtureImpact = new ImpactAnalyzer(fixtureSerena, fixtureConfig);
 
-      // Analyze target by file or symbol
-      const result = await tavernImpact.analyzeImpact('MainWindow.xaml.cs');
-      assert.strictEqual(result.targetFile, 'MainWindow.xaml.cs');
+      const result = await fixtureImpact.analyzeImpact('MemoryService');
+      assert.ok(result.targetFile.includes('MemoryService'));
       assert.ok(result.referencesCount > 0);
-      assert.ok(result.affected.includes('App'));
+      assert.ok(result.affected.some((a) => a === 'SaveManager' || a === 'MainWindow'));
       assert.ok(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(result.riskLevel));
-      assert.ok(result.recommendations.length >= 3);
-      assert.ok(result.formattedReport.includes('MainWindow.xaml.cs'));
-      assert.ok(result.formattedReport.includes('App'));
+      assert.notStrictEqual(result.confidence, 'HIGH', 'Fallback scan must not receive HIGH confidence from source alone');
+      assert.strictEqual(result.uniqueResolution, true);
+      assert.ok(!result.formattedReport.includes('Safe for targeted in-place refactoring'));
     });
 
     it('Phase 5: accurately matches the exact user showcase scenario (MemoryService)', async () => {
@@ -765,6 +801,143 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(impact.formattedReport.includes('References:\n12'));
       assert.ok(impact.formattedReport.includes('Affected:\n- GameSession\n- SaveManager\n- ExportService'));
       assert.ok(impact.formattedReport.includes('Risk:\nHIGH'));
+      assert.strictEqual(impact.confidence, 'MEDIUM');
+      assert.strictEqual(impact.source, 'serena-adapter-fallback');
+      assert.strictEqual(impact.uniqueResolution, true);
+    });
+
+    it('v0.4: Serena source with 0 references must be UNKNOWN, not LOW, and confidence must not follow source', async () => {
+      const mockSerena: any = {
+        findSymbolsDetailed: async () => ({
+          query: 'GhostService',
+          symbols: [{ name: 'GhostService', kind: 'class', file: 'GhostService.cs', line: 1 }],
+          source: 'serena-mcp',
+          queryComplete: true,
+          truncated: false,
+          uniqueTypeMatch: true,
+          typeMatchCount: 1,
+          limitations: [],
+        }),
+        findReferencesDetailed: async () => ({
+          symbolName: 'GhostService',
+          references: [],
+          source: 'serena-mcp',
+          queryComplete: true,
+          truncated: false,
+          limitations: [],
+        }),
+        findSymbols: async () => [{ name: 'GhostService', kind: 'class', file: 'GhostService.cs', line: 1 }],
+        findReferences: async () => [],
+      };
+      const impact = await new ImpactAnalyzer(mockSerena).analyzeImpact('GhostService');
+      assert.strictEqual(impact.source, 'serena-mcp');
+      assert.strictEqual(impact.riskLevel, 'UNKNOWN');
+      assert.strictEqual(impact.confidence, 'UNCERTAIN');
+      assert.ok(!impact.formattedReport.toLowerCase().includes('safe'));
+    });
+
+    it('v0.4: incomplete Serena query and ambiguous types return UNKNOWN', async () => {
+      const incomplete: any = {
+        findSymbolsDetailed: async () => ({
+          query: 'MemoryService',
+          symbols: [{ name: 'MemoryService', kind: 'class', file: 'A.cs', line: 1 }],
+          source: 'serena-mcp',
+          queryComplete: false,
+          queryError: 'truncated',
+          truncated: true,
+          uniqueTypeMatch: true,
+          typeMatchCount: 1,
+          limitations: ['truncated'],
+        }),
+        findReferencesDetailed: async () => ({
+          symbolName: 'MemoryService',
+          references: [{ symbolName: 'MemoryService', file: 'B.cs', line: 2, preview: 'x' }],
+          source: 'serena-mcp',
+          queryComplete: false,
+          truncated: true,
+          limitations: [],
+        }),
+        findSymbols: async () => [],
+        findReferences: async () => [],
+      };
+      const incompleteImpact = await new ImpactAnalyzer(incomplete).analyzeImpact('MemoryService');
+      assert.strictEqual(incompleteImpact.riskLevel, 'UNKNOWN');
+      assert.strictEqual(incompleteImpact.confidence, 'UNCERTAIN');
+      assert.strictEqual(incompleteImpact.analysisCompleteness, 'incomplete');
+
+      const fixtureConfig = getDefaultConfig(FIXTURE_DOTNET);
+      fixtureConfig.cacheDir = testCacheDir;
+      const fixtureSerena = new SerenaAdapter(fixtureConfig, new CacheManager(testCacheDir));
+      const dup = await new ImpactAnalyzer(fixtureSerena, fixtureConfig).analyzeImpact('DuplicateName');
+      assert.strictEqual(dup.uniqueResolution, false);
+      assert.strictEqual(dup.riskLevel, 'UNKNOWN');
+      assert.strictEqual(dup.confidence, 'UNCERTAIN');
+
+      const unused = await new ImpactAnalyzer(fixtureSerena, fixtureConfig).analyzeImpact('UnusedHelper');
+      assert.strictEqual(unused.uniqueResolution, true);
+      assert.strictEqual(unused.referencesCount, 0);
+      assert.strictEqual(unused.riskLevel, 'UNKNOWN');
+      assert.strictEqual(unused.confidence, 'UNCERTAIN');
+    });
+
+    it('v0.4: prepare_context returns file evidence for MemoryService and declares insufficient evidence otherwise', async () => {
+      const fixtureConfig = getDefaultConfig(FIXTURE_DOTNET);
+      fixtureConfig.cacheDir = testCacheDir;
+      const fixtureRouter = new ToolRouter(fixtureConfig);
+      const ctx = await fixtureRouter.context.prepareContext({
+        task: 'MemoryService 是否适合拆分',
+        maxTokens: 4000,
+      });
+      assert.strictEqual(ctx.evidenceInsufficient, false);
+      assert.ok(ctx.evidence.some((e) => e.file.replace(/\\/g, '/').includes('MemoryService.cs')));
+      assert.ok(ctx.evidence.some((e) => e.snippet.includes('class MemoryService')));
+      assert.ok(ctx.metrics.estimatedTokens <= 4000 + 500);
+
+      const empty = await fixtureRouter.context.prepareContext({
+        task: '完全不相关的任务 XYZ_NO_SYMBOL_QQQ',
+        maxTokens: 1000,
+      });
+      assert.strictEqual(empty.evidenceInsufficient, true);
+      assert.ok(empty.limitations.some((l) => l.includes('证据不足')));
+
+      const dumpGuard = await fixtureRouter.context.prepareContext({
+        task: '完全不相关的任务 XYZ_NO_SYMBOL_QQQ',
+        includeFullText: true,
+        maxTokens: 8000,
+      });
+      assert.strictEqual(dumpGuard.evidenceInsufficient, true);
+      assert.ok(dumpGuard.limitations.some((l) => l.includes('refusing to dump') || l.includes('证据不足')));
+      assert.ok(!dumpGuard.formattedContent.includes('class DuplicateName'));
+
+      const full = await fixtureRouter.context.prepareContext({
+        task: 'MemoryService',
+        includeFullText: true,
+        maxTokens: 8000,
+      });
+      assert.ok(full.formattedContent.includes('public class MemoryService') || full.evidence.some((e) => e.snippet.includes('class MemoryService')));
+    });
+
+    it('v0.4: health check must not treat command-found as Serena connected', async () => {
+      const health = await router.serena.checkHealth();
+      assert.strictEqual(health.available, true);
+      assert.ok(health.upstream);
+      assert.strictEqual(typeof health.upstream!.commandFound, 'boolean');
+      assert.strictEqual(typeof health.upstream!.handshakeOk, 'boolean');
+      if (health.upstream!.projectActive !== true) {
+        assert.strictEqual(health.upstream!.semanticQueryUsable, false);
+        assert.strictEqual(health.upstream!.mode, 'degraded');
+      }
+      if (!health.upstream!.handshakeOk) {
+        assert.notStrictEqual(health.source, 'installed');
+        assert.ok(!health.details?.includes('Serena 已连接'));
+      }
+    });
+
+    it('v0.4: symbol names with regex metacharacters must not throw', async () => {
+      const refs = await router.serena.findReferences('C++');
+      assert.ok(Array.isArray(refs));
+      const impact = await router.impact.analyzeImpact('foo.bar[]');
+      assert.strictEqual(impact.riskLevel, 'UNKNOWN');
     });
 
     it('P1 Fix: non-existent/unindexed symbol must report UNKNOWN risk, UNCERTAIN confidence, and never claim safe', async () => {
@@ -795,6 +968,14 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(categories.includes('Windows'));
       assert.ok(categories.includes('Environment'));
       assert.ok(categories.includes('Project'));
+    });
+
+    it('Optional TavernDesk integration is skipped unless the pinned workspace exists', { skip: !HAS_TAVERN }, async () => {
+      const tavernWs = new WorkspaceManager(getDefaultConfig(TAVERN_PATH));
+      const result = await tavernWs.openWorkspace(TAVERN_PATH);
+      assert.strictEqual(result.type, 'dotnet');
+      assert.ok(result.solution);
+      assert.ok(result.projects >= 1);
     });
 
     it('RefactorAssistant should generate structured plan with safe boundaries', async () => {
@@ -908,18 +1089,16 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
     it('Tool 0: workspace_open works end-to-end via MCP', async () => {
       const res = await callMcp('tools/call', {
         name: 'workspace_open',
-        arguments: { path: 'd:/CODEX PROJECT/New-tavern' },
+        arguments: { path: FIXTURE_DOTNET },
       });
       const data = JSON.parse(res.result?.content?.[0]?.text);
       assert.strictEqual(data.type, 'dotnet');
-      assert.strictEqual(data.solution, 'TavernDesk.sln');
-      assert.strictEqual(data.projects, 4);
+      assert.strictEqual(data.solution, 'MiniDesk.sln');
+      assert.strictEqual(data.projects, 3);
       assert.strictEqual(data.language, 'C#');
-      assert.strictEqual(data.git.isGit, true);
       assert.ok(data.metadata.totalFiles > 0);
       assert.ok(data.fileTree.children && data.fileTree.children.length > 0);
 
-      // Revert active workspace back to current root
       await callMcp('tools/call', {
         name: 'workspace_open',
         arguments: { path: root },
@@ -935,6 +1114,11 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.strictEqual(data.status, 'online');
       assert.strictEqual(data.message, 'TDD Test Greeting');
       assert.strictEqual(data.gateway, 'WinCode Agent Gateway');
+      assert.ok(data.adapters?.serena?.upstream);
+      assert.ok(['connected', 'degraded'].includes(data.adapters.serena.upstream.mode));
+      if (data.adapters.serena.upstream.mode !== 'connected') {
+        assert.ok(!JSON.stringify(data).includes('Serena 已连接'));
+      }
     });
 
     it('Tool 2: wincode_analyze_workspace works', async () => {
@@ -955,7 +1139,8 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(res.result?.content?.length >= 2);
       const meta = JSON.parse(res.result.content[0].text);
       assert.strictEqual(meta.task, '分析这个项目架构');
-      assert.ok(meta.metrics.packedFiles > 0);
+      assert.ok(Array.isArray(meta.evidence));
+      assert.strictEqual(typeof meta.evidenceInsufficient, 'boolean');
       assert.ok(meta.guidance.length > 0);
 
       const text = res.result.content[1].text;

@@ -33,7 +33,7 @@ export class ToolRouter {
     this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
     this.impact = new ImpactAnalyzer(this.serena, this.config);
     this.refactor = new RefactorAssistant(this.workspace, this.serena, this.impact);
-    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config);
+    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.serena);
     this.extensions = new ExtensionManager(config);
   }
 
@@ -58,7 +58,7 @@ export class ToolRouter {
     this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
     this.impact = new ImpactAnalyzer(this.serena, this.config);
     this.refactor = new RefactorAssistant(this.workspace, this.serena, this.impact);
-    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config);
+    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.serena);
     return result;
   }
 

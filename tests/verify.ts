@@ -43,9 +43,10 @@ async function runVerification() {
     candidateFiles: ['src/Core/ToolRouter.ts', 'package.json'],
     outputFormat: 'markdown',
   });
-  console.log(`   Estimated tokens: ${context.metrics.estimatedTokens}, packedFiles: ${context.metrics.packedFiles}`);
+  console.log(`   Estimated tokens: ${context.metrics.estimatedTokens}, packedFiles: ${context.metrics.packedFiles}, evidence=${context.evidence.length}`);
   assert.ok(context.formattedContent.length > 0, 'Should have packed context content');
-  assert.ok(context.metrics.packedFiles > 0, 'Should have packed candidate files');
+  assert.ok(context.evidence.length > 0, 'Should have file-backed evidence for candidate files');
+  assert.strictEqual(context.evidenceInsufficient, false);
   console.log('✓ ContextManager & RepomixAdapter verified.');
 
   console.log('6. Testing ArchitectureAnalyzer...');
@@ -57,8 +58,9 @@ async function runVerification() {
   console.log('7. Testing ImpactAnalyzer...');
   const impact = await router.impact.analyzeImpact('ToolRouter');
   console.log(`   Impact for ToolRouter: Risk=${impact.riskLevel}, Confidence=${impact.confidence}, Refs=${impact.referencesCount}, Affected=${impact.affected.join(', ')}`);
-  assert.ok(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(impact.riskLevel));
+  assert.ok(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL', 'UNKNOWN'].includes(impact.riskLevel));
   assert.ok(impact.recommendations.length > 0, 'Impact analyzer should report recommendations');
+  assert.ok(!impact.formattedReport.includes('Safe for targeted in-place refactoring'));
 
   // Verify unknown symbol returns UNKNOWN
   const unknownImpact = await router.impact.analyzeImpact('NonExistent_Probe_Symbol_999');

@@ -24,7 +24,8 @@ export interface RepomixPackResult {
 
 export class RepomixAdapter implements IAdapter {
   readonly name = 'RepomixAdapter';
-  readonly description = 'Repository context packing and structure extraction via Repomix';
+  readonly description =
+    'Repository packing via Repomix CLI when installed; otherwise a capped builtin packer. candidateFiles is a closed set and never dumps the whole tree';
 
   private config: WinCodeConfig;
   private cache: CacheManager;
@@ -145,7 +146,10 @@ export class RepomixAdapter implements IAdapter {
 
     let result: RepomixPackResult;
 
-    if (this.isCliAvailable) {
+    // Explicit candidate list is a closed set — never fall through to a full-repo CLI pack.
+    if (Array.isArray(options?.candidateFiles)) {
+      result = await this.packWithFallback(options);
+    } else if (this.isCliAvailable) {
       try {
         result = await this.packWithCli(options);
       } catch (err) {
@@ -262,8 +266,8 @@ export class RepomixAdapter implements IAdapter {
     const maxFiles = options?.maxFiles ?? 50;
     const collectedFiles: { relPath: string; content: string }[] = [];
 
-    // [P2 Fix]: Process candidateFiles explicitly if provided
-    if (options?.candidateFiles && options.candidateFiles.length > 0) {
+    // Closed candidate set: even an empty array means "only these files", never the whole tree.
+    if (Array.isArray(options?.candidateFiles)) {
       for (const cand of options.candidateFiles) {
         if (collectedFiles.length >= maxFiles) break;
         const fullPath = path.isAbsolute(cand) ? cand : path.join(root, cand);
@@ -278,10 +282,7 @@ export class RepomixAdapter implements IAdapter {
           // Ignore non-existent candidate files
         }
       }
-
-      if (collectedFiles.length > 0) {
-        return this.formatPackedResult(collectedFiles, root, options?.outputFormat);
-      }
+      return this.formatPackedResult(collectedFiles, root, options?.outputFormat);
     }
 
     const defaultExcludes = new Set([

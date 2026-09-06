@@ -18,7 +18,7 @@ export class WinCodeMcpServer {
     this.server = new Server(
       {
         name: 'wincode-agent-gateway',
-        version: '0.1.0',
+        version: '0.4.0',
       },
       {
         capabilities: {
@@ -61,6 +61,8 @@ export class WinCodeMcpServer {
 
           case 'wincode_hello_world': {
             const greeting = args.greeting ? String(args.greeting) : 'Hello from WinCode MCP Gateway!';
+            const serenaHealth = await this.router.serena.checkHealth();
+            const repomixHealth = await this.router.repomix.checkHealth();
             return {
               content: [
                 {
@@ -70,10 +72,23 @@ export class WinCodeMcpServer {
                       status: 'online',
                       message: greeting,
                       gateway: 'WinCode Agent Gateway',
-                      version: '0.1.0',
+                      version: '0.4.0',
                       platform: process.platform,
                       workspace: this.router.config.workspaceRoot,
                       timestamp: new Date().toISOString(),
+                      adapters: {
+                        serena: {
+                          available: serenaHealth.available,
+                          source: serenaHealth.source,
+                          details: serenaHealth.details,
+                          upstream: serenaHealth.upstream,
+                        },
+                        repomix: {
+                          available: repomixHealth.available,
+                          source: repomixHealth.source,
+                          details: repomixHealth.details,
+                        },
+                      },
                       capabilities: [
                         'wincode_hello_world',
                         'wincode_analyze_workspace',
@@ -95,7 +110,8 @@ export class WinCodeMcpServer {
           }
 
           case 'wincode_analyze_workspace': {
-            const report = await this.router.architecture.analyze();
+            const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : 2;
+            const report = await this.router.architecture.analyze(maxDepth);
             return {
               content: [
                 {
@@ -116,6 +132,8 @@ export class WinCodeMcpServer {
               : undefined;
             const compress = typeof args.compress === 'boolean' ? args.compress : undefined;
             const outputFormat = args.outputFormat === 'xml' ? 'xml' : 'markdown';
+            const includeFullText = typeof args.includeFullText === 'boolean' ? args.includeFullText : false;
+            const maxTokens = typeof args.maxTokens === 'number' ? args.maxTokens : undefined;
 
             const context = await this.router.context.prepareContext({
               task,
@@ -123,6 +141,8 @@ export class WinCodeMcpServer {
               focusAreas,
               compress,
               outputFormat,
+              includeFullText,
+              maxTokens,
             });
 
             return {
@@ -136,6 +156,11 @@ export class WinCodeMcpServer {
                       metrics: context.metrics,
                       guidance: context.guidance,
                       executiveSummary: context.executiveSummary,
+                      evidence: context.evidence,
+                      relatedFiles: context.relatedFiles,
+                      omittedFiles: context.omittedFiles,
+                      evidenceInsufficient: context.evidenceInsufficient,
+                      limitations: context.limitations,
                     },
                     null,
                     2

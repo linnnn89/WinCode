@@ -17,7 +17,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_hello_world',
-    description: 'Minimal connectivity and heartbeat verification tool for AI coding agents (Codex, Claude, etc.). Confirms WinCode Gateway is online.',
+    description: 'Heartbeat plus layered adapter status. Reports whether Serena command exists, handshake succeeded, project is active, and semantic query is usable. available/fallback does not mean Serena is connected.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -30,7 +30,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_analyze_workspace',
-    description: 'High-level workspace and architecture analysis. Detects project types, .NET solutions, architecture layers, and key entry points without dumping raw files.',
+    description: 'Workspace overview from project files. For .NET, emits sln/csproj dependency graph and entry points. Directory folder names are hints only, not architecture judgments.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -43,7 +43,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_prepare_context',
-    description: 'Prepares concise, high-semantic, decision-ready context snapshot for an agent task using Repomix and semantic distillation. Extracts relevant symbols, architectures, and packs essential files.',
+    description: 'Returns task-related file evidence (path, symbol, line, snippet) within a token budget. Does not invent architecture advice when evidence is missing. Set includeFullText to fetch file bodies; omitted files can be requested next.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -63,12 +63,20 @@ export const WINCODE_TOOLS: Tool[] = [
         },
         compress: {
           type: 'boolean',
-          description: 'Whether to extract essential code structures (classes, methods, interfaces) using Tree-sitter compression.',
+          description: 'Forwarded to Repomix CLI --compress when includeFullText is true and the CLI is installed. Builtin fallback does not AST-compress.',
         },
         outputFormat: {
           type: 'string',
           enum: ['markdown', 'xml'],
-          description: 'Output format of packed snapshot (default: markdown).',
+          description: 'Output format of packed snapshot when includeFullText is true (default: markdown).',
+        },
+        includeFullText: {
+          type: 'boolean',
+          description: 'If true, pack related file bodies within maxTokens. Default false: snippets with locations only.',
+        },
+        maxTokens: {
+          type: 'number',
+          description: 'Evidence/snapshot budget in tokens (default 8000).',
         },
       },
       required: ['task'],
@@ -76,7 +84,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_find_code_symbol',
-    description: 'Locates code symbols (classes, interfaces, methods, functions) across the workspace with signatures and line numbers (powered by Serena code intelligence).',
+    description: 'Locates code symbols with signatures and line numbers. Uses Serena when handshake and project activation succeed; otherwise local text scan. Result includes source, queryComplete, uniqueTypeMatch, and limitations.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -112,7 +120,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'analyze_change_impact',
-    description: 'Analyzes downstream blast radius, affected caller components, risk rating, and architectural decoupling recommendations before modifying code (AI change safety guard). When operating in degraded text retrieval mode, never interprets "0 references found" as low risk or safe.',
+    description: 'Estimates change blast radius from uniquely resolved symbols. Confidence depends on unique resolution and query completeness, not on source=serena-mcp alone. Zero references yield UNKNOWN, never safe-to-delete.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -126,7 +134,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_analyze_change_impact',
-    description: 'Alias for analyze_change_impact. Analyzes blast radius, affected callers, and risk rating before modifying code (never treats degraded 0 references as low risk).',
+    description: 'Alias for analyze_change_impact. Same unique-resolution and UNKNOWN-on-incomplete-query contract.',
     inputSchema: {
       type: 'object',
       properties: {

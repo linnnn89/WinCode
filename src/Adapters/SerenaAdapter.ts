@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { IAdapter, AdapterHealth } from './IAdapter.js';
+import { IAdapter, AdapterHealth, UpstreamConnectionStatus } from './IAdapter.js';
 import { WinCodeConfig } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';
 
@@ -35,8 +35,13 @@ export interface FindSymbolsResult {
   totalFound: number;
   symbols: CodeSymbol[];
   source: 'serena-mcp' | 'serena-adapter-fallback';
-  analysisCompleteness: 'semantic' | 'degraded';
+  analysisCompleteness: 'semantic' | 'degraded' | 'incomplete';
   limitations: string[];
+  queryComplete: boolean;
+  queryError?: string;
+  truncated: boolean;
+  uniqueTypeMatch: boolean;
+  typeMatchCount: number;
 }
 
 export interface FindReferencesResult {
@@ -44,13 +49,39 @@ export interface FindReferencesResult {
   totalReferences: number;
   references: SymbolReference[];
   source: 'serena-mcp' | 'serena-adapter-fallback';
-  analysisCompleteness: 'semantic' | 'degraded';
+  analysisCompleteness: 'semantic' | 'degraded' | 'incomplete';
   limitations: string[];
+  queryComplete: boolean;
+  queryError?: string;
+  truncated: boolean;
+}
+
+const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum']);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function computeTypeMatchStats(
+  symbols: CodeSymbol[],
+  query: string
+): { uniqueTypeMatch: boolean; typeMatchCount: number } {
+  const q = query.toLowerCase();
+  const typeMatches = symbols.filter(
+    (s) => TYPE_KINDS.has((s.kind || '').toLowerCase()) && s.name.toLowerCase() === q
+  );
+  const files = new Set(typeMatches.map((s) => (s.file || '').replace(/\\/g, '/').toLowerCase()));
+  const typeMatchCount = files.size;
+  return {
+    typeMatchCount,
+    uniqueTypeMatch: typeMatchCount === 1,
+  };
 }
 
 export class SerenaAdapter implements IAdapter {
   readonly name = 'SerenaAdapter';
-  readonly description = 'Semantic code intelligence, symbol search, and reference tracking via Serena MCP';
+  readonly description =
+    'Symbol search and reference tracking: Serena MCP when handshake + project activation succeed, otherwise labeled regex fallback';
 
   private config: WinCodeConfig;
   private cache: CacheManager;
@@ -58,6 +89,8 @@ export class SerenaAdapter implements IAdapter {
   private serenaTransport: StdioClientTransport | null = null;
   private isConnectedToSerena = false;
   private serenaTools: Set<string> = new Set();
+  private commandFound = false;
+  private projectActive: boolean | null = null;
 
   constructor(config: WinCodeConfig, cache: CacheManager) {
     this.config = config;
@@ -66,53 +99,81 @@ export class SerenaAdapter implements IAdapter {
 
   async initialize(): Promise<void> {
     await this.dispose();
-    const health = await this.checkHealth();
-    if (health.available && health.source === 'installed') {
+    this.commandFound = await this.probeCommand();
+    if (this.commandFound) {
       await this.tryConnectSerena();
     }
   }
 
   /**
-   * Probes whether Serena is available as a command or configured endpoint
+   * Command existence only. Does not mean handshake or semantic queries work.
    */
-  async checkHealth(): Promise<AdapterHealth> {
+  private async probeCommand(): Promise<boolean> {
     if (this.config.adapters.serena.customEndpoint) {
-      return {
-        available: true,
-        source: 'remote',
-        details: `Configured remote Serena endpoint: ${this.config.adapters.serena.customEndpoint}`,
-      };
+      return true;
     }
-
-    // Check if custom command or 'serena' is on PATH
-    const customCmd = this.config.adapters.serena.customCommand;
-    if (customCmd) {
-      return {
-        available: true,
-        source: 'installed',
-        details: `Custom Serena command configured: ${customCmd}`,
-      };
+    if (this.config.adapters.serena.customCommand) {
+      return true;
     }
-
-    // Proactively check if 'serena' binary is available in PATH
     try {
       const checkCmd = process.platform === 'win32' ? 'where.exe serena' : 'which serena';
       const stdout = execSync(checkCmd, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 }).toString();
-      if (stdout.trim()) {
-        return {
-          available: true,
-          source: 'installed',
-          details: `Found Serena binary in system PATH: ${stdout.trim().split(/\r?\n/)[0]}`,
-        };
-      }
+      return Boolean(stdout.trim());
     } catch {
-      // serena not in PATH, proceed to fallback mode
+      return false;
+    }
+  }
+
+  getUpstreamStatus(): UpstreamConnectionStatus {
+    const handshakeOk = this.isConnectedToSerena;
+    const hasSemanticTool =
+      this.serenaTools.has('find_symbol') ||
+      this.serenaTools.has('find_symbols') ||
+      this.serenaTools.has('get_symbols_overview') ||
+      this.serenaTools.has('find_referencing_symbols');
+    const semanticQueryUsable = handshakeOk && hasSemanticTool && this.projectActive === true;
+    const mode: 'connected' | 'degraded' = semanticQueryUsable ? 'connected' : 'degraded';
+    return {
+      commandFound: this.commandFound,
+      handshakeOk,
+      projectActive: this.projectActive,
+      semanticQueryUsable,
+      mode,
+    };
+  }
+
+  /**
+   * Local symbol/reference tools remain available even when upstream is down.
+   * source=installed only after a successful handshake, never because the binary exists.
+   */
+  async checkHealth(): Promise<AdapterHealth> {
+    if (!this.commandFound) {
+      this.commandFound = await this.probeCommand();
+    }
+    const upstream = this.getUpstreamStatus();
+    const handshakeOk = upstream.handshakeOk;
+    const source: AdapterHealth['source'] = handshakeOk
+      ? 'installed'
+      : this.config.adapters.serena.customEndpoint
+        ? 'remote'
+        : 'fallback';
+
+    const parts = [
+      `commandFound=${upstream.commandFound}`,
+      `handshakeOk=${upstream.handshakeOk}`,
+      `projectActive=${upstream.projectActive === null ? 'unprobed' : upstream.projectActive}`,
+      `semanticQueryUsable=${upstream.semanticQueryUsable}`,
+      `mode=${upstream.mode}`,
+    ];
+    if (upstream.mode === 'degraded') {
+      parts.push('local fallback symbol scan is available; this is not an upstream Serena connection');
     }
 
     return {
       available: true,
-      source: 'fallback',
-      details: 'Serena adapter operating in WinCode built-in intelligent symbol analysis mode (fallback)',
+      source,
+      details: parts.join('; '),
+      upstream,
     };
   }
 
@@ -133,7 +194,7 @@ export class SerenaAdapter implements IAdapter {
       });
 
       client = new Client(
-        { name: 'wincode-serena-adapter', version: '0.1.0' },
+        { name: 'wincode-serena-adapter', version: '0.4.0' },
         { capabilities: {} }
       );
 
@@ -169,8 +230,7 @@ export class SerenaAdapter implements IAdapter {
   }
 
   /**
-   * Phase 4: wincode_find_code_symbol
-   * Queries Serena (or fallback parser) and maps results to standard CodeSymbol[]
+   * wincode_find_code_symbol: Serena when connected and project-active, else local regex scan.
    */
   async findSymbols(query: string, kindFilter?: string): Promise<CodeSymbol[]> {
     const res = await this.findSymbolsDetailed(query, kindFilter);
@@ -182,10 +242,13 @@ export class SerenaAdapter implements IAdapter {
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<FindSymbolsResult>(cacheKey, fingerprint);
-    if (cached) return cached;
+    if (cached && cached.queryComplete !== false) return cached;
 
     let symbols: CodeSymbol[] = [];
     let source: 'serena-mcp' | 'serena-adapter-fallback' = 'serena-adapter-fallback';
+    let queryComplete = true;
+    let queryError: string | undefined;
+    let truncated = false;
 
     const serenaToolName = ['find_symbol', 'find_symbols', 'get_symbols_overview'].find((t) =>
       this.serenaTools.has(t)
@@ -209,12 +272,25 @@ export class SerenaAdapter implements IAdapter {
             (rawText.startsWith('Error:') || rawText.includes('没有激活项目') || rawText.includes('No active project')));
 
         if (isExplicitError) {
+          queryComplete = false;
+          queryError = typeof rawText === 'string' ? rawText : 'Serena MCP returned isError';
+          if (typeof rawText === 'string' && (rawText.includes('没有激活项目') || rawText.includes('No active project'))) {
+            this.projectActive = false;
+          }
           console.warn(`[SerenaAdapter] Serena MCP ${serenaToolName} returned error:`, rawText);
         } else if (rawText) {
+          truncated = rawText.length > 200_000;
           symbols = this.mapSerenaSymbols(rawText, query, kindFilter);
           source = 'serena-mcp';
+          this.projectActive = true;
+          if (truncated) {
+            queryComplete = false;
+            queryError = 'Serena symbol response exceeded 200k characters and may be truncated.';
+          }
         }
       } catch (err) {
+        queryComplete = false;
+        queryError = err instanceof Error ? err.message : String(err);
         console.warn('[SerenaAdapter] Serena MCP call failed, falling back to local indexing:', err);
       }
     }
@@ -223,10 +299,21 @@ export class SerenaAdapter implements IAdapter {
       symbols = await this.scanSymbolsLocally(query, kindFilter);
     }
 
-    const analysisCompleteness: 'semantic' | 'degraded' =
-      source === 'serena-mcp' ? 'semantic' : 'degraded';
+    const { uniqueTypeMatch, typeMatchCount } = computeTypeMatchStats(symbols, query);
+    const analysisCompleteness: FindSymbolsResult['analysisCompleteness'] = !queryComplete
+      ? 'incomplete'
+      : source === 'serena-mcp'
+        ? 'semantic'
+        : 'degraded';
     const limitations =
-      source === 'serena-mcp' ? [] : [...SERENA_DEGRADED_LIMITATIONS];
+      source === 'serena-mcp' && queryComplete
+        ? truncated
+          ? ['Serena 返回可能被截断，符号列表不一定完整。']
+          : []
+        : [...SERENA_DEGRADED_LIMITATIONS];
+    if (!queryComplete && queryError) {
+      limitations.unshift(`上游查询不完整: ${queryError}`);
+    }
 
     const result: FindSymbolsResult = {
       query,
@@ -236,15 +323,21 @@ export class SerenaAdapter implements IAdapter {
       source,
       analysisCompleteness,
       limitations,
+      queryComplete,
+      queryError,
+      truncated,
+      uniqueTypeMatch,
+      typeMatchCount,
     };
 
-    await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 5 });
+    if (queryComplete) {
+      await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 5 });
+    }
     return result;
   }
 
   /**
-   * Phase 4: wincode_find_references
-   * Queries Serena (or fallback scanner) for all usage and call sites of a symbol
+   * wincode_find_references: Serena when usable, else word-boundary text scan with limitations.
    */
   async findReferences(symbolName: string, relativePath?: string): Promise<SymbolReference[]> {
     const res = await this.findReferencesDetailed(symbolName, relativePath);
@@ -256,10 +349,13 @@ export class SerenaAdapter implements IAdapter {
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<FindReferencesResult>(cacheKey, fingerprint);
-    if (cached) return cached;
+    if (cached && cached.queryComplete !== false) return cached;
 
     let refs: SymbolReference[] = [];
     let source: 'serena-mcp' | 'serena-adapter-fallback' = 'serena-adapter-fallback';
+    let queryComplete = true;
+    let queryError: string | undefined;
+    let truncated = false;
 
     const refToolName = ['find_referencing_symbols', 'find_references', 'get_references'].find((t) =>
       this.serenaTools.has(t)
@@ -299,17 +395,32 @@ export class SerenaAdapter implements IAdapter {
               (rawText.startsWith('Error:') || rawText.includes('没有激活项目') || rawText.includes('No active project')));
 
           if (isExplicitError) {
+            queryComplete = false;
+            queryError = typeof rawText === 'string' ? rawText : 'Serena MCP returned isError';
+            if (typeof rawText === 'string' && (rawText.includes('没有激活项目') || rawText.includes('No active project'))) {
+              this.projectActive = false;
+            }
             console.warn(`[SerenaAdapter] Serena MCP ${refToolName} returned error:`, rawText);
           } else if (rawText) {
+            truncated = rawText.length > 200_000;
             refs = this.mapSerenaReferences(rawText, symbolName);
             source = 'serena-mcp';
+            this.projectActive = true;
+            if (truncated) {
+              queryComplete = false;
+              queryError = 'Serena reference response exceeded 200k characters and may be truncated.';
+            }
           }
         } else {
+          queryComplete = false;
+          queryError = `Could not determine relative_path for symbol '${symbolName}'`;
           console.warn(
             `[SerenaAdapter] Could not determine relative_path for symbol '${symbolName}', skipping Serena upstream and falling back to local scanner.`
           );
         }
       } catch (err) {
+        queryComplete = false;
+        queryError = err instanceof Error ? err.message : String(err);
         console.warn('[SerenaAdapter] Serena MCP call failed, falling back to local reference scanner:', err);
       }
     }
@@ -318,10 +429,23 @@ export class SerenaAdapter implements IAdapter {
       refs = await this.scanReferencesLocally(symbolName);
     }
 
-    const analysisCompleteness: 'semantic' | 'degraded' =
-      source === 'serena-mcp' ? 'semantic' : 'degraded';
+    const analysisCompleteness: FindReferencesResult['analysisCompleteness'] = !queryComplete
+      ? 'incomplete'
+      : source === 'serena-mcp'
+        ? 'semantic'
+        : 'degraded';
     const limitations =
-      source === 'serena-mcp' ? [] : [...SERENA_DEGRADED_LIMITATIONS];
+      source === 'serena-mcp' && queryComplete
+        ? truncated
+          ? ['Serena 返回可能被截断，引用列表不一定完整。']
+          : []
+        : [...SERENA_DEGRADED_LIMITATIONS];
+    if (!queryComplete && queryError) {
+      limitations.unshift(`上游查询不完整: ${queryError}`);
+    }
+    if (refs.length === 0) {
+      limitations.push('未找到引用不得直接解释为“无影响”或“低风险”。');
+    }
 
     const result: FindReferencesResult = {
       symbolName,
@@ -330,9 +454,14 @@ export class SerenaAdapter implements IAdapter {
       source,
       analysisCompleteness,
       limitations,
+      queryComplete,
+      queryError,
+      truncated,
     };
 
-    await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 5 });
+    if (queryComplete) {
+      await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 5 });
+    }
     return result;
   }
 
@@ -525,7 +654,7 @@ export class SerenaAdapter implements IAdapter {
   }
 
   /**
-   * Resilient built-in multi-language symbol indexer (C#, TypeScript/JS, Python)
+   * Local regex symbol scan (C#, TypeScript/JS, Python). Not AST, LSP, or Roslyn.
    */
   private async scanSymbolsLocally(query: string, kindFilter?: string): Promise<CodeSymbol[]> {
     const root = this.config.workspaceRoot;
@@ -680,7 +809,7 @@ export class SerenaAdapter implements IAdapter {
     const refs: SymbolReference[] = [];
     const ignoredDirs = new Set(['node_modules', 'bin', 'obj', 'dist', '.git', '.vs', 'trash', '.cache', '.deps', '.packages', '.dotnet', '.dotnet_cli_home']);
 
-    const regex = new RegExp(`\\b${symbolName}\\b`);
+    const regex = new RegExp(`\\b${escapeRegExp(symbolName)}\\b`);
 
     const walk = async (dir: string): Promise<void> => {
       const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
@@ -713,13 +842,9 @@ export class SerenaAdapter implements IAdapter {
                   continue;
                 }
 
-                // Exclude declaration line of the symbol itself
-                const isDeclaration =
-                  /^(?:export\s+)?(?:public|private|protected|internal\s+)?(?:static\s+|abstract\s+|sealed\s+|partial\s+)?(?:class|interface|struct|enum)\s+/i.test(trimmed) &&
-                  (trimmed.includes(`class ${symbolName}`) ||
-                    trimmed.includes(`interface ${symbolName}`) ||
-                    trimmed.includes(`struct ${symbolName}`) ||
-                    trimmed.includes(`enum ${symbolName}`));
+                const isDeclaration = new RegExp(
+                  String.raw`(^|\s)(class|interface|struct|enum)\s+${escapeRegExp(symbolName)}\b`
+                ).test(trimmed);
                 if (isDeclaration) {
                   continue;
                 }
@@ -761,5 +886,6 @@ export class SerenaAdapter implements IAdapter {
     }
     this.isConnectedToSerena = false;
     this.serenaTools.clear();
+    this.projectActive = null;
   }
 }

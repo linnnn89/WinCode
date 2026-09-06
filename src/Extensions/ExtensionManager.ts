@@ -10,6 +10,7 @@ export interface IWinCodeExtension {
   dispose(): Promise<void>;
 }
 
+/** Reserved plugin slot. v0.4 registers no FlaUI/Snoop/PerfView implementations. */
 export class ExtensionManager {
   private extensions: Map<string, IWinCodeExtension> = new Map();
   private config: WinCodeConfig;

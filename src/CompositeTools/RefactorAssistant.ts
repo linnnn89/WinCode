@@ -26,7 +26,7 @@ export class RefactorAssistant {
   }
 
   /**
-   * Plans a safe refactoring process for a given component or symbol
+   * Checklist derived from impact analysis. Not an automated refactor engine.
    */
   async planRefactoring(componentName: string, refactorGoal: string): Promise<RefactorPlan> {
     const impactReport = await this.impact.analyzeImpact(componentName);

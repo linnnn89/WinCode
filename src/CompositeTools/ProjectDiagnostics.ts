@@ -2,6 +2,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { WorkspaceManager, ProjectIdentity } from '../Core/Workspace.js';
 import { WinCodeConfig } from '../Core/Config.js';
+import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
 
 const execAsync = promisify(exec);
 
@@ -22,10 +23,12 @@ export interface DiagnosticsReport {
 export class ProjectDiagnostics {
   private workspace: WorkspaceManager;
   private config: WinCodeConfig;
+  private serena?: SerenaAdapter;
 
-  constructor(workspace: WorkspaceManager, config: WinCodeConfig) {
+  constructor(workspace: WorkspaceManager, config: WinCodeConfig, serena?: SerenaAdapter) {
     this.workspace = workspace;
     this.config = config;
+    this.serena = serena;
   }
 
   async runDiagnostics(): Promise<DiagnosticsReport> {
@@ -47,13 +50,13 @@ export class ProjectDiagnostics {
       });
     }
 
-    // Check .NET SDK availability
+    // Check .NET SDK availability — presence is not semantic analysis capability
     try {
       const { stdout } = await execAsync('dotnet --version', { windowsHide: true });
       items.push({
         category: 'Environment',
         status: 'PASS',
-        message: `.NET SDK detected (Version: ${stdout.trim()}).`,
+        message: `.NET SDK detected (Version: ${stdout.trim()}). This does not mean semantic reference analysis is available.`,
       });
     } catch {
       items.push({
@@ -62,6 +65,25 @@ export class ProjectDiagnostics {
         message: '.NET SDK (dotnet CLI) not found in system PATH.',
         suggestion: identity.isDotNet ? 'Install .NET SDK to enable building and analyzing C# projects.' : undefined,
       });
+    }
+
+    if (this.serena) {
+      const health = await this.serena.checkHealth();
+      const up = health.upstream;
+      if (up?.mode === 'connected' && up.semanticQueryUsable) {
+        items.push({
+          category: 'Dependencies',
+          status: 'PASS',
+          message: `Serena semantic query usable (handshakeOk=${up.handshakeOk}, projectActive=${up.projectActive}).`,
+        });
+      } else {
+        items.push({
+          category: 'Dependencies',
+          status: 'WARN',
+          message: `Serena not connected for semantic queries (commandFound=${up?.commandFound ?? false}, handshakeOk=${up?.handshakeOk ?? false}, projectActive=${up?.projectActive ?? 'unprobed'}, mode=${up?.mode ?? 'degraded'}). Local fallback scan is available.`,
+          suggestion: 'A found serena command is not a connection. Handshake, project activation, and a successful semantic query are required.',
+        });
+      }
     }
 
     // Check Git status

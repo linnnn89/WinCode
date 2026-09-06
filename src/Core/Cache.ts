@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
+import { getDefaultCacheLimits, WinCodeCacheLimits } from './Config.js';
 
 const execAsync = promisify(exec);
 
@@ -11,19 +12,82 @@ export interface CacheEntry<T> {
   ttlMs?: number;
   fingerprint?: string;
   data: T;
+  byteSize?: number;
 }
 
+export interface CacheStats {
+  namespace: string;
+  memoryEntries: number;
+  estimatedMemoryBytes: number;
+  diskEntries: number;
+  estimatedDiskBytes: number;
+}
+
+/**
+ * Memory LRU + disk JSON cache with byte caps.
+ * Namespace isolates workspaces; fingerprint memo avoids repeating git status
+ * on consecutive MCP calls. Values larger than maxEntryBytes are not retained.
+ */
 export class CacheManager {
   private cacheDir: string;
   private memoryCache: Map<string, CacheEntry<unknown>> = new Map();
   private maxMemoryEntries: number;
   private maxDiskEntries: number;
+  private maxMemoryBytes: number;
+  private maxDiskBytes: number;
+  private maxEntryBytes: number;
+  private fingerprintMemoMs: number;
   private writeCount = 0;
+  private memoryBytes = 0;
+  private namespace = '';
+  private writeChain: Promise<void> = Promise.resolve();
+  private fpMemo = new Map<string, { value: string; expiresAt: number }>();
+  private fpInflight = new Map<string, Promise<string>>();
 
-  constructor(cacheDir: string, maxMemoryEntries = 500, maxDiskEntries = 500) {
+  constructor(
+    cacheDir: string,
+    maxMemoryEntries = 500,
+    maxDiskEntries = 500,
+    limits?: Partial<WinCodeCacheLimits>
+  ) {
     this.cacheDir = cacheDir;
-    this.maxMemoryEntries = maxMemoryEntries;
-    this.maxDiskEntries = maxDiskEntries;
+    const defaults = getDefaultCacheLimits();
+    this.maxMemoryEntries = limits?.maxMemoryEntries ?? maxMemoryEntries;
+    this.maxDiskEntries = limits?.maxDiskEntries ?? maxDiskEntries;
+    this.maxMemoryBytes = limits?.maxMemoryBytes ?? defaults.maxMemoryBytes;
+    this.maxDiskBytes = limits?.maxDiskBytes ?? defaults.maxDiskBytes;
+    this.maxEntryBytes = limits?.maxEntryBytes ?? defaults.maxEntryBytes;
+    this.fingerprintMemoMs = limits?.fingerprintMemoMs ?? defaults.fingerprintMemoMs;
+  }
+
+  get memoryEntryCount(): number {
+    return this.memoryCache.size;
+  }
+
+  get estimatedMemoryBytes(): number {
+    return this.memoryBytes;
+  }
+
+  get currentNamespace(): string {
+    return this.namespace;
+  }
+
+  get directory(): string {
+    return this.cacheDir;
+  }
+
+  /**
+   * Isolates keys by workspace so project A symbols cannot be read as project B.
+   * Clears the in-memory map so large snapshots from the previous workspace
+   * become unreachable for GC. Disk files for the old prefix remain until prune.
+   */
+  setNamespace(workspaceRoot: string): void {
+    const resolved = path.resolve(workspaceRoot);
+    this.namespace = crypto.createHash('sha1').update(resolved).digest('hex').slice(0, 12);
+    this.memoryCache.clear();
+    this.memoryBytes = 0;
+    this.fpMemo.clear();
+    this.fpInflight.clear();
   }
 
   async initialize(): Promise<void> {
@@ -35,41 +99,67 @@ export class CacheManager {
     }
   }
 
-  get memoryEntryCount(): number {
-    return this.memoryCache.size;
+  /**
+   * Point this manager at a new directory after workspace_open.
+   * Memory is always dropped; the previous disk tree is left for the OS/prune.
+   */
+  async rebind(newCacheDir: string): Promise<void> {
+    this.memoryCache.clear();
+    this.memoryBytes = 0;
+    this.fpMemo.clear();
+    this.fpInflight.clear();
+    this.cacheDir = newCacheDir;
+    await this.initialize();
   }
 
-  /**
-   * Generates a safe filename for a cache key
-   */
+  private namespacedKey(key: string): string {
+    return this.namespace ? `${this.namespace}::${key}` : key;
+  }
+
   private getCacheFilePath(key: string): string {
-    const hash = crypto.createHash('sha256').update(key).digest('hex').substring(0, 16);
-    const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 32);
+    const namespaced = this.namespacedKey(key);
+    const hash = crypto.createHash('sha256').update(namespaced).digest('hex').substring(0, 16);
+    const safeKey = namespaced.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 32);
     return path.join(this.cacheDir, `${safeKey}_${hash}.json`);
   }
 
+  estimateBytes(data: unknown): number {
+    if (typeof data === 'string') return data.length * 2;
+    if (Buffer.isBuffer(data)) return data.length;
+    try {
+      return Buffer.byteLength(JSON.stringify(data), 'utf8');
+    } catch {
+      return 1024;
+    }
+  }
+
   /**
-   * Retrieves data from memory or disk cache with LRU access refresh
+   * Retrieves data from memory or disk cache with LRU access refresh.
+   * Disk files larger than maxEntryBytes are deleted instead of being loaded.
    */
   async get<T>(key: string, currentFingerprint?: string): Promise<T | null> {
     const now = Date.now();
+    const memKey = this.namespacedKey(key);
 
-    // Check memory cache first
-    const memEntry = this.memoryCache.get(key);
+    const memEntry = this.memoryCache.get(memKey);
     if (memEntry) {
       if (memEntry.ttlMs && now - memEntry.timestamp > memEntry.ttlMs) {
-        this.memoryCache.delete(key);
+        this.deleteMemory(memKey);
       } else if (!currentFingerprint || memEntry.fingerprint === currentFingerprint) {
-        // LRU: Refresh access order (move to end of Map)
-        this.memoryCache.delete(key);
-        this.memoryCache.set(key, memEntry);
+        this.memoryCache.delete(memKey);
+        this.memoryCache.set(memKey, memEntry);
         return memEntry.data as T;
       }
     }
 
-    // Check disk cache
     const filePath = this.getCacheFilePath(key);
     try {
+      const stat = await fs.stat(filePath);
+      if (stat.size > this.maxEntryBytes) {
+        await fs.unlink(filePath).catch(() => {});
+        return null;
+      }
+
       const content = await fs.readFile(filePath, 'utf-8');
       const entry: CacheEntry<T> = JSON.parse(content);
 
@@ -82,8 +172,10 @@ export class CacheManager {
         return null;
       }
 
-      // Populate memory cache with LRU bound
-      this.setMemoryEntry(key, entry);
+      this.setMemoryEntry(memKey, {
+        ...entry,
+        byteSize: entry.byteSize ?? this.estimateBytes(entry.data),
+      });
       return entry.data;
     } catch {
       return null;
@@ -91,115 +183,241 @@ export class CacheManager {
   }
 
   /**
-   * Saves data into memory and disk cache with LRU capacity eviction
+   * Saves data into memory and disk cache.
+   * Oversized values are not retained in the heap and are not written to disk.
    */
   async set<T>(key: string, data: T, options?: { ttlMs?: number; fingerprint?: string }): Promise<void> {
+    const byteSize = this.estimateBytes(data);
     const entry: CacheEntry<T> = {
       timestamp: Date.now(),
       ttlMs: options?.ttlMs,
       fingerprint: options?.fingerprint,
       data,
+      byteSize,
     };
 
-    this.setMemoryEntry(key, entry);
-
-    const filePath = this.getCacheFilePath(key);
-    try {
-      await fs.mkdir(this.cacheDir, { recursive: true });
-      await fs.writeFile(filePath, JSON.stringify(entry, null, 2), 'utf-8');
-      this.writeCount++;
-
-      // Periodically prune disk cache (every 50 writes)
-      if (this.writeCount % 50 === 0) {
-        await this.pruneDiskCache();
-        this.pruneExpiredMemory();
-      }
-    } catch (err) {
-      console.warn(`[CacheManager] Failed to write cache to ${filePath}:`, err);
+    const memKey = this.namespacedKey(key);
+    if (byteSize <= this.maxEntryBytes) {
+      this.setMemoryEntry(memKey, entry);
     }
-  }
 
-  /**
-   * Internal helper to insert memory entry with LRU bound enforcement
-   */
-  private setMemoryEntry(key: string, entry: CacheEntry<unknown>): void {
-    if (this.memoryCache.has(key)) {
-      this.memoryCache.delete(key);
-    } else if (this.memoryCache.size >= this.maxMemoryEntries) {
-      // Proactively clear expired entries first before evicting valid entries
-      this.pruneExpiredMemory();
+    if (byteSize > this.maxEntryBytes) {
+      return;
+    }
 
-      // If still at capacity, evict the oldest (first key in Map)
-      if (this.memoryCache.size >= this.maxMemoryEntries) {
-        const oldestKey = this.memoryCache.keys().next().value;
-        if (oldestKey !== undefined) {
-          this.memoryCache.delete(oldestKey);
+    await this.enqueueWrite(async () => {
+      const filePath = this.getCacheFilePath(key);
+      try {
+        await fs.mkdir(this.cacheDir, { recursive: true });
+        await fs.writeFile(filePath, JSON.stringify(entry), 'utf-8');
+        this.writeCount++;
+        if (this.writeCount % 20 === 0) {
+          await this.pruneDiskCache();
+          this.pruneExpiredMemory();
         }
+      } catch (err) {
+        console.warn(`[CacheManager] Failed to write cache to ${filePath}:`, err);
       }
-    }
-    this.memoryCache.set(key, entry);
+    });
   }
 
-  /**
-   * Proactively sweeps and removes expired entries from memory cache
-   */
+  private enqueueWrite(fn: () => Promise<void>): Promise<void> {
+    const run = this.writeChain.then(fn, fn);
+    this.writeChain = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private deleteMemory(memKey: string): void {
+    const existing = this.memoryCache.get(memKey);
+    if (existing) {
+      this.memoryBytes = Math.max(0, this.memoryBytes - (existing.byteSize ?? 0));
+      this.memoryCache.delete(memKey);
+    }
+  }
+
+  private setMemoryEntry(key: string, entry: CacheEntry<unknown>): void {
+    const size = entry.byteSize ?? this.estimateBytes(entry.data);
+    entry.byteSize = size;
+
+    if (size > this.maxEntryBytes) {
+      return;
+    }
+
+    if (this.memoryCache.has(key)) {
+      this.deleteMemory(key);
+    }
+
+    this.pruneExpiredMemory();
+    this.evictUntilFit(size);
+
+    this.memoryCache.set(key, entry);
+    this.memoryBytes += size;
+  }
+
+  private evictUntilFit(incomingBytes: number): void {
+    while (
+      this.memoryCache.size >= this.maxMemoryEntries ||
+      this.memoryBytes + incomingBytes > this.maxMemoryBytes
+    ) {
+      const oldestKey = this.memoryCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.deleteMemory(oldestKey);
+    }
+  }
+
   pruneExpiredMemory(): void {
     const now = Date.now();
     for (const [key, entry] of this.memoryCache.entries()) {
       if (entry.ttlMs && now - entry.timestamp > entry.ttlMs) {
-        this.memoryCache.delete(key);
+        this.deleteMemory(key);
       }
     }
   }
 
-  /**
-   * Prunes disk cache files to stay within maxDiskEntries
-   */
   async pruneDiskCache(): Promise<void> {
     try {
       const files = await fs.readdir(this.cacheDir);
       const jsonFiles = files.filter((f) => f.endsWith('.json'));
-      if (jsonFiles.length <= this.maxDiskEntries) return;
+      const stats = (
+        await Promise.all(
+          jsonFiles.map(async (f) => {
+            const fullPath = path.join(this.cacheDir, f);
+            try {
+              const s = await fs.stat(fullPath);
+              return { fullPath, mtimeMs: s.mtimeMs, size: s.size };
+            } catch {
+              return null;
+            }
+          })
+        )
+      ).filter((s): s is { fullPath: string; mtimeMs: number; size: number } => s !== null);
 
-      const stats = await Promise.all(
-        jsonFiles.map(async (f) => {
-          const fullPath = path.join(this.cacheDir, f);
-          try {
-            const s = await fs.stat(fullPath);
-            return { fullPath, mtimeMs: s.mtimeMs };
-          } catch {
-            return null;
-          }
-        })
-      );
+      stats.sort((a, b) => a.mtimeMs - b.mtimeMs);
 
-      const valid = stats.filter((s): s is { fullPath: string; mtimeMs: number } => s !== null);
-      valid.sort((a, b) => a.mtimeMs - b.mtimeMs); // Oldest first
+      for (const item of stats) {
+        if (item.size > this.maxEntryBytes) {
+          await fs.unlink(item.fullPath).catch(() => {});
+        }
+      }
 
-      const toRemoveCount = valid.length - this.maxDiskEntries;
-      for (let i = 0; i < toRemoveCount; i++) {
-        await fs.unlink(valid[i].fullPath).catch(() => {});
+      const remaining = (
+        await Promise.all(
+          stats.map(async (item) => {
+            try {
+              const s = await fs.stat(item.fullPath);
+              return { ...item, size: s.size };
+            } catch {
+              return null;
+            }
+          })
+        )
+      ).filter((s): s is { fullPath: string; mtimeMs: number; size: number } => s !== null);
+
+      remaining.sort((a, b) => a.mtimeMs - b.mtimeMs);
+      let totalBytes = remaining.reduce((sum, s) => sum + s.size, 0);
+
+      const overflowCount = Math.max(0, remaining.length - this.maxDiskEntries);
+      let i = 0;
+      while (i < remaining.length && (i < overflowCount || totalBytes > this.maxDiskBytes)) {
+        await fs.unlink(remaining[i].fullPath).catch(() => {});
+        totalBytes -= remaining[i].size;
+        i++;
       }
     } catch {
       // Ignore disk pruning errors
     }
   }
 
-  /**
-   * Computes a quick fingerprint of a workspace based on git status/HEAD and file mtimes
-   */
-  async computeWorkspaceFingerprint(workspaceRoot: string): Promise<string> {
-    const resolvedRoot = path.resolve(workspaceRoot);
+  async getStats(): Promise<CacheStats> {
+    let diskEntries = 0;
+    let estimatedDiskBytes = 0;
+    try {
+      const files = await fs.readdir(this.cacheDir);
+      for (const f of files) {
+        if (!f.endsWith('.json')) continue;
+        diskEntries++;
+        try {
+          const s = await fs.stat(path.join(this.cacheDir, f));
+          estimatedDiskBytes += s.size;
+        } catch {
+          // skip
+        }
+      }
+    } catch {
+      // unreadable cache dir
+    }
+    return {
+      namespace: this.namespace,
+      memoryEntries: this.memoryCache.size,
+      estimatedMemoryBytes: this.memoryBytes,
+      diskEntries,
+      estimatedDiskBytes,
+    };
+  }
 
+  /**
+   * Workspace fingerprint with a few-second memo and single-flight.
+   * Pass { fresh: true } after a known write (tests, trash move) to bypass memo.
+   */
+  async computeWorkspaceFingerprint(
+    workspaceRoot: string,
+    options?: { fresh?: boolean }
+  ): Promise<string> {
+    const resolvedRoot = path.resolve(workspaceRoot);
+    if (options?.fresh) {
+      this.invalidateFingerprint(resolvedRoot);
+    } else {
+      const memo = this.fpMemo.get(resolvedRoot);
+      if (memo && memo.expiresAt > Date.now()) {
+        return memo.value;
+      }
+      const inflight = this.fpInflight.get(resolvedRoot);
+      if (inflight) return inflight;
+    }
+
+    const pending = this.computeWorkspaceFingerprintUncached(resolvedRoot)
+      .then((value) => {
+        this.fpMemo.set(resolvedRoot, {
+          value,
+          expiresAt: Date.now() + this.fingerprintMemoMs,
+        });
+        this.fpInflight.delete(resolvedRoot);
+        return value;
+      })
+      .catch((err) => {
+        this.fpInflight.delete(resolvedRoot);
+        throw err;
+      });
+
+    this.fpInflight.set(resolvedRoot, pending);
+    return pending;
+  }
+
+  invalidateFingerprint(workspaceRoot?: string): void {
+    if (!workspaceRoot) {
+      this.fpMemo.clear();
+      this.fpInflight.clear();
+      return;
+    }
+    const resolved = path.resolve(workspaceRoot);
+    this.fpMemo.delete(resolved);
+    this.fpInflight.delete(resolved);
+  }
+
+  private async computeWorkspaceFingerprintUncached(resolvedRoot: string): Promise<string> {
     try {
       const gitPath = path.join(resolvedRoot, '.git');
       const hasGit = await fs.stat(gitPath).catch(() => null);
 
       if (hasGit) {
-        // 1. Try Git CLI for accurate commit & working tree state
         try {
           const [headRes, statusRes] = await Promise.all([
-            execAsync('git rev-parse HEAD', { cwd: resolvedRoot, windowsHide: true, timeout: 3000 }).catch(() => ({ stdout: '' })),
+            execAsync('git rev-parse HEAD', { cwd: resolvedRoot, windowsHide: true, timeout: 3000 }).catch(
+              () => ({ stdout: '' })
+            ),
             execAsync('git status --porcelain', { cwd: resolvedRoot, windowsHide: true, timeout: 5000 }),
           ]);
           const headCommit = headRes.stdout.trim();
@@ -210,7 +428,9 @@ export class CacheManager {
             try {
               const headContent = await fs.readFile(path.join(resolvedRoot, '.git', 'HEAD'), 'utf-8');
               branchRef = headContent.trim();
-            } catch {}
+            } catch {
+              // ignore
+            }
           }
 
           const lines = gitStatusRaw.split(/\r?\n/).filter((l) => l.length >= 4);
@@ -234,15 +454,9 @@ export class CacheManager {
             })
           );
 
-          const payload = [
-            headCommit || branchRef || 'no-head',
-            lines.length.toString(),
-            ...fileStats,
-          ].join('|');
-
+          const payload = [headCommit || branchRef || 'no-head', lines.length.toString(), ...fileStats].join('|');
           return crypto.createHash('sha1').update(payload).digest('hex');
         } catch {
-          // Git CLI failed, fall through to filesystem git parsing
           try {
             const gitHeadPath = path.join(resolvedRoot, '.git', 'HEAD');
             const gitHead = await fs.readFile(gitHeadPath, 'utf-8').catch(() => null);
@@ -260,16 +474,19 @@ export class CacheManager {
               try {
                 const s = await fs.stat(path.join(resolvedRoot, '.git', 'index'));
                 indexStat = `${s.mtimeMs}:${s.size}`;
-              } catch {}
+              } catch {
+                // ignore
+              }
 
               const dirFp = await this.computeDirectoryFingerprintFallback(resolvedRoot);
               return crypto.createHash('sha1').update(`${commitRef}|${indexStat}|${dirFp}`).digest('hex');
             }
-          } catch {}
+          } catch {
+            // fall through
+          }
         }
       }
 
-      // 2. Fallback for plain non-git directories
       return await this.computeDirectoryFingerprintFallback(resolvedRoot);
     } catch {
       return `ts_${Date.now()}`;
@@ -299,7 +516,9 @@ export class CacheManager {
             }
           }
         }
-      } catch {}
+      } catch {
+        // skip
+      }
     };
 
     await walk(dirPath, 0);
@@ -308,6 +527,9 @@ export class CacheManager {
 
   async clear(): Promise<void> {
     this.memoryCache.clear();
+    this.memoryBytes = 0;
+    this.fpMemo.clear();
+    this.fpInflight.clear();
     try {
       const files = await fs.readdir(this.cacheDir);
       for (const file of files) {

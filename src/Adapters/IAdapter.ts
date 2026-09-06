@@ -1,6 +1,7 @@
 /**
- * Base adapter interface for all external capabilities (Repomix, Serena, FlaUI, Snoop, etc.)
- * WinCode MCP Gateway treats upstream tools as external capabilities without modifying their source code.
+ * Adapter contract for optional upstreams (Serena, Repomix).
+ * FlaUI/Snoop remain unimplemented. Upstream tools are never forked.
+ * initialize/dispose are owned by ToolRouter + ResourceManager, not by composite tools.
  */
 
 export interface UpstreamConnectionStatus {
@@ -12,6 +13,13 @@ export interface UpstreamConnectionStatus {
   mode: 'connected' | 'degraded';
 }
 
+export interface AdapterLastError {
+  at: string;
+  reason: 'timeout' | 'crash' | 'unavailable' | 'cancelled' | 'error';
+  message: string;
+  recoverable: boolean;
+}
+
 export interface AdapterHealth {
   available: boolean;
   version?: string;
@@ -20,6 +28,7 @@ export interface AdapterHealth {
   details?: string;
   /** Layered upstream status. Do not treat available/source as "Serena connected". */
   upstream?: UpstreamConnectionStatus;
+  lastError?: AdapterLastError;
 }
 
 export interface IAdapter {

@@ -85,7 +85,7 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       const cache = new CacheManager(testCacheDir);
       await cache.initialize();
 
-      const fpOriginal = await cache.computeWorkspaceFingerprint(root);
+      const fpOriginal = await cache.computeWorkspaceFingerprint(root, { fresh: true });
       assert.ok(fpOriginal && typeof fpOriginal === 'string');
 
       // Create a temporary file in root to simulate workspace change
@@ -93,18 +93,18 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       await fs.writeFile(probeFile, 'probe content v1');
 
       try {
-        const fpAfterCreate = await cache.computeWorkspaceFingerprint(root);
+        const fpAfterCreate = await cache.computeWorkspaceFingerprint(root, { fresh: true });
         assert.notStrictEqual(fpAfterCreate, fpOriginal, 'Fingerprint must change when an untracked file is added');
 
         await new Promise((r) => setTimeout(r, 40));
         await fs.writeFile(probeFile, 'probe content v2 modified');
-        const fpAfterModify = await cache.computeWorkspaceFingerprint(root);
+        const fpAfterModify = await cache.computeWorkspaceFingerprint(root, { fresh: true });
         assert.notStrictEqual(fpAfterModify, fpAfterCreate, 'Fingerprint must change when an existing dirty file is modified');
       } finally {
         await fs.unlink(probeFile).catch(() => {});
       }
 
-      const fpRestored = await cache.computeWorkspaceFingerprint(root);
+      const fpRestored = await cache.computeWorkspaceFingerprint(root, { fresh: true });
       assert.strictEqual(fpRestored, fpOriginal, 'Fingerprint should restore when modifications are reverted');
     });
 
@@ -115,10 +115,10 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       const testFile = path.join(tempNonGit, 'src', 'code.ts');
       await fs.writeFile(testFile, 'export const a = 1;');
 
-      const fp1 = await cache.computeWorkspaceFingerprint(tempNonGit);
+      const fp1 = await cache.computeWorkspaceFingerprint(tempNonGit, { fresh: true });
       await new Promise((r) => setTimeout(r, 40));
       await fs.writeFile(testFile, 'export const a = 2;');
-      const fp2 = await cache.computeWorkspaceFingerprint(tempNonGit);
+      const fp2 = await cache.computeWorkspaceFingerprint(tempNonGit, { fresh: true });
 
       assert.notStrictEqual(fp1, fp2, 'Non-git workspace fingerprint must reflect subfolder file changes');
     });
@@ -563,6 +563,7 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
 
       const adapter = new SerenaAdapter(failingConfig, cache);
       await adapter.initialize();
+      await adapter.ensureConnected();
 
       assert.strictEqual((adapter as any).isConnectedToSerena, false);
       assert.strictEqual((adapter as any).serenaClient, null);

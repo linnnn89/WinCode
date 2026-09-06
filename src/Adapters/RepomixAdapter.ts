@@ -1,9 +1,10 @@
-import { spawn, exec, ChildProcess } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { IAdapter, AdapterHealth } from './IAdapter.js';
-import { WinCodeConfig } from '../Core/Config.js';
+import { IAdapter, AdapterHealth, AdapterLastError } from './IAdapter.js';
+import { WinCodeConfig, getDefaultTimeouts } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';
+import { ResourceManager, TimeoutError, killProcessTree, toExternalOpFailure } from '../Core/ResourceManager.js';
 
 export interface RepomixPackOptions {
   include?: string[];
@@ -29,12 +30,17 @@ export class RepomixAdapter implements IAdapter {
 
   private config: WinCodeConfig;
   private cache: CacheManager;
+  private resources?: ResourceManager;
   private isCliAvailable = false;
   private activeProcesses: Set<ChildProcess> = new Set();
+  private healthCache: { at: number; value: AdapterHealth } | null = null;
+  private inflightPacks = new Map<string, Promise<RepomixPackResult>>();
+  lastError: AdapterLastError | null = null;
 
-  constructor(config: WinCodeConfig, cache: CacheManager) {
+  constructor(config: WinCodeConfig, cache: CacheManager, resources?: ResourceManager) {
     this.config = config;
     this.cache = cache;
+    this.resources = resources;
   }
 
   get activeProcessCount(): number {
@@ -46,51 +52,41 @@ export class RepomixAdapter implements IAdapter {
     this.isCliAvailable = health.available && health.source === 'installed';
   }
 
-  /**
-   * Kills a child process and its entire process tree (especially on Windows)
-   */
-  private async killProcessTree(proc: ChildProcess): Promise<void> {
-    const pid = proc.pid;
-    try {
-      proc.kill('SIGTERM');
-    } catch {}
-
-    if (pid && process.platform === 'win32') {
-      await new Promise<void>((resolve) => {
-        exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true }, () => resolve());
-      });
-    } else if (pid) {
-      try {
-        process.kill(-pid, 'SIGKILL');
-      } catch {
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch {}
-      }
+  async checkHealth(timeoutMs?: number): Promise<AdapterHealth> {
+    const defaultMs = this.config.timeouts?.repomixHealthMs ?? getDefaultTimeouts().repomixHealthMs;
+    const waitMs = timeoutMs ?? defaultMs;
+    // Explicit timeout (tests / force) bypasses the short health memo.
+    if (timeoutMs === undefined && this.healthCache && Date.now() - this.healthCache.at < 30_000) {
+      return this.healthCache.value;
     }
-  }
 
-  async checkHealth(timeoutMs = 3000): Promise<AdapterHealth> {
-    return new Promise((resolve) => {
+    const health = await new Promise<AdapterHealth>((resolve) => {
       let isSettled = false;
       const proc = spawn('cmd', ['/c', 'npx --no-install repomix --version'], {
         cwd: this.config.workspaceRoot,
         windowsHide: true,
       });
 
-      this.activeProcesses.add(proc);
+      this.trackProcess(proc);
 
       const timer = setTimeout(async () => {
         if (isSettled) return;
         isSettled = true;
-        this.activeProcesses.delete(proc);
-        await this.killProcessTree(proc).catch(() => {});
+        this.untrackProcess(proc);
+        await killProcessTree(proc).catch(() => {});
+        this.lastError = {
+          at: new Date().toISOString(),
+          reason: 'timeout',
+          message: `Repomix CLI health check timed out (${waitMs}ms)`,
+          recoverable: true,
+        };
         resolve({
           available: true,
           source: 'fallback',
-          details: `Repomix CLI health check timed out (${timeoutMs}ms); using WinCode built-in resilient context packer`,
+          details: `Repomix CLI health check timed out (${waitMs}ms); using WinCode built-in resilient context packer`,
+          lastError: this.lastError,
         });
-      }, timeoutMs);
+      }, waitMs);
 
       let stdout = '';
       proc.stdout?.on('data', (d) => (stdout += d.toString()));
@@ -99,7 +95,7 @@ export class RepomixAdapter implements IAdapter {
         if (isSettled) return;
         isSettled = true;
         clearTimeout(timer);
-        this.activeProcesses.delete(proc);
+        this.untrackProcess(proc);
 
         if (code === 0 && stdout.trim()) {
           resolve({
@@ -117,19 +113,39 @@ export class RepomixAdapter implements IAdapter {
         }
       });
 
-      proc.on('error', () => {
+      proc.on('error', (err) => {
         if (isSettled) return;
         isSettled = true;
         clearTimeout(timer);
-        this.activeProcesses.delete(proc);
-
+        this.untrackProcess(proc);
+        this.lastError = {
+          at: new Date().toISOString(),
+          reason: 'error',
+          message: err.message,
+          recoverable: true,
+        };
         resolve({
           available: true,
           source: 'fallback',
           details: 'Repomix execution error; using WinCode built-in resilient context packer',
+          lastError: this.lastError,
         });
       });
     });
+
+    if (timeoutMs === undefined) {
+      this.healthCache = { at: Date.now(), value: health };
+    }
+    return health;
+  }
+
+  private trackProcess(proc: ChildProcess): void {
+    this.activeProcesses.add(proc);
+    this.resources?.registerProcess('repomix', proc);
+  }
+
+  private untrackProcess(proc: ChildProcess): void {
+    this.activeProcesses.delete(proc);
   }
 
   /**
@@ -144,24 +160,46 @@ export class RepomixAdapter implements IAdapter {
       return { ...cached, fromCache: true };
     }
 
-    let result: RepomixPackResult;
-
-    // Explicit candidate list is a closed set — never fall through to a full-repo CLI pack.
-    if (Array.isArray(options?.candidateFiles)) {
-      result = await this.packWithFallback(options);
-    } else if (this.isCliAvailable) {
-      try {
-        result = await this.packWithCli(options);
-      } catch (err) {
-        console.warn('[RepomixAdapter] CLI packing failed, falling back to built-in packer:', err);
-        result = await this.packWithFallback(options);
-      }
-    } else {
-      result = await this.packWithFallback(options);
+    const inflightKey = `${cacheKey}:${fingerprint}`;
+    const existing = this.inflightPacks.get(inflightKey);
+    if (existing) {
+      const shared = await existing;
+      return { ...shared, fromCache: true };
     }
 
-    await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 10 });
-    return result;
+    const pending = this.packWorkspaceUncached(options).then(async (result) => {
+      await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 10 });
+      return result;
+    });
+    this.inflightPacks.set(inflightKey, pending);
+    try {
+      return await pending;
+    } finally {
+      this.inflightPacks.delete(inflightKey);
+    }
+  }
+
+  private async packWorkspaceUncached(options?: RepomixPackOptions): Promise<RepomixPackResult> {
+    // Explicit candidate list is a closed set — never fall through to a full-repo CLI pack.
+    if (Array.isArray(options?.candidateFiles)) {
+      return this.packWithFallback(options);
+    }
+    if (this.isCliAvailable) {
+      try {
+        return await this.packWithCli(options);
+      } catch (err) {
+        const failure = toExternalOpFailure(err, 'repomix');
+        this.lastError = {
+          at: new Date().toISOString(),
+          reason: failure.reason,
+          message: failure.message,
+          recoverable: true,
+        };
+        console.warn('[RepomixAdapter] CLI packing failed, falling back to built-in packer:', failure.message);
+        return this.packWithFallback(options);
+      }
+    }
+    return this.packWithFallback(options);
   }
 
   /**
@@ -204,24 +242,25 @@ export class RepomixAdapter implements IAdapter {
         windowsHide: true,
       });
 
-      this.activeProcesses.add(proc);
+      this.trackProcess(proc);
 
       let stderr = '';
       proc.stderr?.on('data', (d) => (stderr += d.toString()));
 
+      const packTimeoutMs = this.config.timeouts?.repomixPackMs ?? 30_000;
       const timeout = setTimeout(async () => {
         if (isSettled) return;
         isSettled = true;
-        this.activeProcesses.delete(proc);
-        await this.killProcessTree(proc).catch(() => {});
-        reject(new Error('Repomix CLI execution timed out after 30s'));
-      }, 30000);
+        this.untrackProcess(proc);
+        await killProcessTree(proc).catch(() => {});
+        reject(new TimeoutError('repomix', packTimeoutMs));
+      }, packTimeoutMs);
 
       proc.on('close', async (code) => {
         if (isSettled) return;
         isSettled = true;
         clearTimeout(timeout);
-        this.activeProcesses.delete(proc);
+        this.untrackProcess(proc);
 
         try {
           if (code === 0) {
@@ -252,7 +291,7 @@ export class RepomixAdapter implements IAdapter {
         if (isSettled) return;
         isSettled = true;
         clearTimeout(timeout);
-        this.activeProcesses.delete(proc);
+        this.untrackProcess(proc);
         reject(err);
       });
     });
@@ -405,8 +444,10 @@ export class RepomixAdapter implements IAdapter {
   }
 
   async dispose(): Promise<void> {
+    this.healthCache = null;
+    this.inflightPacks.clear();
     const procs = Array.from(this.activeProcesses);
     this.activeProcesses.clear();
-    await Promise.all(procs.map((p) => this.killProcessTree(p).catch(() => {})));
+    await Promise.all(procs.map((p) => killProcessTree(p).catch(() => {})));
   }
 }

@@ -338,14 +338,17 @@ export class WorkspaceManager {
     let headCommit: string | undefined;
     let remoteUrl: string | undefined;
 
+    const gitTimeout = this.config.timeouts?.gitMs ?? 5000;
+
     try {
       const { stdout: bOut } = await execAsync('git rev-parse --abbrev-ref HEAD', {
         cwd: this.root,
         windowsHide: true,
+        timeout: gitTimeout,
       });
       branch = bOut.trim();
     } catch {
-      // Fallback: read .git/HEAD
+      // Fallback: read .git/HEAD when git CLI is missing, hung, or timed out
       try {
         const headContent = await fs.readFile(path.join(gitDir, 'HEAD'), 'utf-8');
         const match = headContent.match(/ref:\s*refs\/heads\/([^\r\n]+)/);
@@ -357,6 +360,7 @@ export class WorkspaceManager {
       const { stdout: cOut } = await execAsync('git rev-parse --short HEAD', {
         cwd: this.root,
         windowsHide: true,
+        timeout: gitTimeout,
       });
       headCommit = cOut.trim();
     } catch {}
@@ -365,6 +369,7 @@ export class WorkspaceManager {
       const { stdout: sOut } = await execAsync('git status --porcelain', {
         cwd: this.root,
         windowsHide: true,
+        timeout: gitTimeout,
       });
       isClean = sOut.trim().length === 0;
     } catch {}
@@ -373,6 +378,7 @@ export class WorkspaceManager {
       const { stdout: rOut } = await execAsync('git remote get-url origin', {
         cwd: this.root,
         windowsHide: true,
+        timeout: gitTimeout,
       });
       remoteUrl = rOut.trim();
     } catch {}

@@ -52,7 +52,10 @@ export class ProjectDiagnostics {
 
     // Check .NET SDK availability — presence is not semantic analysis capability
     try {
-      const { stdout } = await execAsync('dotnet --version', { windowsHide: true });
+      const { stdout } = await execAsync('dotnet --version', {
+        windowsHide: true,
+        timeout: this.config.timeouts?.dotnetMs ?? 5000,
+      });
       items.push({
         category: 'Environment',
         status: 'PASS',

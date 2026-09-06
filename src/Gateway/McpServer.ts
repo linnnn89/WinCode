@@ -8,17 +8,19 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { ToolRouter } from '../Core/ToolRouter.js';
 import { WINCODE_TOOLS } from './Protocol.js';
+import { WINCODE_VERSION } from '../Core/Config.js';
 
 export class WinCodeMcpServer {
   private server: Server;
   private router: ToolRouter;
+  private stopPromise: Promise<void> | null = null;
 
   constructor(router: ToolRouter) {
     this.router = router;
     this.server = new Server(
       {
         name: 'wincode-agent-gateway',
-        version: '0.4.0',
+        version: WINCODE_VERSION,
       },
       {
         capabilities: {
@@ -40,6 +42,29 @@ export class WinCodeMcpServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args = {} } = request.params;
 
+      if (this.router.isShuttingDown) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  status: 'failed',
+                  reason: 'cancelled',
+                  provider: 'wincode',
+                  recoverable: false,
+                  message: 'WinCode is shutting down; tool call rejected.',
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      this.router.beginRequest();
       try {
         switch (name) {
           case 'workspace_open':
@@ -61,32 +86,38 @@ export class WinCodeMcpServer {
 
           case 'wincode_hello_world': {
             const greeting = args.greeting ? String(args.greeting) : 'Hello from WinCode MCP Gateway!';
-            const serenaHealth = await this.router.serena.checkHealth();
-            const repomixHealth = await this.router.repomix.checkHealth();
+            const health = await this.router.getRuntimeHealth();
             return {
               content: [
                 {
                   type: 'text',
                   text: JSON.stringify(
                     {
-                      status: 'online',
+                      status: health.status,
                       message: greeting,
                       gateway: 'WinCode Agent Gateway',
-                      version: '0.4.0',
+                      version: WINCODE_VERSION,
                       platform: process.platform,
                       workspace: this.router.config.workspaceRoot,
                       timestamp: new Date().toISOString(),
+                      health,
                       adapters: {
                         serena: {
-                          available: serenaHealth.available,
-                          source: serenaHealth.source,
-                          details: serenaHealth.details,
-                          upstream: serenaHealth.upstream,
+                          available: true,
+                          source: health.serena.handshakeOk ? 'installed' : 'fallback',
+                          details: `commandFound=${health.serena.commandFound}; handshakeOk=${health.serena.handshakeOk}; projectActive=${health.serena.projectActive === null ? 'unprobed' : health.serena.projectActive}; semanticQueryUsable=${health.serena.semanticQueryUsable}; mode=${health.serena.mode}`,
+                          upstream: {
+                            commandFound: health.serena.commandFound,
+                            handshakeOk: health.serena.handshakeOk,
+                            projectActive: health.serena.projectActive,
+                            semanticQueryUsable: health.serena.semanticQueryUsable,
+                            mode: health.serena.mode,
+                          },
                         },
                         repomix: {
-                          available: repomixHealth.available,
-                          source: repomixHealth.source,
-                          details: repomixHealth.details,
+                          available: health.repomix.available,
+                          source: health.repomix.source,
+                          details: health.repomix.details,
                         },
                       },
                       capabilities: [
@@ -225,11 +256,12 @@ export class WinCodeMcpServer {
 
           case 'wincode_diagnose_project': {
             const diagnostics = await this.router.diagnostics.runDiagnostics();
+            const runtime = await this.router.getRuntimeHealth();
             return {
               content: [
                 {
                   type: 'text',
-                  text: JSON.stringify(diagnostics, null, 2),
+                  text: JSON.stringify({ ...diagnostics, runtime }, null, 2),
                 },
               ],
             };
@@ -277,6 +309,8 @@ export class WinCodeMcpServer {
           ],
           isError: true,
         };
+      } finally {
+        this.router.endRequest();
       }
     });
   }
@@ -285,11 +319,34 @@ export class WinCodeMcpServer {
     await this.router.initialize();
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('[WinCode Gateway] MCP Server running on stdio transport.');
+    console.error(`[WinCode Gateway] MCP Server ${WINCODE_VERSION} running on stdio transport.`);
   }
 
+  /**
+   * Idempotent graceful shutdown. Concurrent stop() callers share one promise.
+   * In-flight tool calls are given a short drain window, then adapters and
+   * child processes are disposed. server.close() errors are swallowed.
+   */
   async stop(): Promise<void> {
-    await this.router.dispose();
-    await this.server.close();
+    if (this.stopPromise) return this.stopPromise;
+    this.stopPromise = this.stopOnce();
+    try {
+      await this.stopPromise;
+    } finally {
+      this.stopPromise = Promise.resolve();
+    }
+  }
+
+  private async stopOnce(): Promise<void> {
+    try {
+      await this.router.dispose();
+    } catch (err) {
+      console.error('[WinCode Gateway] Error disposing router:', err);
+    }
+    try {
+      await this.server.close();
+    } catch {
+      // transport may already be gone (stdin closed by host)
+    }
   }
 }

@@ -3,9 +3,16 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { IAdapter, AdapterHealth, UpstreamConnectionStatus } from './IAdapter.js';
-import { WinCodeConfig } from '../Core/Config.js';
+import { IAdapter, AdapterHealth, AdapterLastError, UpstreamConnectionStatus } from './IAdapter.js';
+import { WINCODE_VERSION, WinCodeConfig, WinCodeTimeouts, getDefaultTimeouts } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';
+import {
+  ResourceManager,
+  TimeoutError,
+  killProcessTree,
+  toExternalOpFailure,
+  withTimeout,
+} from '../Core/ResourceManager.js';
 
 export const SERENA_DEGRADED_LIMITATIONS: string[] = [
   '本地正则扫描仅作为文本检索降级方案，不保证符号身份、重载区分、跨文件引用完整性或安全重命名。',
@@ -78,6 +85,11 @@ export function computeTypeMatchStats(
   };
 }
 
+/**
+ * Serena is optional. Local regex scan always remains available.
+ * Connect lazily, reuse one MCP session, reset on crash/timeout, and never
+ * let a hung upstream take down WinCode.
+ */
 export class SerenaAdapter implements IAdapter {
   readonly name = 'SerenaAdapter';
   readonly description =
@@ -85,24 +97,35 @@ export class SerenaAdapter implements IAdapter {
 
   private config: WinCodeConfig;
   private cache: CacheManager;
+  private resources?: ResourceManager;
+  private timeouts: WinCodeTimeouts;
   private serenaClient: Client | null = null;
   private serenaTransport: StdioClientTransport | null = null;
   private isConnectedToSerena = false;
   private serenaTools: Set<string> = new Set();
   private commandFound = false;
   private projectActive: boolean | null = null;
+  private connectPromise: Promise<boolean> | null = null;
+  private disposing = false;
+  private serenaPid: number | null = null;
+  private processResourceId: string | null = null;
+  lastError: AdapterLastError | null = null;
 
-  constructor(config: WinCodeConfig, cache: CacheManager) {
+  constructor(config: WinCodeConfig, cache: CacheManager, resources?: ResourceManager) {
     this.config = config;
     this.cache = cache;
+    this.resources = resources;
+    this.timeouts = config.timeouts ?? getDefaultTimeouts();
   }
 
+  /**
+   * Probe the binary only. Handshake is lazy: the first semantic tool call
+   * reuses a single in-flight connect promise so two MCP requests cannot
+   * spawn two Serena processes.
+   */
   async initialize(): Promise<void> {
     await this.dispose();
     this.commandFound = await this.probeCommand();
-    if (this.commandFound) {
-      await this.tryConnectSerena();
-    }
   }
 
   /**
@@ -117,11 +140,24 @@ export class SerenaAdapter implements IAdapter {
     }
     try {
       const checkCmd = process.platform === 'win32' ? 'where.exe serena' : 'which serena';
-      const stdout = execSync(checkCmd, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 }).toString();
+      const stdout = execSync(checkCmd, {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: this.timeouts.commandProbeMs,
+      }).toString();
       return Boolean(stdout.trim());
     } catch {
       return false;
     }
+  }
+
+  private recordError(reason: AdapterLastError['reason'], err: unknown, recoverable = true): void {
+    const failure = toExternalOpFailure(err, 'serena', recoverable);
+    this.lastError = {
+      at: new Date().toISOString(),
+      reason: reason === 'error' ? failure.reason : reason,
+      message: failure.message,
+      recoverable,
+    };
   }
 
   getUpstreamStatus(): UpstreamConnectionStatus {
@@ -174,14 +210,35 @@ export class SerenaAdapter implements IAdapter {
       source,
       details: parts.join('; '),
       upstream,
+      lastError: this.lastError ?? undefined,
     };
   }
 
   /**
-   * Attempts to establish an MCP stdio connection to Serena
+   * Single-flight connect. Safe to call from concurrent tool handlers.
+   */
+  async ensureConnected(): Promise<boolean> {
+    if (!this.config.adapters.serena.enabled) return false;
+    if (this.isConnectedToSerena && this.serenaClient) return true;
+    if (this.connectPromise) return this.connectPromise;
+    if (!this.commandFound) {
+      this.commandFound = await this.probeCommand();
+    }
+    if (!this.commandFound && !this.config.adapters.serena.customCommand && !this.config.adapters.serena.customEndpoint) {
+      return false;
+    }
+    this.connectPromise = this.tryConnectSerena().finally(() => {
+      this.connectPromise = null;
+    });
+    return this.connectPromise;
+  }
+
+  /**
+   * Attempts to establish an MCP stdio connection to Serena.
+   * Timeout or crash must not throw out of the adapter — WinCode stays up.
    */
   private async tryConnectSerena(): Promise<boolean> {
-    await this.dispose();
+    await this.resetConnection();
 
     let transport: StdioClientTransport | null = null;
     let client: Client | null = null;
@@ -189,43 +246,74 @@ export class SerenaAdapter implements IAdapter {
     try {
       const cmd = this.config.adapters.serena.customCommand || 'serena';
       transport = new StdioClientTransport({
-        command: 'cmd',
-        args: ['/c', cmd],
+        command: process.platform === 'win32' ? 'cmd' : cmd,
+        args: process.platform === 'win32' ? ['/c', cmd] : [],
+        stderr: 'pipe',
       });
 
       client = new Client(
-        { name: 'wincode-serena-adapter', version: '0.4.0' },
+        { name: 'wincode-serena-adapter', version: WINCODE_VERSION },
         { capabilities: {} }
       );
 
-      await client.connect(transport);
-      const toolsList = await client.listTools();
+      transport.onclose = () => {
+        this.handleTransportClosed();
+      };
+      transport.onerror = (err) => {
+        this.recordError('crash', err, true);
+      };
 
-      this.serenaTools.clear();
-      for (const t of toolsList.tools) {
-        this.serenaTools.add(t.name);
-      }
+      await withTimeout(
+        (async () => {
+          await client!.connect(transport!);
+          const toolsList = await client!.listTools();
+          this.serenaTools.clear();
+          for (const t of toolsList.tools) {
+            this.serenaTools.add(t.name);
+          }
+        })(),
+        this.timeouts.serenaConnectMs,
+        'serena-connect'
+      );
+
       this.serenaTransport = transport;
       this.serenaClient = client;
       this.isConnectedToSerena = true;
-      console.error(`[SerenaAdapter] Connected to upstream Serena MCP server with ${toolsList.tools.length} tools.`);
+      this.serenaPid = transport.pid;
+      if (this.resources && this.serenaPid) {
+        this.processResourceId = this.resources.register('process', 'serena', () => this.killSerenaProcess());
+      }
+      console.error(`[SerenaAdapter] Connected to upstream Serena MCP server with ${this.serenaTools.size} tools.`);
       return true;
     } catch (err) {
-      if (client) {
-        try {
-          await client.close();
-        } catch {}
-      }
-      if (transport) {
-        try {
-          await transport.close();
-        } catch {}
-      }
-      this.serenaClient = null;
-      this.serenaTransport = null;
-      this.isConnectedToSerena = false;
-      this.serenaTools.clear();
+      this.recordError(err instanceof TimeoutError ? 'timeout' : 'error', err, true);
+      await this.closeClientAndTransport(client, transport);
+      this.clearConnectionFields();
       return false;
+    }
+  }
+
+  private handleTransportClosed(): void {
+    if (this.disposing) return;
+    if (!this.isConnectedToSerena && !this.serenaClient) return;
+    this.recordError('crash', new Error('Serena stdio transport closed unexpectedly'), true);
+    this.clearConnectionFields();
+  }
+
+  private async callSerenaTool(name: string, args: Record<string, unknown>): Promise<Awaited<ReturnType<Client['callTool']>>> {
+    if (!this.serenaClient) {
+      throw new Error('Serena client is not connected');
+    }
+    try {
+      return await withTimeout(
+        this.serenaClient.callTool({ name, arguments: args }),
+        this.timeouts.serenaCallMs,
+        'serena'
+      );
+    } catch (err) {
+      this.recordError(err instanceof TimeoutError ? 'timeout' : 'crash', err, true);
+      await this.resetConnection();
+      throw err;
     }
   }
 
@@ -250,19 +338,18 @@ export class SerenaAdapter implements IAdapter {
     let queryError: string | undefined;
     let truncated = false;
 
+    await this.ensureConnected().catch(() => false);
+
     const serenaToolName = ['find_symbol', 'find_symbols', 'get_symbols_overview'].find((t) =>
       this.serenaTools.has(t)
     );
 
     if (this.isConnectedToSerena && this.serenaClient && serenaToolName) {
       try {
-        const serenaRes = await this.serenaClient.callTool({
-          name: serenaToolName,
-          arguments: {
-            name_path_pattern: query,
-            name_path: query,
-            relative_path: '',
-          },
+        const serenaRes = await this.callSerenaTool(serenaToolName, {
+          name_path_pattern: query,
+          name_path: query,
+          relative_path: '',
         });
 
         const rawText = (serenaRes.content as any[])?.[0]?.text;
@@ -357,6 +444,8 @@ export class SerenaAdapter implements IAdapter {
     let queryError: string | undefined;
     let truncated = false;
 
+    await this.ensureConnected().catch(() => false);
+
     const refToolName = ['find_referencing_symbols', 'find_references', 'get_references'].find((t) =>
       this.serenaTools.has(t)
     );
@@ -380,12 +469,9 @@ export class SerenaAdapter implements IAdapter {
         }
 
         if (targetRelPath) {
-          const serenaRes = await this.serenaClient.callTool({
-            name: refToolName,
-            arguments: {
-              name_path: targetNamePath,
-              relative_path: targetRelPath,
-            },
+          const serenaRes = await this.callSerenaTool(refToolName, {
+            name_path: targetNamePath,
+            relative_path: targetRelPath,
           });
 
           const rawText = (serenaRes.content as any[])?.[0]?.text;
@@ -660,12 +746,15 @@ export class SerenaAdapter implements IAdapter {
     const root = this.config.workspaceRoot;
     const results: CodeSymbol[] = [];
     const lowerQuery = query.toLowerCase();
+    const deadline = Date.now() + this.timeouts.fileScanMs;
 
     const ignoredDirs = new Set(['node_modules', 'bin', 'obj', 'dist', '.git', '.vs', 'trash', '.cache', '.deps', '.packages', '.dotnet', '.dotnet_cli_home']);
 
     const walk = async (dir: string): Promise<void> => {
+      if (Date.now() > deadline) return;
       const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
+        if (Date.now() > deadline) return;
         if (ignoredDirs.has(entry.name)) continue;
         const fullPath = path.join(dir, entry.name);
 
@@ -808,12 +897,15 @@ export class SerenaAdapter implements IAdapter {
     const root = this.config.workspaceRoot;
     const refs: SymbolReference[] = [];
     const ignoredDirs = new Set(['node_modules', 'bin', 'obj', 'dist', '.git', '.vs', 'trash', '.cache', '.deps', '.packages', '.dotnet', '.dotnet_cli_home']);
+    const deadline = Date.now() + this.timeouts.fileScanMs;
 
     const regex = new RegExp(`\\b${escapeRegExp(symbolName)}\\b`);
 
     const walk = async (dir: string): Promise<void> => {
+      if (Date.now() > deadline) return;
       const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
+        if (Date.now() > deadline) return;
         if (ignoredDirs.has(entry.name)) continue;
         const fullPath = path.join(dir, entry.name);
 
@@ -872,18 +964,66 @@ export class SerenaAdapter implements IAdapter {
   }
 
   async dispose(): Promise<void> {
-    if (this.serenaClient) {
-      try {
-        await this.serenaClient.close();
-      } catch {}
-      this.serenaClient = null;
+    await this.resetConnection();
+    this.commandFound = false;
+    this.lastError = null;
+  }
+
+  /**
+   * Close MCP transport + process tree. Idempotent. Used on workspace switch,
+   * crash, timeout, and gateway shutdown. Leaves commandFound intact so the
+   * next call can reconnect.
+   */
+  async resetConnection(): Promise<void> {
+    if (this.disposing && !this.serenaClient && !this.serenaTransport) {
+      return;
     }
-    if (this.serenaTransport) {
-      try {
-        await this.serenaTransport.close();
-      } catch {}
-      this.serenaTransport = null;
+    this.disposing = true;
+    const client = this.serenaClient;
+    const transport = this.serenaTransport;
+    this.clearConnectionFields();
+    try {
+      await this.closeClientAndTransport(client, transport);
+      await this.killSerenaProcess();
+    } finally {
+      this.disposing = false;
     }
+  }
+
+  private async closeClientAndTransport(
+    client: Client | null,
+    transport: StdioClientTransport | null
+  ): Promise<void> {
+    if (client) {
+      try {
+        await withTimeout(client.close(), 2000, 'serena-client-close');
+      } catch {
+        // ignore
+      }
+    }
+    if (transport) {
+      try {
+        await withTimeout(transport.close(), 2000, 'serena-transport-close');
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private async killSerenaProcess(): Promise<void> {
+    const pid = this.serenaPid;
+    this.serenaPid = null;
+    if (this.processResourceId && this.resources) {
+      this.resources.unregister(this.processResourceId);
+      this.processResourceId = null;
+    }
+    if (!pid) return;
+    await killProcessTree({ pid, kill: (sig?: NodeJS.Signals) => process.kill(pid, sig) });
+  }
+
+  private clearConnectionFields(): void {
+    this.serenaClient = null;
+    this.serenaTransport = null;
     this.isConnectedToSerena = false;
     this.serenaTools.clear();
     this.projectActive = null;

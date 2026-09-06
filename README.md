@@ -25,7 +25,7 @@
 ### 🌟 Project Vision
 **WinCode** is not just a tool wrapper; it is an **engineering capability gateway built specifically for Windows development environments**.
 
-Instead of forcing AI coding agents (such as Codex, Claude Code, etc.) to master dozens of low-level tools, WinCode exposes a curated set of **high-level MCP tools**. Agents connect to one endpoint for workspace graphs, file-backed context, and change-impact reports. Serena and Repomix are optional upstreams; when they are missing or incomplete, WinCode keeps running and **labels the gap**.
+Instead of forcing AI coding agents (such as Codex, Claude Code, etc.) to master dozens of low-level tools, WinCode exposes a curated set of **high-level MCP tools**. Agents connect to one endpoint for workspace graphs, file-backed context, and change-impact reports. Serena and Repomix are optional upstreams; when they are missing or incomplete, WinCode keeps running and **labels the gap**. v0.5 keeps that contract and makes the gateway safe to leave running: one owner for child processes, workspace sessions, byte-capped cache, and bounded timeouts.
 
 ```
 Coding Agent (Codex / Claude Code / Cursor / Windsurf)
@@ -34,12 +34,12 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 ┌────────────────────────────────────────────────────────────────────────┐
 │                       WinCode MCP Agent Gateway                        │
 ├───────────────────────────────────┬────────────────────────────────────┤
-│         🟢 Current (v0.4)         │         🟡 Planned (not started)   │
+│         🟢 Current (v0.5)         │         🟡 Planned (not started)   │
 ├─────────────────┬─────────────────┼──────────────────┬─────────────────┤
 │ .NET sln/csproj │ Evidence-bounded│Desktop Automation│ Diagnostics &   │
 │ graph + impact  │ context + health│   (FlaUI)        │ Performance     │
-│ (Serena optional│ (Repomix CLI    │                  │ (Snoop/PerfView)│
-│  / text fallback)│  optional)     │                  │                 │
+│ + process/session│ + byte-capped  │                  │ (Snoop/PerfView)│
+│ lifecycle        │ cache/timeouts │                  │                 │
 └─────────────────┴─────────────────┴──────────────────┴─────────────────┘
 ```
 
@@ -48,8 +48,9 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 2. **Evidence over summaries**: Default context is file snippets with path/symbol/line, inside a token budget. Missing evidence is declared; the server will not dump the whole repo or invent architecture advice.
 3. **Windows First**: Reads real `.sln` / `.csproj` graphs (ProjectReference, WPF/WinUI/WinForms, entry points). `dotnet` on PATH is not semantic analysis. Extra Roslyn integration is **not** committed.
 4. **Safe Workspace Policy**: No hard deletes. Obsolete files move to `trash/` with audit metadata. Only relative in-workspace paths are accepted.
-5. **Caching**: Fingerprints (git HEAD / dirty mtime) avoid repeat scans. Incomplete Serena queries are not cached.
+5. **Caching**: Fingerprints (git HEAD / dirty mtime) avoid repeat scans. Incomplete Serena queries are not cached. Memory/disk caches have **byte** caps, not only entry counts. Consecutive tool calls reuse a few-second fingerprint memo; workspace switch changes the cache namespace.
 6. **Source ≠ confidence**: `source` is the provider. Confidence for impact analysis requires unique resolution and a complete query. Zero references, ambiguity, or incomplete queries return `UNKNOWN` — never "safe to delete". Local regex fallback does not guarantee symbol identity, overloads, or complete cross-file references.
+7. **Long-running hygiene**: Every child process, timer, and MCP transport has an owner (`ResourceManager`). `SIGINT`/`SIGTERM` run an idempotent graceful shutdown. Adapter timeouts become structured `{ status: failed, reason: timeout, recoverable: true }` results — they do not crash the gateway.
 
 ---
 
@@ -68,7 +69,16 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 - [x] `wincode_prepare_context` returns evidence snippets by default; `includeFullText` packs only the related file set; empty related set does not dump the repo.
 - [x] Portable fixture `tests/fixtures/dotnet-mini` (MiniDesk, 3 projects). Optional live repo via `WINCODE_TAVERN_PATH`.
 
-#### Later (not in v0.4)
+#### v0.5 (Delivered)
+- [x] Unified `ResourceManager`: child processes, timers, adapter transports. `stop()` is idempotent. SIGINT/SIGTERM drain in-flight calls then dispose.
+- [x] Serena: lazy connect, single-flight handshake, crash/timeout reset, workspace switch drops the old MCP session. Layered `commandFound` / `handshakeOk` / `projectActive` / `semanticQueryUsable` unchanged.
+- [x] `SessionManager`: current workspace, cache namespace, fingerprint, createdAt, lastActivity. `workspace_open` is serialized and must not leak symbols across projects.
+- [x] Cache byte limits (`maxMemoryBytes` / `maxDiskBytes` / `maxEntryBytes`). Oversized snapshots are not kept in the heap.
+- [x] Fingerprint memo (~2.5s) + single-flight so consecutive prepare_context / find_symbol / find_references / impact calls do not repeat `git status`.
+- [x] Timeouts on git, dotnet, Serena connect/RPC, Repomix CLI, and file scans.
+- [x] Lightweight runtime health on `wincode_hello_world` (and a `runtime` block on diagnose): uptime, cache bytes, child process count, Node memory, last adapter error.
+
+#### Later (not in v0.5)
 - [ ] FlaUI / Snoop / PerfView.
 - [ ] Extra Roslyn host (only after measuring Serena gaps on real C# repos).
 - [ ] Removing existing tool names.
@@ -80,13 +90,13 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 | Tool | Description | Notes |
 | :--- | :--- | :--- |
 | `workspace_open` | Open a directory; detect type, sln/csproj, git, metadata, tree. | Switches the active workspace. |
-| `wincode_hello_world` | Heartbeat **and** layered adapter status. | Fallback ≠ Serena connected. |
+| `wincode_hello_world` | Heartbeat, layered adapter status, and runtime health (uptime, cache, child processes). | Fallback ≠ Serena connected. |
 | `wincode_analyze_workspace` | Workspace overview + `.NET` `projectGraph` from sln/csproj. | Directory layers are hints, not architecture judgments. |
 | `wincode_prepare_context` | Task-related evidence (path, symbol, line, snippet) within `maxTokens`. | Set `includeFullText` to pack **related** files only. Declares insufficient evidence. |
 | `wincode_find_code_symbol` | Symbol search with `source`, `queryComplete`, `uniqueTypeMatch`. | Serena when usable; otherwise text scan. |
 | `wincode_find_references` | Call-site / usage list with the same honesty fields. | 0 hits is not "no impact". |
 | `analyze_change_impact` | Blast radius + risk. Alias: `wincode_analyze_change_impact`. | `UNKNOWN` when not uniquely resolved or query incomplete. Confidence is not `source`. |
-| `wincode_diagnose_project` | Windows / SDK / git / Serena status. | `dotnet --version` ≠ semantic references. |
+| `wincode_diagnose_project` | Windows / SDK / git / Serena status plus a `runtime` snapshot. | `dotnet --version` ≠ semantic references. |
 | `wincode_plan_refactoring` | Checklist derived from impact + trash policy. | Not an automated refactor engine. |
 | `wincode_safe_move_to_trash` | Move a relative in-workspace path to `trash/` with metadata. | Absolute / `..` / symlink escape rejected. |
 
@@ -102,12 +112,14 @@ WinCode/
 │   │   ├── McpServer.ts              # MCP Server instance & handlers
 │   │   └── Protocol.ts               # MCP Tool schemas & contract
 │   ├── Core/
-│   │   ├── Config.ts                 # Workspace & adapter configuration
+│   │   ├── Config.ts                 # Workspace, timeouts, cache byte limits
+│   │   ├── ResourceManager.ts        # Child processes / timers / idempotent dispose
+│   │   ├── SessionManager.ts         # Active workspace session + cache namespace
 │   │   ├── Workspace.ts              # Project detection & safe trash policy
-│   │   ├── Cache.ts                  # Memory/disk cache with fingerprints
+│   │   ├── Cache.ts                  # Byte-capped memory/disk cache + fingerprint memo
 │   │   ├── DotNetGraph.ts            # sln/csproj ProjectReference graph
 │   │   ├── Context.ts                # Evidence-bounded context (budget + snippets)
-│   │   └── ToolRouter.ts             # Central execution router
+│   │   └── ToolRouter.ts             # Router, session switch, runtime health
 │   ├── Adapters/
 │   │   ├── IAdapter.ts               # Adapter contract + layered upstream status
 │   │   ├── RepomixAdapter.ts         # Repomix CLI or closed-set builtin packer
@@ -121,7 +133,8 @@ WinCode/
 │       └── ExtensionManager.ts       # Reserved; no FlaUI/Snoop plugins yet
 ├── tests/
 │   ├── fixtures/dotnet-mini/         # Portable MiniDesk .NET fixture (3 projects)
-│   ├── tdd-suite.test.ts             # Default CI suite
+│   ├── tdd-suite.test.ts             # Default CI suite (v0.4 contract + e2e)
+│   ├── v05-stability.test.ts         # Lifecycle / cache bytes / timeouts
 │   └── verify.ts                     # Smoke verification
 └── trash/                            # Safe archive (.gitignore)
 ```
@@ -145,9 +158,12 @@ npm run build
 
 #### 2. Tests
 ```bash
+npm run build
 npm test
 npm run test:verify
 ```
+
+`npm test` runs the v0.4 contract suite and `tests/v05-stability.test.ts`. End-to-end MCP cases spawn `dist/index.js`, so build first.
 
 Default tests use `tests/fixtures/dotnet-mini`. To optionally exercise a local live solution:
 
@@ -182,7 +198,7 @@ Add WinCode to your MCP client configuration (`claude_desktop_config.json`):
 ### 🌟 项目愿景
 **WinCode** 不是简单的底层工具转发器，而是专为 **Windows 桌面与工程环境打造的 Agent 开发能力网关**。
 
-核心理念：**不要让 Agent 学习几十个低层工具，而是给少量高语义接口。** 当前 v0.4 交付的是可证伪的查询链：.NET 项目图、带依据的上下文、改前影响面。Serena / Repomix 是可选上游；缺失或不完整时继续运行，并**标明缺口**，而不是写成“已连接”。
+核心理念：**不要让 Agent 学习几十个低层工具，而是给少量高语义接口。** 当前 v0.5 在 v0.4 可证伪查询链之上，把网关做成可长期驻留的进程：统一资源释放、工作区会话、按字节封顶的缓存、外部调用超时。Serena / Repomix 是可选上游；缺失或不完整时继续运行，并**标明缺口**，而不是写成“已连接”。
 
 ```
 Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
@@ -191,12 +207,11 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 ┌────────────────────────────────────────────────────────────────────────┐
 │                       WinCode MCP Agent Gateway                        │
 ├───────────────────────────────────┬────────────────────────────────────┤
-│         🟢 Current (v0.4)         │         🟡 规划（尚未开工）        │
+│         🟢 Current (v0.5)         │         🟡 规划（尚未开工）        │
 ├─────────────────┬─────────────────┼──────────────────┬─────────────────┤
 │ .NET sln/csproj │ 预算内证据上下文 │  Windows 自动化  │ 深度诊断与调优  │
 │ 图 + 影响面     │ + 分层健康状态  │   (FlaUI)        │(Snoop/PerfView) │
-│ (Serena 可选/   │ (Repomix CLI    │                  │                 │
-│  文本降级)      │  可选)          │                  │                 │
+│ + 进程/会话生命周期 │ + 字节上限缓存 │                  │                 │
 └─────────────────┴─────────────────┴──────────────────┴─────────────────┘
 ```
 
@@ -205,8 +220,9 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 2. **证据优先于摘要**：默认返回带路径/符号/行号的片段，受 token 预算约束。证据不足就声明不足；禁止无相关文件时倾倒整个仓库，也不编造架构结论。
 3. **Windows 优先**：从真实 `.sln` / `.csproj` 生成项目依赖和入口。`dotnet` 在 PATH 上 ≠ 具备语义引用能力。额外 Roslyn 集成本里程碑**未承诺**。
 4. **安全防误删**：禁止硬删除，归档到 `trash/` 并写审计元数据；只接受工作区内相对路径。
-5. **指纹缓存**：基于 git HEAD / dirty mtime。不完整的 Serena 查询不入库。
+5. **指纹缓存**：基于 git HEAD / dirty mtime。不完整的 Serena 查询不入库。内存/磁盘缓存有**字节**上限，不只是条数。连续工具调用复用数秒级指纹 memo；切换工作区会更换 cache namespace。
 6. **source 不能决定 confidence**：`source` 只说明供应方。影响分析的可信度看目标是否唯一解析、查询是否完整。0 引用、同名歧义、查询不完整必须返回 `UNKNOWN`，不得写成可安全删除。本地正则降级不保证符号身份、重载区分或跨文件引用完整性。
+7. **长期驻留卫生**：子进程、定时器、MCP transport 都有明确 owner（`ResourceManager`）。`SIGINT`/`SIGTERM` 做可重复的 graceful shutdown。适配器超时变成结构化 `{ status: failed, reason: timeout, recoverable: true }`，不得把网关打崩。
 
 ---
 
@@ -225,7 +241,16 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 - [x] `wincode_prepare_context` 默认返回证据片段；`includeFullText` 只打包相关文件；无相关文件时拒绝倾倒仓库。
 - [x] 可移植夹具 `tests/fixtures/dotnet-mini`（MiniDesk，3 个项目）。真实仓库可通过 `WINCODE_TAVERN_PATH` 可选接入。
 
-#### 之后（不在 v0.4）
+#### v0.5（已交付）
+- [x] 统一 `ResourceManager`：子进程、定时器、适配器 transport。`stop()` 可重复调用。SIGINT/SIGTERM 先排空在途请求再释放。
+- [x] Serena：懒连接、单飞握手、崩溃/超时后重置、切换工作区丢弃旧 MCP 会话。分层 `commandFound` / `handshakeOk` / `projectActive` / `semanticQueryUsable` 不变。
+- [x] `SessionManager`：当前工作区、cache namespace、fingerprint、createdAt、lastActivity。`workspace_open` 串行化，禁止跨项目泄漏符号。
+- [x] 缓存字节上限（`maxMemoryBytes` / `maxDiskBytes` / `maxEntryBytes`）。超大 snapshot 不长期留在堆上。
+- [x] 指纹 memo（约 2.5 秒）+ single-flight，避免连续 prepare_context / find_symbol / find_references / impact 重复跑 `git status`。
+- [x] git、dotnet、Serena 连接/RPC、Repomix CLI、文件扫描均有超时。
+- [x] `wincode_hello_world` 带轻量 runtime health（diagnose 带 `runtime` 块）：uptime、缓存字节、子进程数、Node 内存、最近适配器错误。
+
+#### 之后（不在 v0.5）
 - [ ] FlaUI / Snoop / PerfView。
 - [ ] 额外 Roslyn 宿主（须先在真实 C# 仓库上量 Serena 缺口）。
 - [ ] 删除现有工具名。
@@ -237,13 +262,13 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 | 工具名称 | 功能描述 | 说明 |
 | :--- | :--- | :--- |
 | `workspace_open` | 打开目录，识别类型、sln/csproj、git、元数据与目录树 | 切换当前工作区。 |
-| `wincode_hello_world` | 心跳 **以及** 分层适配器状态 | fallback ≠ Serena 已连接。 |
+| `wincode_hello_world` | 心跳、分层适配器状态、runtime health（uptime / 缓存 / 子进程） | fallback ≠ Serena 已连接。 |
 | `wincode_analyze_workspace` | 工作区概览 + 从 sln/csproj 得到的 `projectGraph` | 目录分层只是提示，不是架构判断。 |
 | `wincode_prepare_context` | 任务相关证据（路径、符号、行、片段），受 `maxTokens` 约束 | `includeFullText` 只打包**相关**文件。证据不足会声明。 |
 | `wincode_find_code_symbol` | 符号检索，带 `source` / `queryComplete` / `uniqueTypeMatch` | Serena 可用时走上游，否则文本扫描。 |
 | `wincode_find_references` | 引用/调用点列表，同样的诚实字段 | 0 命中不是“无影响”。 |
 | `analyze_change_impact` | 爆炸半径与风险。别名：`wincode_analyze_change_impact` | 无法唯一解析或查询不完整时为 `UNKNOWN`。confidence 不由 source 决定。 |
-| `wincode_diagnose_project` | Windows / SDK / git / Serena 状态 | `dotnet --version` ≠ 语义引用能力。 |
+| `wincode_diagnose_project` | Windows / SDK / git / Serena 状态，外加 `runtime` 快照 | `dotnet --version` ≠ 语义引用能力。 |
 | `wincode_plan_refactoring` | 基于 impact 的检查清单 + trash 策略 | 不是自动重构引擎。 |
 | `wincode_safe_move_to_trash` | 将工作区内相对路径移入 `trash/` 并写元数据 | 拒绝绝对路径 / `..` / 符号链接逃逸。 |
 
@@ -259,12 +284,14 @@ WinCode/
 │   │   ├── McpServer.ts              # MCP 服务端核心实现
 │   │   └── Protocol.ts               # MCP 高层工具契约定义
 │   ├── Core/
-│   │   ├── Config.ts                 # 工作区与适配器配置
+│   │   ├── Config.ts                 # 工作区、超时、缓存字节上限
+│   │   ├── ResourceManager.ts        # 子进程 / 定时器 / 可重复 dispose
+│   │   ├── SessionManager.ts         # 当前工作区会话与 cache namespace
 │   │   ├── Workspace.ts              # 工作区检测与安全 trash
-│   │   ├── Cache.ts                  # 带指纹的内存/磁盘缓存
+│   │   ├── Cache.ts                  # 按字节封顶的内存/磁盘缓存 + 指纹 memo
 │   │   ├── DotNetGraph.ts            # sln/csproj ProjectReference 图
 │   │   ├── Context.ts                # 预算内证据上下文
-│   │   └── ToolRouter.ts             # 调度中枢
+│   │   └── ToolRouter.ts             # 调度、会话切换、runtime health
 │   ├── Adapters/
 │   │   ├── IAdapter.ts               # 适配器契约 + 分层上游状态
 │   │   ├── RepomixAdapter.ts         # Repomix CLI 或闭集内置打包
@@ -278,7 +305,8 @@ WinCode/
 │       └── ExtensionManager.ts       # 预留；尚无 FlaUI/Snoop 插件
 ├── tests/
 │   ├── fixtures/dotnet-mini/         # 可移植 MiniDesk .NET 夹具（3 个项目）
-│   ├── tdd-suite.test.ts             # 默认 CI 套件
+│   ├── tdd-suite.test.ts             # 默认 CI 套件（v0.4 契约 + e2e）
+│   ├── v05-stability.test.ts         # 生命周期 / 缓存字节 / 超时
 │   └── verify.ts                     # 冒烟验证
 └── trash/                            # 安全回收站（.gitignore）
 ```
@@ -302,9 +330,12 @@ npm run build
 
 #### 2. 测试
 ```bash
+npm run build
 npm test
 npm run test:verify
 ```
+
+`npm test` 会跑 v0.4 契约套件和 `tests/v05-stability.test.ts`。端到端 MCP 用例会拉起 `dist/index.js`，所以要先 build。
 
 默认测试使用 `tests/fixtures/dotnet-mini`。若要可选跑本地真实解决方案：
 

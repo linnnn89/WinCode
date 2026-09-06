@@ -17,7 +17,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_hello_world',
-    description: 'Heartbeat plus layered adapter status. Reports whether Serena command exists, handshake succeeded, project is active, and semantic query is usable. available/fallback does not mean Serena is connected.',
+    description: 'Heartbeat plus layered adapter status and lightweight runtime health (uptime, cache bytes, managed child processes, Node memory, last adapter error). Reports whether Serena command exists, handshake succeeded, project is active, and semantic query is usable. available/fallback does not mean Serena is connected.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -148,7 +148,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_diagnose_project',
-    description: 'Diagnoses project health, Windows/.NET SDK readiness, solution files, and development prerequisites.',
+    description: 'Diagnoses project health, Windows/.NET SDK readiness, solution files, Serena/Repomix status, and a lightweight runtime snapshot (uptime, cache, child processes). dotnet --version is not semantic analysis.',
     inputSchema: {
       type: 'object',
       properties: {},

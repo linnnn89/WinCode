@@ -10,6 +10,7 @@ export interface RepomixPackOptions {
   exclude?: string[];
   maxFiles?: number;
   outputFormat?: 'markdown' | 'xml' | 'plain';
+  compress?: boolean;
 }
 
 export interface RepomixPackResult {
@@ -17,6 +18,7 @@ export interface RepomixPackResult {
   fileCount: number;
   totalCharacters: number;
   fromCache: boolean;
+  source: 'repomix-cli' | 'builtin-fallback';
 }
 
 export class RepomixAdapter implements IAdapter {
@@ -34,7 +36,7 @@ export class RepomixAdapter implements IAdapter {
 
   async initialize(): Promise<void> {
     const health = await this.checkHealth();
-    this.isCliAvailable = health.available;
+    this.isCliAvailable = health.available && health.source === 'installed';
   }
 
   async checkHealth(): Promise<AdapterHealth> {
@@ -53,7 +55,7 @@ export class RepomixAdapter implements IAdapter {
             available: true,
             version: stdout.trim(),
             source: 'installed',
-            details: 'Repomix CLI is available via npx',
+            details: `Repomix CLI is available (${stdout.trim()})`,
           });
         } else {
           resolve({
@@ -68,14 +70,17 @@ export class RepomixAdapter implements IAdapter {
         resolve({
           available: true,
           source: 'fallback',
-          details: 'Repomix execution failed; using WinCode built-in resilient context packer',
+          details: 'Repomix execution error; using WinCode built-in resilient context packer',
         });
       });
     });
   }
 
+  /**
+   * Packs workspace into a structured AI context snapshot
+   */
   async packWorkspace(options?: RepomixPackOptions): Promise<RepomixPackResult> {
-    const cacheKey = `repomix_pack_${JSON.stringify(options || {})}`;
+    const cacheKey = `repomix_pack_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<RepomixPackResult>(cacheKey, fingerprint);
@@ -83,14 +88,101 @@ export class RepomixAdapter implements IAdapter {
       return { ...cached, fromCache: true };
     }
 
-    // Always ensure robust fallback implementation if CLI is unavailable or fails
-    const result = await this.packWithFallback(options);
+    let result: RepomixPackResult;
+
+    if (this.isCliAvailable) {
+      try {
+        result = await this.packWithCli(options);
+      } catch (err) {
+        console.warn('[RepomixAdapter] CLI packing failed, falling back to built-in packer:', err);
+        result = await this.packWithFallback(options);
+      }
+    } else {
+      result = await this.packWithFallback(options);
+    }
+
     await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 10 });
     return result;
   }
 
   /**
-   * Resilient built-in context packer when Repomix CLI is not present or in lightweight mode
+   * Invokes official Repomix CLI to generate a repository snapshot
+   */
+  private async packWithCli(options?: RepomixPackOptions): Promise<RepomixPackResult> {
+    const root = this.config.workspaceRoot;
+    const style = options?.outputFormat || 'markdown';
+    const tempOutputDir = path.join(this.config.cacheDir, 'repomix_tmp');
+    await fs.mkdir(tempOutputDir, { recursive: true });
+
+    const ext = style === 'xml' ? 'xml' : 'md';
+    const tempOutputFile = path.join(tempOutputDir, `repomix_${Date.now()}.${ext}`);
+
+    const args = [
+      '/c',
+      'npx',
+      'repomix',
+      '--style',
+      style,
+      '-o',
+      tempOutputFile,
+      '-i',
+      'trash/**,**/.cache/**,**/bin/**,**/obj/**,package-lock.json,yarn.lock,pnpm-lock.yaml,cargo.lock',
+    ];
+
+    if (options?.compress) {
+      args.push('--compress');
+    }
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn('cmd', args, {
+        cwd: root,
+        windowsHide: true,
+      });
+
+      let stderr = '';
+      proc.stderr?.on('data', (d) => (stderr += d.toString()));
+
+      const timeout = setTimeout(() => {
+        proc.kill();
+        reject(new Error('Repomix CLI execution timed out after 30s'));
+      }, 30000);
+
+      proc.on('close', async (code) => {
+        clearTimeout(timeout);
+        try {
+          if (code === 0) {
+            const content = await fs.readFile(tempOutputFile, 'utf-8');
+            await fs.unlink(tempOutputFile).catch(() => {});
+
+            // Count files from content headers
+            const fileMatches = content.match(/File: |<file path=/g) || [];
+            const fileCount = fileMatches.length;
+
+            resolve({
+              content,
+              fileCount: fileCount || 1,
+              totalCharacters: content.length,
+              fromCache: false,
+              source: 'repomix-cli',
+            });
+          } else {
+            await fs.unlink(tempOutputFile).catch(() => {});
+            reject(new Error(`Repomix exited with code ${code}: ${stderr}`));
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+
+      proc.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+  }
+
+  /**
+   * Resilient built-in context packer when Repomix CLI is not present or fails
    */
   private async packWithFallback(options?: RepomixPackOptions): Promise<RepomixPackResult> {
     const root = this.config.workspaceRoot;
@@ -107,6 +199,7 @@ export class RepomixAdapter implements IAdapter {
       'trash',
       '.cache',
       '.deps',
+      '.packages',
       'package-lock.json',
       'yarn.lock',
       'pnpm-lock.yaml',
@@ -125,14 +218,12 @@ export class RepomixAdapter implements IAdapter {
           await walk(fullPath);
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name).toLowerCase();
-          // Filter common text/source extensions
           const codeExts = ['.ts', '.js', '.cs', '.py', '.json', '.md', '.xml', '.xaml', '.csproj', '.sln'];
           if (codeExts.includes(ext) || entry.name.toLowerCase() === 'dockerfile') {
             const relPath = path.relative(root, fullPath);
             try {
               const stat = await fs.stat(fullPath);
               if (stat.size < 250_000) {
-                // Max 250KB per file to avoid huge payloads
                 const content = await fs.readFile(fullPath, 'utf-8');
                 collectedFiles.push({ relPath, content });
               }
@@ -146,7 +237,6 @@ export class RepomixAdapter implements IAdapter {
 
     await walk(root);
 
-    // Format into AI-ready prompt format
     let output = `# Project Context Snapshot\n\n`;
     output += `Workspace Root: ${root}\n`;
     output += `Total Packed Files: ${collectedFiles.length}\n\n`;
@@ -163,6 +253,7 @@ export class RepomixAdapter implements IAdapter {
       fileCount: collectedFiles.length,
       totalCharacters: output.length,
       fromCache: false,
+      source: 'builtin-fallback',
     };
   }
 

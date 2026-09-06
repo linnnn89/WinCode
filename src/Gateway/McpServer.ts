@@ -107,22 +107,35 @@ export class WinCodeMcpServer {
           }
 
           case 'wincode_prepare_context': {
-            const task = String(args.task || '');
+            const task = String(args.task || 'Analyze workspace architecture and structure');
             const candidateFiles = Array.isArray(args.candidateFiles)
               ? (args.candidateFiles as string[])
               : undefined;
-            const context = await this.router.context.prepareContext(task, candidateFiles);
+            const focusAreas = Array.isArray(args.focusAreas)
+              ? (args.focusAreas as string[])
+              : undefined;
+            const compress = typeof args.compress === 'boolean' ? args.compress : undefined;
+            const outputFormat = args.outputFormat === 'xml' ? 'xml' : 'markdown';
+
+            const context = await this.router.context.prepareContext({
+              task,
+              candidateFiles,
+              focusAreas,
+              compress,
+              outputFormat,
+            });
+
             return {
               content: [
                 {
                   type: 'text',
                   text: JSON.stringify(
                     {
-                      summary: context.summary,
-                      targetFiles: context.targetFiles,
-                      keySymbols: context.keySymbols,
-                      estimatedTokens: context.estimatedTokens,
-                      contentSnippet: context.packedContent.slice(0, 2000) + (context.packedContent.length > 2000 ? '\n...[truncated in json preview]' : ''),
+                      task: context.task,
+                      project: context.project,
+                      metrics: context.metrics,
+                      guidance: context.guidance,
+                      executiveSummary: context.executiveSummary,
                     },
                     null,
                     2
@@ -130,7 +143,7 @@ export class WinCodeMcpServer {
                 },
                 {
                   type: 'text',
-                  text: context.packedContent,
+                  text: context.formattedContent,
                 },
               ],
             };

@@ -192,9 +192,10 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
   // ==========================================
   describe('4. Adapters: RepomixAdapter & ContextManager', () => {
     const cache = new CacheManager(testCacheDir);
+    const ws = new WorkspaceManager(config);
     const repomix = new RepomixAdapter(config, cache);
     const serena = new SerenaAdapter(config, cache);
-    const context = new ContextManager(config, repomix, serena);
+    const context = new ContextManager(config, ws, repomix, serena);
 
     it('should pack workspace without including ignored paths', async () => {
       const pack = await repomix.packWorkspace({ maxFiles: 20 });
@@ -216,11 +217,14 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       }
     });
 
-    it('should prepare high-semantic, token-efficient context for targeted task', async () => {
-      const prep = await context.prepareContext('Inspect cache mechanics and invalidation', ['src/Core/Cache.ts']);
-      assert.ok(prep.targetFiles.includes('src/Core/Cache.ts'));
-      assert.ok(prep.packedContent.includes('CacheManager'));
-      assert.ok(prep.estimatedTokens > 0);
+    it('Phase 3: should format architecture analysis context with Repomix snapshot and guidance', async () => {
+      const prep = await context.prepareContext({ task: '分析这个项目架构' });
+      assert.strictEqual(prep.task, '分析这个项目架构');
+      assert.ok(prep.project.name);
+      assert.ok(prep.metrics.packedFiles > 0);
+      assert.ok(prep.guidance.length > 0);
+      assert.ok(prep.executiveSummary.includes('Target Task'));
+      assert.ok(prep.formattedContent.includes('Repomix'));
     });
   });
 
@@ -413,15 +417,20 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(data.layers.length > 0);
     });
 
-    it('Tool 3: wincode_prepare_context works', async () => {
+    it('Tool 3: wincode_prepare_context works with architecture analysis task', async () => {
       const res = await callMcp('tools/call', {
         name: 'wincode_prepare_context',
-        arguments: { task: 'Analyze cache and workspace' },
+        arguments: { task: '分析这个项目架构' },
       });
-      assert.ok(res.result?.content?.length >= 1);
-      const summary = JSON.parse(res.result.content[0].text);
-      assert.ok(summary.summary);
-      assert.ok(summary.estimatedTokens > 0);
+      assert.ok(res.result?.content?.length >= 2);
+      const meta = JSON.parse(res.result.content[0].text);
+      assert.strictEqual(meta.task, '分析这个项目架构');
+      assert.ok(meta.metrics.packedFiles > 0);
+      assert.ok(meta.guidance.length > 0);
+
+      const text = res.result.content[1].text;
+      assert.ok(text.includes('AI Agent Context Snapshot'));
+      assert.ok(text.includes('分析这个项目架构'));
     });
 
     it('Tool 4: wincode_find_code_symbol works', async () => {

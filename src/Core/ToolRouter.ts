@@ -14,14 +14,14 @@ export class ToolRouter {
   readonly config: WinCodeConfig;
   readonly cache: CacheManager;
   readonly workspace: WorkspaceManager;
-  readonly context: ContextManager;
-  readonly repomix: RepomixAdapter;
-  readonly serena: SerenaAdapter;
-  readonly architecture: ArchitectureAnalyzer;
-  readonly impact: ImpactAnalyzer;
-  readonly refactor: RefactorAssistant;
-  readonly diagnostics: ProjectDiagnostics;
-  readonly extensions: ExtensionManager;
+  context: ContextManager;
+  repomix: RepomixAdapter;
+  serena: SerenaAdapter;
+  architecture: ArchitectureAnalyzer;
+  impact: ImpactAnalyzer;
+  refactor: RefactorAssistant;
+  diagnostics: ProjectDiagnostics;
+  extensions: ExtensionManager;
 
   constructor(config: WinCodeConfig) {
     this.config = config;
@@ -29,7 +29,7 @@ export class ToolRouter {
     this.workspace = new WorkspaceManager(config);
     this.repomix = new RepomixAdapter(config, this.cache);
     this.serena = new SerenaAdapter(config, this.cache);
-    this.context = new ContextManager(config, this.repomix, this.serena);
+    this.context = new ContextManager(config, this.workspace, this.repomix, this.serena);
     this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
     this.impact = new ImpactAnalyzer(this.serena);
     this.refactor = new RefactorAssistant(this.workspace, this.serena, this.impact);
@@ -53,6 +53,11 @@ export class ToolRouter {
     await this.cache.initialize();
     await this.repomix.initialize();
     await this.serena.initialize();
+    this.context = new ContextManager(this.config, this.workspace, this.repomix, this.serena);
+    this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
+    this.impact = new ImpactAnalyzer(this.serena);
+    this.refactor = new RefactorAssistant(this.workspace, this.serena, this.impact);
+    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config);
     return result;
   }
 

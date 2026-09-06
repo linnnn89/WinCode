@@ -43,18 +43,32 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_prepare_context',
-    description: 'Prepares concise, high-semantic, decision-ready context for an agent task. Extracts relevant symbols and packs only essential files to minimize tokens.',
+    description: 'Prepares concise, high-semantic, decision-ready context snapshot for an agent task using Repomix and semantic distillation. Extracts relevant symbols, architectures, and packs essential files.',
     inputSchema: {
       type: 'object',
       properties: {
         task: {
           type: 'string',
-          description: 'Description of the coding task or query the agent is working on.',
+          description: 'Description of the coding task or query the agent is working on (e.g. "分析这个项目架构").',
         },
         candidateFiles: {
           type: 'array',
           items: { type: 'string' },
           description: 'Optional list of candidate file paths to prioritize.',
+        },
+        focusAreas: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional subdirectories or glob patterns to focus on (e.g. ["src/Core"]).',
+        },
+        compress: {
+          type: 'boolean',
+          description: 'Whether to extract essential code structures (classes, methods, interfaces) using Tree-sitter compression.',
+        },
+        outputFormat: {
+          type: 'string',
+          enum: ['markdown', 'xml'],
+          description: 'Output format of packed snapshot (default: markdown).',
         },
       },
       required: ['task'],

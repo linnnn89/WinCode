@@ -41,8 +41,9 @@ export class CacheManager {
   private memoryBytes = 0;
   private namespace = '';
   private writeChain: Promise<void> = Promise.resolve();
-  private fpMemo = new Map<string, { value: string; expiresAt: number }>();
+  private fpMemo = new Map<string, { value: string; expiresAt: number; cheap: string }>();
   private fpInflight = new Map<string, Promise<string>>();
+  private watchGeneration = new Map<string, number>();
 
   constructor(
     cacheDir: string,
@@ -76,6 +77,10 @@ export class CacheManager {
     return this.cacheDir;
   }
 
+  get maxEntryByteLimit(): number {
+    return this.maxEntryBytes;
+  }
+
   /**
    * Isolates keys by workspace so project A symbols cannot be read as project B.
    * Clears the in-memory map so large snapshots from the previous workspace
@@ -88,6 +93,7 @@ export class CacheManager {
     this.memoryBytes = 0;
     this.fpMemo.clear();
     this.fpInflight.clear();
+    this.watchGeneration.clear();
   }
 
   async initialize(): Promise<void> {
@@ -108,6 +114,7 @@ export class CacheManager {
     this.memoryBytes = 0;
     this.fpMemo.clear();
     this.fpInflight.clear();
+    this.watchGeneration.clear();
     this.cacheDir = newCacheDir;
     await this.initialize();
   }
@@ -360,18 +367,21 @@ export class CacheManager {
 
   /**
    * Workspace fingerprint with a few-second memo and single-flight.
-   * Pass { fresh: true } after a known write (tests, trash move) to bypass memo.
+   * Memo is skipped when the cheap probe (git HEAD/index mtime, watch
+   * generation) changed — so uncommitted writes are not stuck for 2.5s.
+   * Pass { fresh: true } after a known write to bypass memo entirely.
    */
   async computeWorkspaceFingerprint(
     workspaceRoot: string,
     options?: { fresh?: boolean }
   ): Promise<string> {
     const resolvedRoot = path.resolve(workspaceRoot);
+    const cheap = await this.cheapChangeProbe(resolvedRoot);
     if (options?.fresh) {
       this.invalidateFingerprint(resolvedRoot);
     } else {
       const memo = this.fpMemo.get(resolvedRoot);
-      if (memo && memo.expiresAt > Date.now()) {
+      if (memo && memo.expiresAt > Date.now() && memo.cheap === cheap) {
         return memo.value;
       }
       const inflight = this.fpInflight.get(resolvedRoot);
@@ -383,6 +393,7 @@ export class CacheManager {
         this.fpMemo.set(resolvedRoot, {
           value,
           expiresAt: Date.now() + this.fingerprintMemoMs,
+          cheap,
         });
         this.fpInflight.delete(resolvedRoot);
         return value;
@@ -396,6 +407,15 @@ export class CacheManager {
     return pending;
   }
 
+  /**
+   * Called from WorkspaceWatch. Drops memo so the next MCP call rescans.
+   */
+  noteFilesystemChange(workspaceRoot: string): void {
+    const resolved = path.resolve(workspaceRoot);
+    this.watchGeneration.set(resolved, (this.watchGeneration.get(resolved) ?? 0) + 1);
+    this.invalidateFingerprint(resolved);
+  }
+
   invalidateFingerprint(workspaceRoot?: string): void {
     if (!workspaceRoot) {
       this.fpMemo.clear();
@@ -405,6 +425,25 @@ export class CacheManager {
     const resolved = path.resolve(workspaceRoot);
     this.fpMemo.delete(resolved);
     this.fpInflight.delete(resolved);
+  }
+
+  private async cheapChangeProbe(resolvedRoot: string): Promise<string> {
+    const gen = this.watchGeneration.get(resolvedRoot) ?? 0;
+    const candidates = [
+      path.join(resolvedRoot, '.git', 'HEAD'),
+      path.join(resolvedRoot, '.git', 'index'),
+      path.join(resolvedRoot, 'package.json'),
+    ];
+    const parts = [`watch:${gen}`];
+    for (const file of candidates) {
+      try {
+        const s = await fs.stat(file);
+        parts.push(`${path.basename(file)}:${s.mtimeMs}:${s.size}`);
+      } catch {
+        parts.push(`${path.basename(file)}:missing`);
+      }
+    }
+    return parts.join('|');
   }
 
   private async computeWorkspaceFingerprintUncached(resolvedRoot: string): Promise<string> {
@@ -530,6 +569,7 @@ export class CacheManager {
     this.memoryBytes = 0;
     this.fpMemo.clear();
     this.fpInflight.clear();
+    this.watchGeneration.clear();
     try {
       const files = await fs.readdir(this.cacheDir);
       for (const file of files) {

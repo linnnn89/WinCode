@@ -2,14 +2,30 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { CacheManager } from '../src/Core/Cache.js';
 import { WorkspaceManager } from '../src/Core/Workspace.js';
 import { getDefaultConfig, WINCODE_VERSION } from '../src/Core/Config.js';
 import { SerenaAdapter } from '../src/Adapters/SerenaAdapter.js';
+import { RepomixAdapter } from '../src/Adapters/RepomixAdapter.js';
 import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
-import { Mutex, ResourceManager, TimeoutError, withTimeout } from '../src/Core/ResourceManager.js';
+import { Mutex, ResourceManager, TimeoutError, withTimeout, killProcessTree } from '../src/Core/ResourceManager.js';
 import { SessionManager } from '../src/Core/SessionManager.js';
+import { WorkspaceWatch } from '../src/Core/WorkspaceWatch.js';
+
+const execAsync = promisify(exec);
+
+async function pidAlive(pid: number): Promise<boolean> {
+  try {
+    const { stdout } = await execAsync(`tasklist /FI "PID eq ${pid}" /NH`, { windowsHide: true });
+    return stdout.includes(String(pid));
+  } catch {
+    return false;
+  }
+}
 
 describe('WinCode v0.5 stability', () => {
   const root = process.cwd();
@@ -324,6 +340,115 @@ describe('WinCode v0.5 stability', () => {
       assert.strictEqual(unused.riskLevel, 'UNKNOWN');
       assert.strictEqual(unused.confidence, 'UNCERTAIN');
       await router.dispose();
+    });
+  });
+
+  describe('v0.5.1 risk fixes', () => {
+    it('Windows process-tree kill reaps the cmd wrapper pid', { skip: process.platform !== 'win32' }, async () => {
+      const proc = spawn('cmd', ['/c', 'ping', '-t', '127.0.0.1'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      assert.ok(proc.pid);
+      await new Promise((r) => setTimeout(r, 250));
+      assert.strictEqual(await pidAlive(proc.pid!), true);
+      await killProcessTree(proc);
+      await new Promise((r) => setTimeout(r, 400));
+      assert.strictEqual(await pidAlive(proc.pid!), false);
+    });
+
+    it('WorkspaceWatch notifies after a file write in an empty directory', async () => {
+      const dir = path.join(testCacheDir, 'watch_unit');
+      await fs.mkdir(dir, { recursive: true });
+      const watch = new WorkspaceWatch();
+      let fired = 0;
+      watch.start(dir, () => {
+        fired++;
+      }, 40);
+      await fs.writeFile(path.join(dir, 'a.txt'), '1');
+      await new Promise((r) => setTimeout(r, 350));
+      watch.stop();
+      assert.ok(fired >= 1, `expected watch callback, fired=${fired}`);
+    });
+
+    it('filesystem watch invalidates fingerprint memo after a write', async () => {
+      const config = getDefaultConfig(root);
+      config.cacheDir = path.join(testCacheDir, 'watch');
+      const router = new ToolRouter(config);
+      await router.initialize();
+      const before = await router.cache.computeWorkspaceFingerprint(root);
+      const probe = path.join(root, 'v051_watch_probe.txt');
+      await fs.writeFile(probe, `watch-${Date.now()}`);
+      try {
+        await new Promise((r) => setTimeout(r, 500));
+        const after = await router.cache.computeWorkspaceFingerprint(root);
+        assert.notStrictEqual(after, before, 'watch or cheap probe must drop memo after a working-tree write');
+      } finally {
+        await fs.unlink(probe).catch(() => {});
+        await router.dispose();
+      }
+    });
+
+    it('same-path workspace_open with a dirty tree marks Serena project stale', async () => {
+      const config = getDefaultConfig(root);
+      config.cacheDir = path.join(testCacheDir, 'same_path');
+      const router = new ToolRouter(config);
+      await router.initialize();
+      (router.serena as any).projectActive = true;
+      const probe = path.join(root, 'v051_same_path_probe.txt');
+      await fs.writeFile(probe, `dirty-${Date.now()}`);
+      try {
+        await router.openWorkspace(root);
+        assert.strictEqual(router.serena.getUpstreamStatus().projectActive, null);
+      } finally {
+        await fs.unlink(probe).catch(() => {});
+        await router.dispose();
+      }
+    });
+
+    it('oversized pack results spill to disk instead of staying in the heap cache', async () => {
+      const cache = new CacheManager(path.join(testCacheDir, 'spill'), 20, 20, {
+        maxEntryBytes: 800,
+      });
+      const config = getDefaultConfig(root);
+      config.cacheDir = path.join(testCacheDir, 'spill');
+      const adapter = new RepomixAdapter(config, cache);
+      const bigRel = path.relative(root, path.join(testCacheDir, 'spill_src.txt')).replace(/\\/g, '/');
+      await fs.writeFile(path.join(testCacheDir, 'spill_src.txt'), 'Q'.repeat(20_000));
+      const packed = await adapter.packWorkspace({ candidateFiles: [bigRel], maxFiles: 1 });
+      assert.strictEqual(packed.contentOmitted, true);
+      assert.ok(packed.overflowPath);
+      const spilled = await fs.readFile(packed.overflowPath!, 'utf-8');
+      assert.ok(spilled.length >= 20_000);
+      assert.ok(packed.content.includes('omitted from heap'));
+      assert.ok(cache.estimatedMemoryBytes < 20_000 * 2);
+    });
+
+    it('mock Serena stdio handshake is source=serena-mcp, not command-found', async () => {
+      const config = getDefaultConfig(root);
+      config.cacheDir = path.join(testCacheDir, 'mock_serena');
+      config.adapters.serena.customCommand = process.execPath;
+      config.adapters.serena.customArgs = [path.resolve(root, 'tests/fixtures/mock-serena-mcp.mjs')];
+      config.timeouts.serenaConnectMs = 8_000;
+      config.timeouts.serenaCallMs = 5_000;
+      const adapter = new SerenaAdapter(config, new CacheManager(config.cacheDir));
+      await adapter.initialize();
+      try {
+        const connected = await adapter.ensureConnected();
+        assert.strictEqual(connected, true);
+        const status = adapter.getUpstreamStatus();
+        assert.strictEqual(status.commandFound, true);
+        assert.strictEqual(status.handshakeOk, true);
+        const symbols = await adapter.findSymbolsDetailed('MockService');
+        assert.strictEqual(symbols.source, 'serena-mcp');
+        assert.strictEqual(symbols.queryComplete, true);
+        assert.ok(symbols.symbols.some((s) => s.name === 'MockService'));
+        assert.strictEqual(adapter.getUpstreamStatus().projectActive, true);
+        assert.strictEqual(adapter.getUpstreamStatus().semanticQueryUsable, true);
+        assert.strictEqual(adapter.getUpstreamStatus().mode, 'connected');
+      } finally {
+        await adapter.dispose();
+      }
     });
   });
 });

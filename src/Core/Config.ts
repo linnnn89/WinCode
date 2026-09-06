@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const WINCODE_VERSION = '0.5.0';
+export const WINCODE_VERSION = '0.5.1';
 
 /**
  * Bounded waits for every external process/RPC. None of these may be Infinity.
@@ -46,6 +46,8 @@ export interface WinCodeConfig {
       enabled: boolean;
       customEndpoint?: string;
       customCommand?: string;
+      /** Extra argv when customCommand is an executable (e.g. node + mock script). */
+      customArgs?: string[];
     };
   };
   windows: {

@@ -78,6 +78,13 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 - [x] Timeouts on git, dotnet, Serena connect/RPC, Repomix CLI, and file scans.
 - [x] Lightweight runtime health on `wincode_hello_world` (and a `runtime` block on diagnose): uptime, cache bytes, child process count, Node memory, last adapter error.
 
+#### v0.5.1 (Delivered)
+- [x] Windows process-tree kill: `taskkill /T` before signaling the wrapper; Serena spawn avoids extra `cmd /c` when a `.exe` is resolved.
+- [x] Fingerprint memo invalidated by cheap git/index probe + debounced `fs.watch` (not only TTL).
+- [x] Same-path `workspace_open` clears cache and marks Serena project stale when the fingerprint changed.
+- [x] Oversized Repomix/context snapshots spill to disk; heap keeps a preview.
+- [x] Mock Serena stdio fixture for handshake tests without a live Serena install.
+
 #### Later (not in v0.5)
 - [ ] FlaUI / Snoop / PerfView.
 - [ ] Extra Roslyn host (only after measuring Serena gaps on real C# repos).
@@ -115,6 +122,7 @@ WinCode/
 │   │   ├── Config.ts                 # Workspace, timeouts, cache byte limits
 │   │   ├── ResourceManager.ts        # Child processes / timers / idempotent dispose
 │   │   ├── SessionManager.ts         # Active workspace session + cache namespace
+│   │   ├── WorkspaceWatch.ts         # Debounced fs.watch to drop fingerprint memo
 │   │   ├── Workspace.ts              # Project detection & safe trash policy
 │   │   ├── Cache.ts                  # Byte-capped memory/disk cache + fingerprint memo
 │   │   ├── DotNetGraph.ts            # sln/csproj ProjectReference graph
@@ -250,6 +258,13 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 - [x] git、dotnet、Serena 连接/RPC、Repomix CLI、文件扫描均有超时。
 - [x] `wincode_hello_world` 带轻量 runtime health（diagnose 带 `runtime` 块）：uptime、缓存字节、子进程数、Node 内存、最近适配器错误。
 
+#### v0.5.1（已交付）
+- [x] Windows 进程树：先 `taskkill /T` 再信号 wrapper；能解析到 `.exe` 时 Serena 不再套一层 `cmd /c`。
+- [x] 指纹 memo 被 cheap git/index probe + 去抖 `fs.watch` 失效，不只靠 TTL。
+- [x] 同一路径 `workspace_open` 在 fingerprint 变化时清缓存并标记 Serena project stale。
+- [x] 超大 snapshot 落盘，堆上只留预览。
+- [x] mock Serena stdio 夹具，无需安装 Serena 也能测 handshake。
+
 #### 之后（不在 v0.5）
 - [ ] FlaUI / Snoop / PerfView。
 - [ ] 额外 Roslyn 宿主（须先在真实 C# 仓库上量 Serena 缺口）。
@@ -287,6 +302,7 @@ WinCode/
 │   │   ├── Config.ts                 # 工作区、超时、缓存字节上限
 │   │   ├── ResourceManager.ts        # 子进程 / 定时器 / 可重复 dispose
 │   │   ├── SessionManager.ts         # 当前工作区会话与 cache namespace
+│   │   ├── WorkspaceWatch.ts         # 去抖 fs.watch，用于丢掉过期指纹 memo
 │   │   ├── Workspace.ts              # 工作区检测与安全 trash
 │   │   ├── Cache.ts                  # 按字节封顶的内存/磁盘缓存 + 指纹 memo
 │   │   ├── DotNetGraph.ts            # sln/csproj ProjectReference 图

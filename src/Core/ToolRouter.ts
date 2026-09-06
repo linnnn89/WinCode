@@ -12,6 +12,7 @@ import { ProjectDiagnostics } from '../CompositeTools/ProjectDiagnostics.js';
 import { ExtensionManager } from '../Extensions/ExtensionManager.js';
 import { Mutex, ResourceManager } from './ResourceManager.js';
 import { SessionManager, WorkspaceSession } from './SessionManager.js';
+import { WorkspaceWatch } from './WorkspaceWatch.js';
 import { AdapterLastError } from '../Adapters/IAdapter.js';
 
 export interface RuntimeHealth {
@@ -63,6 +64,8 @@ export class ToolRouter {
   private disposePromise: Promise<void> | null = null;
   private readonly workspaceLock = new Mutex();
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly watch = new WorkspaceWatch();
+  private watchRegistered = false;
 
   constructor(config: WinCodeConfig) {
     this.config = config;
@@ -109,6 +112,9 @@ export class ToolRouter {
     await this.repomix.initialize();
     await this.serena.initialize();
     await this.extensions.initializeAll();
+    const fp = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
+    this.session.setFingerprint(fp);
+    this.bindWatch(this.config.workspaceRoot);
 
     if (!this.pruneTimer) {
       this.pruneTimer = setInterval(() => {
@@ -116,6 +122,16 @@ export class ToolRouter {
       }, 60_000);
       this.pruneTimer.unref();
       this.resources.registerTimer('cache', this.pruneTimer, 'interval');
+    }
+  }
+
+  private bindWatch(workspaceRoot: string): void {
+    this.watch.start(workspaceRoot, () => {
+      this.cache.noteFilesystemChange(workspaceRoot);
+    });
+    if (!this.watchRegistered) {
+      this.resources.register('disposable', 'workspace-watch', () => this.watch.stop());
+      this.watchRegistered = true;
     }
   }
 
@@ -135,8 +151,17 @@ export class ToolRouter {
         Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
 
       const result = await this.workspace.openWorkspace(targetPath);
+      const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
+
       if (sameWorkspace) {
+        const previousFp = this.session.current?.fingerprint ?? null;
         this.session.touch();
+        this.session.setFingerprint(fp);
+        if (previousFp && previousFp !== fp) {
+          this.cache.invalidateFingerprint(resolved);
+          this.cache.setNamespace(this.config.workspaceRoot);
+          this.serena.markProjectStale();
+        }
         return result;
       }
 
@@ -146,6 +171,8 @@ export class ToolRouter {
       this.cache.invalidateFingerprint(previousRoot);
       this.cache.setNamespace(this.config.workspaceRoot);
       this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
+      this.session.setFingerprint(fp);
+      this.bindWatch(this.config.workspaceRoot);
 
       await this.repomix.dispose();
       await this.serena.resetConnection();

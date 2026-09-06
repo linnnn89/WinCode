@@ -104,34 +104,61 @@ export class Mutex {
   }
 }
 
-/**
- * Kill a child and, on Windows, its process tree. npx/cmd spawn grandchildren
- * that SIGTERM on the parent does not reach (MCP python-sdk #850 class of bug).
- */
-export async function killProcessTree(proc: ChildProcess | { pid?: number | null; kill?: (sig?: NodeJS.Signals) => boolean }): Promise<void> {
-  const pid = proc.pid;
-  try {
-    proc.kill?.('SIGTERM');
-  } catch {
-    // already exited
-  }
+function taskkillTree(pid: number): Promise<void> {
+  return new Promise((resolve) => {
+    exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true }, () => resolve());
+  });
+}
 
-  if (pid && process.platform === 'win32') {
-    await new Promise<void>((resolve) => {
-      exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true }, () => resolve());
-    });
+/**
+ * Kill a child and its descendants.
+ * On Windows, `taskkill /T` MUST run while the parent is still alive.
+ * Signaling the wrapper first (cmd.exe / npx) orphans grandchildren
+ * (Codex #34614, MCP typescript-sdk #2023, python-sdk #850).
+ */
+export async function killProcessTree(
+  proc: ChildProcess | { pid?: number | null; kill?: (sig?: NodeJS.Signals) => boolean }
+): Promise<void> {
+  const pid = proc.pid;
+  if (!pid) {
+    try {
+      proc.kill?.('SIGTERM');
+    } catch {
+      // already exited
+    }
     return;
   }
 
-  if (pid) {
+  if (process.platform === 'win32') {
+    await taskkillTree(pid);
     try {
-      process.kill(-pid, 'SIGKILL');
+      proc.kill?.('SIGKILL');
     } catch {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // ignore
-      }
+      // already reaped by taskkill
+    }
+    return;
+  }
+
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    try {
+      proc.kill?.('SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 40);
+    timer.unref?.();
+  });
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      proc.kill?.('SIGKILL');
+    } catch {
+      // ignore
     }
   }
 }

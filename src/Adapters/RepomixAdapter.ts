@@ -21,6 +21,9 @@ export interface RepomixPackResult {
   totalCharacters: number;
   fromCache: boolean;
   source: 'repomix-cli' | 'builtin-fallback';
+  /** Set when the full snapshot was spilled to disk instead of kept in the heap. */
+  overflowPath?: string;
+  contentOmitted?: boolean;
 }
 
 export class RepomixAdapter implements IAdapter {
@@ -168,8 +171,9 @@ export class RepomixAdapter implements IAdapter {
     }
 
     const pending = this.packWorkspaceUncached(options).then(async (result) => {
-      await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 10 });
-      return result;
+      const spilled = await this.spillIfOversized(result);
+      await this.cache.set(cacheKey, spilled, { fingerprint, ttlMs: 1000 * 60 * 10 });
+      return spilled;
     });
     this.inflightPacks.set(inflightKey, pending);
     try {
@@ -401,6 +405,30 @@ export class RepomixAdapter implements IAdapter {
     await walk(root);
 
     return this.formatPackedResult(collectedFiles, root, options?.outputFormat);
+  }
+
+  /**
+   * Oversized snapshots go to disk; the in-memory result keeps a preview only.
+   * Matches the v0.5 rule: do not retain hundred-MB strings in the Node heap.
+   */
+  private async spillIfOversized(result: RepomixPackResult): Promise<RepomixPackResult> {
+    const limit = this.cache.maxEntryByteLimit;
+    const bytes = this.cache.estimateBytes(result.content);
+    if (bytes <= limit) return result;
+
+    const overflowDir = path.join(this.config.cacheDir, 'overflow');
+    await fs.mkdir(overflowDir, { recursive: true });
+    const overflowPath = path.join(overflowDir, `pack_${Date.now()}.txt`);
+    await fs.writeFile(overflowPath, result.content, 'utf-8');
+    const previewChars = Math.min(result.content.length, 2_000);
+    return {
+      ...result,
+      content:
+        result.content.slice(0, previewChars) +
+        `\n\n[content omitted from heap; ${result.totalCharacters} chars written to ${overflowPath}]`,
+      overflowPath,
+      contentOmitted: true,
+    };
   }
 
   /**

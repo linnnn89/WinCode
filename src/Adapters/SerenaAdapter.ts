@@ -109,6 +109,7 @@ export class SerenaAdapter implements IAdapter {
   private disposing = false;
   private serenaPid: number | null = null;
   private processResourceId: string | null = null;
+  private resolvedCommand: string | null = null;
   lastError: AdapterLastError | null = null;
 
   constructor(config: WinCodeConfig, cache: CacheManager, resources?: ResourceManager) {
@@ -144,10 +145,39 @@ export class SerenaAdapter implements IAdapter {
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: this.timeouts.commandProbeMs,
       }).toString();
-      return Boolean(stdout.trim());
+      const first = stdout
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0);
+      this.resolvedCommand = first || null;
+      return Boolean(first);
     } catch {
+      this.resolvedCommand = null;
       return false;
     }
+  }
+
+  /**
+   * Prefer a real .exe so we do not wrap with cmd.exe (orphans grandchildren).
+   * .cmd launchers still need cmd /c because the MCP SDK spawns with shell:false.
+   */
+  private resolveSpawnTarget(): { command: string; args: string[] } {
+    if (this.config.adapters.serena.customCommand) {
+      return {
+        command: this.config.adapters.serena.customCommand,
+        args: this.config.adapters.serena.customArgs ?? [],
+      };
+    }
+    const resolved = this.resolvedCommand || 'serena';
+    if (process.platform === 'win32' && /\.cmd$/i.test(resolved)) {
+      return { command: 'cmd', args: ['/c', resolved] };
+    }
+    return { command: resolved, args: [] };
+  }
+
+  /** Files changed under the current connection; next semantic query must re-probe project. */
+  markProjectStale(): void {
+    this.projectActive = null;
   }
 
   private recordError(reason: AdapterLastError['reason'], err: unknown, recoverable = true): void {
@@ -244,11 +274,12 @@ export class SerenaAdapter implements IAdapter {
     let client: Client | null = null;
 
     try {
-      const cmd = this.config.adapters.serena.customCommand || 'serena';
+      const spawnTarget = this.resolveSpawnTarget();
       transport = new StdioClientTransport({
-        command: process.platform === 'win32' ? 'cmd' : cmd,
-        args: process.platform === 'win32' ? ['/c', cmd] : [],
+        command: spawnTarget.command,
+        args: spawnTarget.args,
         stderr: 'pipe',
+        cwd: this.config.workspaceRoot,
       });
 
       client = new Client(
@@ -975,16 +1006,25 @@ export class SerenaAdapter implements IAdapter {
    * next call can reconnect.
    */
   async resetConnection(): Promise<void> {
-    if (this.disposing && !this.serenaClient && !this.serenaTransport) {
+    if (this.disposing && !this.serenaClient && !this.serenaTransport && !this.serenaPid) {
       return;
     }
     this.disposing = true;
     const client = this.serenaClient;
     const transport = this.serenaTransport;
+    const pid = this.serenaPid;
     this.clearConnectionFields();
+    this.serenaPid = null;
+    if (this.processResourceId && this.resources) {
+      this.resources.unregister(this.processResourceId);
+      this.processResourceId = null;
+    }
     try {
+      // Kill the process tree first, while cmd.exe still parents grandchildren.
+      if (pid) {
+        await killProcessTree({ pid });
+      }
       await this.closeClientAndTransport(client, transport);
-      await this.killSerenaProcess();
     } finally {
       this.disposing = false;
     }
@@ -1018,7 +1058,7 @@ export class SerenaAdapter implements IAdapter {
       this.processResourceId = null;
     }
     if (!pid) return;
-    await killProcessTree({ pid, kill: (sig?: NodeJS.Signals) => process.kill(pid, sig) });
+    await killProcessTree({ pid });
   }
 
   private clearConnectionFields(): void {

@@ -8,7 +8,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "node --test dist/**/*.test.js"
+    "test": "tsx --test tests/tdd-suite.test.ts",
+    "test:verify": "tsx tests/verify.ts",
+    "test:e2e": "tsx scripts/test-mcp-client.ts"
   },
   "keywords": [
     "mcp",

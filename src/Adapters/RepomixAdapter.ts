@@ -107,6 +107,10 @@ export class RepomixAdapter implements IAdapter {
       'trash',
       '.cache',
       '.deps',
+      'package-lock.json',
+      'yarn.lock',
+      'pnpm-lock.yaml',
+      'cargo.lock',
     ]);
 
     const walk = async (dir: string): Promise<void> => {

@@ -152,12 +152,12 @@ export class WinCodeMcpServer {
           case 'wincode_find_code_symbol': {
             const query = String(args.query || '');
             const kind = args.kind ? String(args.kind) : undefined;
-            const symbols = await this.router.serena.findSymbols(query, kind);
+            const result = await this.router.serena.findSymbolsDetailed(query, kind);
             return {
               content: [
                 {
                   type: 'text',
-                  text: JSON.stringify(symbols, null, 2),
+                  text: JSON.stringify(result, null, 2),
                 },
               ],
             };
@@ -165,12 +165,12 @@ export class WinCodeMcpServer {
 
           case 'wincode_find_references': {
             const symbolName = String(args.symbolName || '');
-            const refs = await this.router.serena.findReferences(symbolName);
+            const result = await this.router.serena.findReferencesDetailed(symbolName);
             return {
               content: [
                 {
                   type: 'text',
-                  text: JSON.stringify(refs, null, 2),
+                  text: JSON.stringify(result, null, 2),
                 },
               ],
             };

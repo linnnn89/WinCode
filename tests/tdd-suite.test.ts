@@ -185,6 +185,19 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       const missingRefs = await serena.findReferences(dynamicName);
       assert.deepStrictEqual(missingRefs, []);
     });
+
+    it('Phase 4: SerenaAdapter should index and resolve C# classes and methods in .NET projects', async () => {
+      const tavernConfig = getDefaultConfig('d:/CODEX PROJECT/New-tavern');
+      tavernConfig.cacheDir = testCacheDir;
+      const tavernSerena = new SerenaAdapter(tavernConfig, cache);
+      const symResult = await tavernSerena.findSymbolsDetailed('MainWindow');
+      assert.ok(symResult.symbols.length > 0);
+      assert.ok(symResult.symbols.some((s) => s.name === 'MainWindow' && s.kind === 'class'));
+
+      const refResult = await tavernSerena.findReferencesDetailed('MainWindow');
+      assert.ok(refResult.totalReferences > 0);
+      assert.ok(refResult.references.some((r) => r.file.includes('App.xaml.cs')));
+    });
   });
 
   // ==========================================
@@ -438,9 +451,10 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
         name: 'wincode_find_code_symbol',
         arguments: { query: 'ToolRouter' },
       });
-      const symbols = JSON.parse(res.result?.content?.[0]?.text);
-      assert.ok(symbols.length > 0);
-      assert.strictEqual(symbols[0].name, 'ToolRouter');
+      const data = JSON.parse(res.result?.content?.[0]?.text);
+      assert.ok(data.totalFound > 0);
+      assert.ok(data.symbols.length > 0);
+      assert.strictEqual(data.symbols[0].name, 'ToolRouter');
     });
 
     it('Tool 5: wincode_find_references works', async () => {
@@ -448,8 +462,9 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
         name: 'wincode_find_references',
         arguments: { symbolName: 'ToolRouter' },
       });
-      const refs = JSON.parse(res.result?.content?.[0]?.text);
-      assert.ok(refs.length > 0);
+      const data = JSON.parse(res.result?.content?.[0]?.text);
+      assert.ok(data.totalReferences > 0);
+      assert.ok(data.references.length > 0);
     });
 
     it('Tool 6: wincode_analyze_change_impact works', async () => {

@@ -52,6 +52,8 @@ Coding Agent (Codex / Claude Code / etc.)
 
 | Tool | Description | Value to Agent |
 | :--- | :--- | :--- |
+| `workspace_open` | Opens and analyzes a project directory (.NET sln, Node, Python, Git status, metadata, file tree). | Flagship entry point to open & switch target codebases. |
+| `wincode_hello_world` | Minimal heartbeat & connectivity test tool. | Instant verification of MCP server health. |
 | `wincode_analyze_workspace` | Analyzes project structure, .NET solutions, and architectural layers. | High-level overview without token flooding. |
 | `wincode_prepare_context` | Generates goal-oriented, distilled code context for specific tasks. | Minimizes token usage, focuses agent attention. |
 | `wincode_find_code_symbol` | Locates symbols (classes, interfaces, methods) with signatures. | Fast and precise symbol navigation. |
@@ -169,6 +171,8 @@ Coding Agent (Codex / Claude Code / 等)
 
 | 工具名称 | 功能描述 | 核心价值 |
 | :--- | :--- | :--- |
+| `workspace_open` | 打开并全面分析指定工程（识别 .NET sln、Node、Python、Git 状态、文件树与元数据） | 一号核心工具：动态切换与精准识别目标代码库。 |
+| `wincode_hello_world` | 极简心跳与连通性验证工具 | 即刻验证 MCP 服务端运行状态与可用能力。 |
 | `wincode_analyze_workspace` | 工作区与架构分层识别 | 快速提取项目结构、.NET 方案分层与核心入口点。 |
 | `wincode_prepare_context` | 针对特定任务精炼语义上下文 | 提炼目标符号与强相关代码，极大降低 Token 消耗。 |
 | `wincode_find_code_symbol` | 全局代码符号（Symbol）检索 | 精确索引类、接口、方法签名及对应代码行。 |

@@ -131,6 +131,21 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.strictEqual(result.success, false);
       assert.ok(result.message.includes('Failed to move file to trash'));
     });
+
+    it('Phase 2: openWorkspace accurately parses .NET solutions, projects, git, metadata and tree', async () => {
+      const tavernPath = path.resolve('d:/CODEX PROJECT/New-tavern');
+      const result = await ws.openWorkspace(tavernPath);
+      assert.strictEqual(result.type, 'dotnet');
+      assert.strictEqual(result.solution, 'TavernDesk.sln');
+      assert.strictEqual(result.language, 'C#');
+      assert.strictEqual(result.projects, 4);
+      assert.strictEqual(result.git.isGit, true);
+      assert.ok(result.metadata.totalFiles > 0);
+      assert.ok(result.fileTree.children && result.fileTree.children.length > 0);
+
+      // Restore root to current workspace
+      ws.setRoot(root);
+    });
   });
 
   // ==========================================
@@ -339,11 +354,12 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       });
     };
 
-    it('MCP tools/list should list all 9 high-level tools', async () => {
+    it('MCP tools/list should list all 10 high-level tools', async () => {
       const res = await callMcp('tools/list', {});
       const tools = res.result?.tools || [];
-      assert.strictEqual(tools.length, 9, 'Must expose exactly 9 registered high-level tools');
+      assert.strictEqual(tools.length, 10, 'Must expose exactly 10 registered high-level tools');
       const toolNames = tools.map((t: any) => t.name);
+      assert.ok(toolNames.includes('workspace_open'));
       assert.ok(toolNames.includes('wincode_hello_world'));
       assert.ok(toolNames.includes('wincode_analyze_workspace'));
       assert.ok(toolNames.includes('wincode_prepare_context'));
@@ -353,6 +369,27 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(toolNames.includes('wincode_diagnose_project'));
       assert.ok(toolNames.includes('wincode_plan_refactoring'));
       assert.ok(toolNames.includes('wincode_safe_move_to_trash'));
+    });
+
+    it('Tool 0: workspace_open works end-to-end via MCP', async () => {
+      const res = await callMcp('tools/call', {
+        name: 'workspace_open',
+        arguments: { path: 'd:/CODEX PROJECT/New-tavern' },
+      });
+      const data = JSON.parse(res.result?.content?.[0]?.text);
+      assert.strictEqual(data.type, 'dotnet');
+      assert.strictEqual(data.solution, 'TavernDesk.sln');
+      assert.strictEqual(data.projects, 4);
+      assert.strictEqual(data.language, 'C#');
+      assert.strictEqual(data.git.isGit, true);
+      assert.ok(data.metadata.totalFiles > 0);
+      assert.ok(data.fileTree.children && data.fileTree.children.length > 0);
+
+      // Revert active workspace back to current root
+      await callMcp('tools/call', {
+        name: 'workspace_open',
+        arguments: { path: root },
+      });
     });
 
     it('Tool 1: wincode_hello_world works', async () => {

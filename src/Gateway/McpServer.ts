@@ -42,6 +42,23 @@ export class WinCodeMcpServer {
 
       try {
         switch (name) {
+          case 'workspace_open':
+          case 'wincode_workspace_open': {
+            const targetPath = String(args.path || '');
+            if (!targetPath) {
+              throw new Error('Parameter "path" is required for workspace_open.');
+            }
+            const result = await this.router.openWorkspace(targetPath);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(result, null, 2),
+                },
+              ],
+            };
+          }
+
           case 'wincode_hello_world': {
             const greeting = args.greeting ? String(args.greeting) : 'Hello from WinCode MCP Gateway!';
             return {

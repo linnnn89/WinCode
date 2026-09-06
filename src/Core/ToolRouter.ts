@@ -44,6 +44,18 @@ export class ToolRouter {
     await this.extensions.initializeAll();
   }
 
+  /**
+   * Phase 2: Opens a new workspace and re-points all adapters to it
+   */
+  async openWorkspace(targetPath: string) {
+    const result = await this.workspace.openWorkspace(targetPath);
+    // Re-initialize cache and adapters for the newly opened workspace
+    await this.cache.initialize();
+    await this.repomix.initialize();
+    await this.serena.initialize();
+    return result;
+  }
+
   async dispose(): Promise<void> {
     await this.repomix.dispose();
     await this.serena.dispose();

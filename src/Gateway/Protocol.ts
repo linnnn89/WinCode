@@ -2,6 +2,20 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 export const WINCODE_TOOLS: Tool[] = [
   {
+    name: 'workspace_open',
+    description: 'Opens and analyzes a project workspace directory. Identifies project type (dotnet, node, python, etc.), solution file, project count, primary language, git status, metadata, and file tree.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Path to the workspace project directory to open.',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
     name: 'wincode_hello_world',
     description: 'Minimal connectivity and heartbeat verification tool for AI coding agents (Codex, Claude, etc.). Confirms WinCode Gateway is online.',
     inputSchema: {

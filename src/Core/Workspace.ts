@@ -1,15 +1,23 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { WinCodeConfig } from './Config.js';
+
+const execAsync = promisify(exec);
 
 export interface ProjectIdentity {
   name: string;
+  type: 'dotnet' | 'node' | 'python' | 'rust' | 'go' | 'general';
+  language: string;
+  primarySolution: string | null;
   frameworks: string[];
   isDotNet: boolean;
   solutionFiles: string[];
   projectFiles: string[];
   hasGit: boolean;
   packageManagers: string[];
+  targetFramework?: string;
 }
 
 export interface WorkspaceTreeItem {
@@ -19,6 +27,35 @@ export interface WorkspaceTreeItem {
   type: 'file' | 'directory';
   size?: number;
   children?: WorkspaceTreeItem[];
+}
+
+export interface WorkspaceGitStatus {
+  isGit: boolean;
+  branch?: string;
+  isClean?: boolean;
+  headCommit?: string;
+  remoteUrl?: string;
+}
+
+export interface WorkspaceMetadata {
+  totalFiles: number;
+  totalDirectories: number;
+  totalSizeBytes: number;
+  targetFramework?: string;
+  frameworks: string[];
+  packageManagers: string[];
+  solutions: string[];
+  projectList: string[];
+}
+
+export interface WorkspaceOpenResult {
+  type: 'dotnet' | 'node' | 'python' | 'rust' | 'go' | 'general';
+  solution: string | null;
+  projects: number;
+  language: string;
+  git: WorkspaceGitStatus;
+  metadata: WorkspaceMetadata;
+  fileTree: WorkspaceTreeItem;
 }
 
 export class WorkspaceManager {
@@ -34,6 +71,7 @@ export class WorkspaceManager {
     'trash',
     '.cache',
     '.deps',
+    '.packages',
     'TestResults',
   ]);
 
@@ -46,6 +84,13 @@ export class WorkspaceManager {
   }
 
   /**
+   * Sets the workspace root path
+   */
+  setRoot(newRoot: string): void {
+    this.config.workspaceRoot = path.resolve(newRoot);
+  }
+
+  /**
    * Identifies the project types, especially Windows / .NET ecosystems
    */
   async identifyProject(): Promise<ProjectIdentity> {
@@ -54,6 +99,7 @@ export class WorkspaceManager {
     const projectFiles: string[] = [];
     const packageManagers: string[] = [];
     let hasGit = false;
+    let targetFramework: string | undefined;
 
     try {
       const entries = await fs.readdir(this.root, { withFileTypes: true });
@@ -80,41 +126,188 @@ export class WorkspaceManager {
         if (entry.name === 'Cargo.toml') {
           frameworks.push('Rust');
         }
+        if (entry.name === 'go.mod') {
+          frameworks.push('Go');
+        }
       }
 
-      // Check subdirectories (1 level down) for .csproj files if solution is at root
-      for (const entry of entries) {
-        if (entry.isDirectory() && !this.defaultIgnores.has(entry.name)) {
+      // If solution file exists, parse projects defined inside it
+      if (solutionFiles.length > 0) {
+        for (const sln of solutionFiles) {
           try {
-            const subEntries = await fs.readdir(path.join(this.root, entry.name));
-            for (const sub of subEntries) {
-              if (sub.toLowerCase().endsWith('.csproj')) {
-                projectFiles.push(path.join(entry.name, sub));
-                if (!frameworks.includes('C# / .NET')) frameworks.push('C# / .NET');
+            const slnContent = await fs.readFile(path.join(this.root, sln), 'utf-8');
+            const projectRegex = /Project\("\{[A-Za-z0-9-]+\}"\)\s*=\s*"([^"]+)",\s*"([^"]+\.csproj)"/g;
+            let match;
+            while ((match = projectRegex.exec(slnContent)) !== null) {
+              const projRelPath = match[2].replace(/\\/g, '/');
+              if (!projectFiles.includes(projRelPath)) {
+                projectFiles.push(projRelPath);
               }
             }
           } catch {
-            // Ignore unreadable directory
+            // Ignore sln read errors
           }
+        }
+      }
+
+      // Deep search for .csproj files in subdirectories up to 3 levels if not in solution
+      if (projectFiles.length === 0) {
+        const scanCsproj = async (dir: string, depth: number) => {
+          if (depth > 3) return;
+          const subEntries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+          for (const sub of subEntries) {
+            if (this.defaultIgnores.has(sub.name)) continue;
+            const full = path.join(dir, sub.name);
+            if (sub.isDirectory()) {
+              await scanCsproj(full, depth + 1);
+            } else if (sub.name.toLowerCase().endsWith('.csproj')) {
+              projectFiles.push(path.relative(this.root, full));
+            }
+          }
+        };
+        await scanCsproj(this.root, 0);
+      }
+
+      // Inspect csproj files for WPF/WinUI/TargetFramework
+      for (const proj of projectFiles.slice(0, 5)) {
+        try {
+          const fullProj = path.isAbsolute(proj) ? proj : path.join(this.root, proj);
+          const projContent = await fs.readFile(fullProj, 'utf-8');
+          const tfMatch = projContent.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i);
+          if (tfMatch && !targetFramework) {
+            targetFramework = tfMatch[1].trim();
+          }
+          if (projContent.includes('<UseWPF>true</UseWPF>') && !frameworks.includes('WPF')) {
+            frameworks.push('WPF');
+          }
+          if (projContent.includes('<UseWinUI>true</UseWinUI>') && !frameworks.includes('WinUI')) {
+            frameworks.push('WinUI');
+          }
+          if (projContent.includes('<UseWindowsForms>true</UseWindowsForms>') && !frameworks.includes('WinForms')) {
+            frameworks.push('WinForms');
+          }
+        } catch {
+          // Ignore
+        }
+      }
+
+      // Check Directory.Build.props if targetFramework not yet found
+      if (!targetFramework) {
+        try {
+          const propsContent = await fs.readFile(path.join(this.root, 'Directory.Build.props'), 'utf-8');
+          const tfMatch = propsContent.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i);
+          if (tfMatch) targetFramework = tfMatch[1].trim();
+        } catch {
+          // Ignore
         }
       }
     } catch (err) {
       console.warn('[WorkspaceManager] Error identifying project:', err);
     }
 
+    const isDotNet = solutionFiles.length > 0 || projectFiles.length > 0;
+    let type: 'dotnet' | 'node' | 'python' | 'rust' | 'go' | 'general' = 'general';
+    let language = 'Unknown';
+
+    if (isDotNet) {
+      type = 'dotnet';
+      language = 'C#';
+      if (!packageManagers.includes('NuGet')) packageManagers.push('NuGet');
+      if (targetFramework && !frameworks.includes(targetFramework)) frameworks.push(targetFramework);
+    } else if (packageManagers.includes('npm/node')) {
+      type = 'node';
+      language = 'TypeScript';
+    } else if (packageManagers.includes('pip/python')) {
+      type = 'python';
+      language = 'Python';
+    } else if (frameworks.includes('Rust')) {
+      type = 'rust';
+      language = 'Rust';
+    } else if (frameworks.includes('Go')) {
+      type = 'go';
+      language = 'Go';
+    }
+
     return {
       name: path.basename(this.root),
+      type,
+      language,
+      primarySolution: solutionFiles[0] || null,
       frameworks: Array.from(new Set(frameworks)),
-      isDotNet: solutionFiles.length > 0 || projectFiles.length > 0,
+      isDotNet,
       solutionFiles,
       projectFiles,
       hasGit,
       packageManagers,
+      targetFramework,
     };
   }
 
   /**
-   * Scans the workspace directory tree up to maxDepth
+   * Retrieves Git status safely for the current workspace
+   */
+  async getGitStatus(): Promise<WorkspaceGitStatus> {
+    const gitDir = path.join(this.root, '.git');
+    const isGit = await fs.stat(gitDir).then((s) => s.isDirectory()).catch(() => false);
+    if (!isGit) {
+      return { isGit: false };
+    }
+
+    let branch = 'unknown';
+    let isClean = true;
+    let headCommit: string | undefined;
+    let remoteUrl: string | undefined;
+
+    try {
+      const { stdout: bOut } = await execAsync('git rev-parse --abbrev-ref HEAD', {
+        cwd: this.root,
+        windowsHide: true,
+      });
+      branch = bOut.trim();
+    } catch {
+      // Fallback: read .git/HEAD
+      try {
+        const headContent = await fs.readFile(path.join(gitDir, 'HEAD'), 'utf-8');
+        const match = headContent.match(/ref:\s*refs\/heads\/([^\r\n]+)/);
+        if (match) branch = match[1];
+      } catch {}
+    }
+
+    try {
+      const { stdout: cOut } = await execAsync('git rev-parse --short HEAD', {
+        cwd: this.root,
+        windowsHide: true,
+      });
+      headCommit = cOut.trim();
+    } catch {}
+
+    try {
+      const { stdout: sOut } = await execAsync('git status --porcelain', {
+        cwd: this.root,
+        windowsHide: true,
+      });
+      isClean = sOut.trim().length === 0;
+    } catch {}
+
+    try {
+      const { stdout: rOut } = await execAsync('git remote get-url origin', {
+        cwd: this.root,
+        windowsHide: true,
+      });
+      remoteUrl = rOut.trim();
+    } catch {}
+
+    return {
+      isGit: true,
+      branch,
+      isClean,
+      headCommit,
+      remoteUrl,
+    };
+  }
+
+  /**
+   * Scans the workspace directory tree up to maxDepth and collects summary statistics
    */
   async getDirectoryTree(maxDepth = 3): Promise<WorkspaceTreeItem> {
     const scan = async (dirPath: string, currentDepth: number): Promise<WorkspaceTreeItem> => {
@@ -162,8 +355,78 @@ export class WorkspaceManager {
   }
 
   /**
+   * Collects workspace statistics (file count, dir count, total size)
+   */
+  async getMetadata(identity: ProjectIdentity): Promise<WorkspaceMetadata> {
+    let totalFiles = 0;
+    let totalDirectories = 0;
+    let totalSizeBytes = 0;
+
+    const countWalk = async (dir: string, depth = 0) => {
+      if (depth > 6) return;
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (this.defaultIgnores.has(entry.name)) continue;
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            totalDirectories++;
+            await countWalk(full, depth + 1);
+          } else if (entry.isFile()) {
+            totalFiles++;
+            const s = await fs.stat(full).catch(() => null);
+            if (s) totalSizeBytes += s.size;
+          }
+        }
+      } catch {}
+    };
+
+    await countWalk(this.root);
+
+    return {
+      totalFiles,
+      totalDirectories,
+      totalSizeBytes,
+      targetFramework: identity.targetFramework,
+      frameworks: identity.frameworks,
+      packageManagers: identity.packageManagers,
+      solutions: identity.solutionFiles,
+      projectList: identity.projectFiles,
+    };
+  }
+
+  /**
+   * Phase 2: Opens and analyzes any target workspace directory.
+   */
+  async openWorkspace(targetPath: string): Promise<WorkspaceOpenResult> {
+    const resolvedPath = path.resolve(targetPath);
+
+    const stat = await fs.stat(resolvedPath).catch(() => null);
+    if (!stat || !stat.isDirectory()) {
+      throw new Error(`Invalid workspace path: "${targetPath}". Directory does not exist.`);
+    }
+
+    // Switch current workspace root
+    this.setRoot(resolvedPath);
+
+    const identity = await this.identifyProject();
+    const git = await this.getGitStatus();
+    const metadata = await this.getMetadata(identity);
+    const fileTree = await this.getDirectoryTree(2);
+
+    return {
+      type: identity.type,
+      solution: identity.primarySolution,
+      projects: identity.projectFiles.length,
+      language: identity.language,
+      git,
+      metadata,
+      fileTree,
+    };
+  }
+
+  /**
    * Safe file deletion policy: Moves files to the project trash directory.
-   * Direct deletion of files is strictly forbidden according to project rules.
    */
   async moveToTrash(relativeOrAbsolutePath: string, reason?: string): Promise<{ success: boolean; trashPath: string; message: string }> {
     const targetPath = path.isAbsolute(relativeOrAbsolutePath)
@@ -180,7 +443,6 @@ export class WorkspaceManager {
     try {
       await fs.rename(targetPath, destinationPath);
 
-      // Write a small metadata file in trash explaining the removal
       const metaPath = path.join(this.config.trashDir, `${trashFileName}.meta.json`);
       await fs.writeFile(
         metaPath,

@@ -48,6 +48,7 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 3. **Windows First**: Tailored for Windows 10/11, .NET (WPF, WinUI, WinForms, MSBuild), with future extensibility for FlaUI, Snoop, and PerfView.
 4. **Safe Workspace Policy**: Prohibits destructive file deletions. Obsolete files are safely moved to the project's `trash/` directory with complete audit metadata.
 5. **Multi-Level Caching**: Uses fingerprinting and mtime hashing to minimize token consumption and avoid redundant project scans.
+6. **Semantic Priority & Degraded Integrity**: Local regex scanning serves strictly as a text-retrieval fallback and does not guarantee symbol identity, overload distinction, or cross-file reference completeness. When a real Serena service is connected, semantic queries take strict precedence. Under degraded mode or query failure, source, limitations, and analysis completeness must be clearly labeled, and finding 0 references must never be directly interpreted as "zero impact" or "low risk".
 
 ---
 
@@ -192,6 +193,7 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 3. **Windows 优先**：深度服务 Windows 10/11、.NET 生态（WPF、WinUI、WinForms、MSBuild），预留 FlaUI、Snoop、PerfView 插件扩展点。
 4. **安全防误删机制**：代码层严格禁止硬删除文件，所有废弃文件自动归档至项目内的 `trash/` 目录并生成审计元数据。
 5. **多级指纹缓存**：内置基于 Git Commit、文件指纹与 mtime 的多级缓存，避免 Agent 在长周期任务中重复扫描，极大节约 Token。
+6. **语义优先与降级契约**：本地正则扫描仅作为文本检索降级方案，不保证符号身份、重载区分、跨文件引用完整性或安全重命名。连接真实 Serena 服务且所需能力可用时，优先使用其语义符号与引用查询，并根据实际返回数据分析影响范围。降级或查询失败时必须明确标注来源、限制和分析完整性，不得将“未找到引用”直接解释为“无影响”或“低风险”；本地正则扫描无法替代完整 Roslyn/TypeScript LSP 语义层面的跨文件重命名与重载解析。
 
 ---
 

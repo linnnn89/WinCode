@@ -52,6 +52,7 @@ export class ToolRouter {
     // Re-initialize cache and adapters for the newly opened workspace
     await this.cache.initialize();
     await this.repomix.initialize();
+    await this.serena.dispose();
     await this.serena.initialize();
     this.context = new ContextManager(this.config, this.workspace, this.repomix, this.serena);
     this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);

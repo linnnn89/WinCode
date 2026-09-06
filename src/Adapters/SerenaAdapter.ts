@@ -1,10 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { IAdapter, AdapterHealth } from './IAdapter.js';
 import { WinCodeConfig } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';
+
+export const SERENA_DEGRADED_LIMITATIONS: string[] = [
+  '本地正则扫描仅作为文本检索降级方案，不保证符号身份、重载区分、跨文件引用完整性或安全重命名。',
+  '本地正则扫描无法替代完整 Roslyn/TypeScript LSP 语义层面的跨文件重命名与重载解析。',
+  '未找到引用不得直接解释为“无影响”或“低风险”。',
+];
 
 export interface CodeSymbol {
   name: string;
@@ -28,6 +35,8 @@ export interface FindSymbolsResult {
   totalFound: number;
   symbols: CodeSymbol[];
   source: 'serena-mcp' | 'serena-adapter-fallback';
+  analysisCompleteness: 'semantic' | 'degraded';
+  limitations: string[];
 }
 
 export interface FindReferencesResult {
@@ -35,6 +44,8 @@ export interface FindReferencesResult {
   totalReferences: number;
   references: SymbolReference[];
   source: 'serena-mcp' | 'serena-adapter-fallback';
+  analysisCompleteness: 'semantic' | 'degraded';
+  limitations: string[];
 }
 
 export class SerenaAdapter implements IAdapter {
@@ -54,6 +65,7 @@ export class SerenaAdapter implements IAdapter {
   }
 
   async initialize(): Promise<void> {
+    await this.dispose();
     const health = await this.checkHealth();
     if (health.available && health.source === 'installed') {
       await this.tryConnectSerena();
@@ -82,10 +94,25 @@ export class SerenaAdapter implements IAdapter {
       };
     }
 
+    // Proactively check if 'serena' binary is available in PATH
+    try {
+      const checkCmd = process.platform === 'win32' ? 'where.exe serena' : 'which serena';
+      const stdout = execSync(checkCmd, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 }).toString();
+      if (stdout.trim()) {
+        return {
+          available: true,
+          source: 'installed',
+          details: `Found Serena binary in system PATH: ${stdout.trim().split(/\r?\n/)[0]}`,
+        };
+      }
+    } catch {
+      // serena not in PATH, proceed to fallback mode
+    }
+
     return {
       available: true,
       source: 'fallback',
-      details: 'Serena adapter operating in WinCode built-in intelligent symbol analysis mode',
+      details: 'Serena adapter operating in WinCode built-in intelligent symbol analysis mode (fallback)',
     };
   }
 
@@ -93,30 +120,50 @@ export class SerenaAdapter implements IAdapter {
    * Attempts to establish an MCP stdio connection to Serena
    */
   private async tryConnectSerena(): Promise<boolean> {
+    await this.dispose();
+
+    let transport: StdioClientTransport | null = null;
+    let client: Client | null = null;
+
     try {
       const cmd = this.config.adapters.serena.customCommand || 'serena';
-      this.serenaTransport = new StdioClientTransport({
+      transport = new StdioClientTransport({
         command: 'cmd',
         args: ['/c', cmd],
       });
 
-      this.serenaClient = new Client(
+      client = new Client(
         { name: 'wincode-serena-adapter', version: '0.1.0' },
         { capabilities: {} }
       );
 
-      await this.serenaClient.connect(this.serenaTransport);
-      const toolsList = await this.serenaClient.listTools();
+      await client.connect(transport);
+      const toolsList = await client.listTools();
+
+      this.serenaTools.clear();
       for (const t of toolsList.tools) {
         this.serenaTools.add(t.name);
       }
+      this.serenaTransport = transport;
+      this.serenaClient = client;
       this.isConnectedToSerena = true;
       console.error(`[SerenaAdapter] Connected to upstream Serena MCP server with ${toolsList.tools.length} tools.`);
       return true;
     } catch (err) {
-      this.isConnectedToSerena = false;
+      if (client) {
+        try {
+          await client.close();
+        } catch {}
+      }
+      if (transport) {
+        try {
+          await transport.close();
+        } catch {}
+      }
       this.serenaClient = null;
       this.serenaTransport = null;
+      this.isConnectedToSerena = false;
+      this.serenaTools.clear();
       return false;
     }
   }
@@ -140,20 +187,30 @@ export class SerenaAdapter implements IAdapter {
     let symbols: CodeSymbol[] = [];
     let source: 'serena-mcp' | 'serena-adapter-fallback' = 'serena-adapter-fallback';
 
-    if (this.isConnectedToSerena && this.serenaClient && (this.serenaTools.has('find_symbol') || this.serenaTools.has('get_symbols_overview'))) {
+    const serenaToolName = ['find_symbol', 'find_symbols', 'get_symbols_overview'].find((t) =>
+      this.serenaTools.has(t)
+    );
+
+    if (this.isConnectedToSerena && this.serenaClient && serenaToolName) {
       try {
-        const serenaToolName = this.serenaTools.has('find_symbol') ? 'find_symbol' : 'get_symbols_overview';
         const serenaRes = await this.serenaClient.callTool({
           name: serenaToolName,
           arguments: {
             name_path_pattern: query,
-            name: query,
-            relative_workspace_path: '',
+            name_path: query,
+            relative_path: '',
           },
         });
 
         const rawText = (serenaRes.content as any[])?.[0]?.text;
-        if (rawText) {
+        const isExplicitError =
+          serenaRes.isError ||
+          (typeof rawText === 'string' &&
+            (rawText.startsWith('Error:') || rawText.includes('没有激活项目') || rawText.includes('No active project')));
+
+        if (isExplicitError) {
+          console.warn(`[SerenaAdapter] Serena MCP ${serenaToolName} returned error:`, rawText);
+        } else if (rawText) {
           symbols = this.mapSerenaSymbols(rawText, query, kindFilter);
           source = 'serena-mcp';
         }
@@ -166,12 +223,19 @@ export class SerenaAdapter implements IAdapter {
       symbols = await this.scanSymbolsLocally(query, kindFilter);
     }
 
+    const analysisCompleteness: 'semantic' | 'degraded' =
+      source === 'serena-mcp' ? 'semantic' : 'degraded';
+    const limitations =
+      source === 'serena-mcp' ? [] : [...SERENA_DEGRADED_LIMITATIONS];
+
     const result: FindSymbolsResult = {
       query,
       kindFilter,
       totalFound: symbols.length,
       symbols,
       source,
+      analysisCompleteness,
+      limitations,
     };
 
     await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 5 });
@@ -182,13 +246,13 @@ export class SerenaAdapter implements IAdapter {
    * Phase 4: wincode_find_references
    * Queries Serena (or fallback scanner) for all usage and call sites of a symbol
    */
-  async findReferences(symbolName: string): Promise<SymbolReference[]> {
-    const res = await this.findReferencesDetailed(symbolName);
+  async findReferences(symbolName: string, relativePath?: string): Promise<SymbolReference[]> {
+    const res = await this.findReferencesDetailed(symbolName, relativePath);
     return res.references;
   }
 
-  async findReferencesDetailed(symbolName: string): Promise<FindReferencesResult> {
-    const cacheKey = `serena_refs_${symbolName}_${this.config.workspaceRoot}`;
+  async findReferencesDetailed(symbolName: string, relativePath?: string): Promise<FindReferencesResult> {
+    const cacheKey = `serena_refs_${symbolName}_${relativePath || 'auto'}_${this.config.workspaceRoot}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<FindReferencesResult>(cacheKey, fingerprint);
@@ -197,20 +261,53 @@ export class SerenaAdapter implements IAdapter {
     let refs: SymbolReference[] = [];
     let source: 'serena-mcp' | 'serena-adapter-fallback' = 'serena-adapter-fallback';
 
-    if (this.isConnectedToSerena && this.serenaClient && this.serenaTools.has('find_referencing_symbols')) {
-      try {
-        const serenaRes = await this.serenaClient.callTool({
-          name: 'find_referencing_symbols',
-          arguments: {
-            name_path: symbolName,
-            symbol_name: symbolName,
-          },
-        });
+    const refToolName = ['find_referencing_symbols', 'find_references', 'get_references'].find((t) =>
+      this.serenaTools.has(t)
+    );
 
-        const rawText = (serenaRes.content as any[])?.[0]?.text;
-        if (rawText) {
-          refs = this.mapSerenaReferences(rawText, symbolName);
-          source = 'serena-mcp';
+    if (this.isConnectedToSerena && this.serenaClient && refToolName) {
+      try {
+        let targetRelPath = relativePath;
+        let targetNamePath = symbolName;
+
+        // Serena's find_referencing_symbols requires relative_path.
+        // If not supplied, resolve symbol definition first to determine defining file & name_path.
+        if (!targetRelPath) {
+          const found = await this.findSymbols(symbolName);
+          const matched = found.find((s) => s.name === symbolName) || found[0];
+          if (matched?.file) {
+            targetRelPath = matched.file;
+            if (matched.containerName) {
+              targetNamePath = `${matched.containerName}/${matched.name}`;
+            }
+          }
+        }
+
+        if (targetRelPath) {
+          const serenaRes = await this.serenaClient.callTool({
+            name: refToolName,
+            arguments: {
+              name_path: targetNamePath,
+              relative_path: targetRelPath,
+            },
+          });
+
+          const rawText = (serenaRes.content as any[])?.[0]?.text;
+          const isExplicitError =
+            serenaRes.isError ||
+            (typeof rawText === 'string' &&
+              (rawText.startsWith('Error:') || rawText.includes('没有激活项目') || rawText.includes('No active project')));
+
+          if (isExplicitError) {
+            console.warn(`[SerenaAdapter] Serena MCP ${refToolName} returned error:`, rawText);
+          } else if (rawText) {
+            refs = this.mapSerenaReferences(rawText, symbolName);
+            source = 'serena-mcp';
+          }
+        } else {
+          console.warn(
+            `[SerenaAdapter] Could not determine relative_path for symbol '${symbolName}', skipping Serena upstream and falling back to local scanner.`
+          );
         }
       } catch (err) {
         console.warn('[SerenaAdapter] Serena MCP call failed, falling back to local reference scanner:', err);
@@ -221,11 +318,18 @@ export class SerenaAdapter implements IAdapter {
       refs = await this.scanReferencesLocally(symbolName);
     }
 
+    const analysisCompleteness: 'semantic' | 'degraded' =
+      source === 'serena-mcp' ? 'semantic' : 'degraded';
+    const limitations =
+      source === 'serena-mcp' ? [] : [...SERENA_DEGRADED_LIMITATIONS];
+
     const result: FindReferencesResult = {
       symbolName,
       totalReferences: refs.length,
       references: refs,
       source,
+      analysisCompleteness,
+      limitations,
     };
 
     await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 1000 * 60 * 5 });
@@ -235,18 +339,80 @@ export class SerenaAdapter implements IAdapter {
   /**
    * Maps Serena MCP response formats to WinCode CodeSymbol schema
    */
-  private mapSerenaSymbols(rawText: string, query: string, kindFilter?: string): CodeSymbol[] {
+  public mapSerenaSymbols(rawText: string, query: string, kindFilter?: string): CodeSymbol[] {
     const symbols: CodeSymbol[] = [];
     try {
       const parsed = JSON.parse(rawText);
-      const list = Array.isArray(parsed) ? parsed : parsed.symbols || [];
-      for (const item of list) {
+      const rawList: any[] = [];
+
+      if (Array.isArray(parsed)) {
+        rawList.push(...parsed);
+      } else if (parsed && typeof parsed === 'object') {
+        if (Array.isArray(parsed.symbols)) {
+          rawList.push(...parsed.symbols);
+        } else {
+          // Support grouped structures like { "Class": [...], "Method": [...] }
+          for (const val of Object.values(parsed)) {
+            if (Array.isArray(val)) {
+              rawList.push(...val);
+            } else if (val && typeof val === 'object') {
+              rawList.push(val);
+            }
+          }
+        }
+      }
+
+      for (const item of rawList) {
+        if (!item || typeof item !== 'object') continue;
+
+        // Parse name & containerName from item.name_path or item.name
+        let symbolName = item.name;
+        let containerName = item.containerName;
+
+        if (!symbolName && item.name_path) {
+          const parts = String(item.name_path).split('/');
+          const rawName = parts.pop() || '';
+          symbolName = rawName.replace(/\[\d+\]$/, '');
+          if (parts.length > 0) {
+            containerName = parts.join('/');
+          }
+        }
+        symbolName = symbolName || query;
+
+        // Parse file / relative_path
+        const file =
+          item.relative_path ||
+          item.file ||
+          item.path ||
+          item.location?.uri ||
+          item.location?.relative_path ||
+          '';
+
+        // Parse line / body_location
+        const line =
+          item.body_location?.start_line ||
+          item.line ||
+          item.location?.range?.start?.line ||
+          item.body_location?.start ||
+          1;
+
+        // Parse kind
+        const kind = (item.kind || 'class').toLowerCase();
+
+        // Parse signature / info
+        const signature =
+          item.signature ||
+          item.preview ||
+          (typeof item.info === 'string' ? item.info : item.info?.description) ||
+          undefined;
+
         symbols.push({
-          name: item.name || query,
-          kind: (item.kind || 'class').toLowerCase(),
-          file: item.file || item.path || item.location?.uri || '',
-          line: item.line || item.location?.range?.start?.line || 1,
-          signature: item.signature || item.preview || undefined,
+          name: symbolName,
+          kind: kind as any,
+          file,
+          line: typeof line === 'number' ? line : parseInt(String(line), 10) || 1,
+          signature,
+          containerName,
         });
       }
     } catch {
@@ -275,19 +441,71 @@ export class SerenaAdapter implements IAdapter {
   /**
    * Maps Serena MCP response formats to WinCode SymbolReference schema
    */
-  private mapSerenaReferences(rawText: string, symbolName: string): SymbolReference[] {
+  public mapSerenaReferences(rawText: string, symbolName: string): SymbolReference[] {
     const refs: SymbolReference[] = [];
     try {
       const parsed = JSON.parse(rawText);
-      const list = Array.isArray(parsed) ? parsed : parsed.references || [];
-      for (const item of list) {
-        refs.push({
-          symbolName,
-          file: item.file || item.path || item.location?.uri || '',
-          line: item.line || item.location?.range?.start?.line || 1,
-          preview: item.preview || item.snippet || item.line_content || '',
-        });
-      }
+
+      const collectRefs = (node: any, currentPath = '') => {
+        if (!node) return;
+
+        if (Array.isArray(node)) {
+          for (const item of node) {
+            collectRefs(item, currentPath);
+          }
+          return;
+        }
+
+        if (typeof node === 'object') {
+          // Detect if this object itself represents a reference leaf node
+          const hasRefSignal =
+            node.content_around_reference !== undefined ||
+            node.body_location !== undefined ||
+            node.reference_line !== undefined ||
+            node.snippet !== undefined ||
+            node.line_content !== undefined ||
+            (node.preview !== undefined && (node.file || node.relative_path || currentPath));
+
+          if (hasRefSignal) {
+            const file = node.relative_path || node.file || node.path || currentPath || '';
+            const line =
+              node.reference_line ||
+              node.body_location?.start_line ||
+              node.line ||
+              node.location?.range?.start?.line ||
+              1;
+            const preview =
+              node.content_around_reference ||
+              node.preview ||
+              node.snippet ||
+              node.line_content ||
+              (node.name_path ? `Reference in ${node.name_path}` : '');
+
+            refs.push({
+              symbolName,
+              file,
+              line: typeof line === 'number' ? line : parseInt(String(line), 10) || 1,
+              preview: String(preview).trim(),
+            });
+            return;
+          }
+
+          if (Array.isArray(node.references)) {
+            collectRefs(node.references, currentPath);
+            return;
+          }
+
+          for (const [key, value] of Object.entries(node)) {
+            // Check if key is a file path (has extension or path separator)
+            const isPathLike =
+              !currentPath && (key.includes('/') || key.includes('\\') || /\.[a-zA-Z0-9]+$/i.test(key));
+            const nextPath = isPathLike ? key : currentPath;
+            collectRefs(value, nextPath);
+          }
+        }
+      };
+
+      collectRefs(parsed);
     } catch {
       // Plain text fallback parsing
       const lines = rawText.split(/\r?\n/);
@@ -474,19 +692,44 @@ export class SerenaAdapter implements IAdapter {
           await walk(fullPath);
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name).toLowerCase();
-          if (['.cs', '.ts', '.js', '.py', '.xaml', '.xml', '.json', '.md'].includes(ext)) {
+          const codeExts = ['.cs', '.ts', '.tsx', '.js', '.jsx', '.py', '.xaml', '.xml', '.csproj', '.sln'];
+          if (codeExts.includes(ext)) {
             const relPath = path.relative(root, fullPath);
             try {
               const content = await fs.readFile(fullPath, 'utf-8');
               const lines = content.split(/\r?\n/);
 
               for (let i = 0; i < lines.length; i++) {
+                const trimmed = lines[i].trim();
+                // Exclude pure comments and documentation lines
+                if (
+                  trimmed.startsWith('//') ||
+                  trimmed.startsWith('///') ||
+                  trimmed.startsWith('*') ||
+                  trimmed.startsWith('/*') ||
+                  trimmed.startsWith('#') ||
+                  trimmed.startsWith('<!--')
+                ) {
+                  continue;
+                }
+
+                // Exclude declaration line of the symbol itself
+                const isDeclaration =
+                  /^(?:export\s+)?(?:public|private|protected|internal\s+)?(?:static\s+|abstract\s+|sealed\s+|partial\s+)?(?:class|interface|struct|enum)\s+/i.test(trimmed) &&
+                  (trimmed.includes(`class ${symbolName}`) ||
+                    trimmed.includes(`interface ${symbolName}`) ||
+                    trimmed.includes(`struct ${symbolName}`) ||
+                    trimmed.includes(`enum ${symbolName}`));
+                if (isDeclaration) {
+                  continue;
+                }
+
                 if (regex.test(lines[i])) {
                   refs.push({
                     symbolName,
                     file: relPath,
                     line: i + 1,
-                    preview: lines[i].trim(),
+                    preview: trimmed,
                   });
                   if (refs.length >= 200) return;
                 }
@@ -517,5 +760,6 @@ export class SerenaAdapter implements IAdapter {
       this.serenaTransport = null;
     }
     this.isConnectedToSerena = false;
+    this.serenaTools.clear();
   }
 }

@@ -74,6 +74,71 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       const miss = await cache.get('versioned_data', 'fp_v2');
       assert.strictEqual(miss, null, 'Cache item must miss when fingerprint changes');
     });
+
+    it('should compute sensitive workspace fingerprint that changes upon file edits and additions', async () => {
+      const cache = new CacheManager(testCacheDir);
+      await cache.initialize();
+
+      const fpOriginal = await cache.computeWorkspaceFingerprint(root);
+      assert.ok(fpOriginal && typeof fpOriginal === 'string');
+
+      // Create a temporary file in root to simulate workspace change
+      const probeFile = path.join(root, 'tdd_probe_temp_file.txt');
+      await fs.writeFile(probeFile, 'probe content v1');
+
+      try {
+        const fpAfterCreate = await cache.computeWorkspaceFingerprint(root);
+        assert.notStrictEqual(fpAfterCreate, fpOriginal, 'Fingerprint must change when an untracked file is added');
+
+        await new Promise((r) => setTimeout(r, 40));
+        await fs.writeFile(probeFile, 'probe content v2 modified');
+        const fpAfterModify = await cache.computeWorkspaceFingerprint(root);
+        assert.notStrictEqual(fpAfterModify, fpAfterCreate, 'Fingerprint must change when an existing dirty file is modified');
+      } finally {
+        await fs.unlink(probeFile).catch(() => {});
+      }
+
+      const fpRestored = await cache.computeWorkspaceFingerprint(root);
+      assert.strictEqual(fpRestored, fpOriginal, 'Fingerprint should restore when modifications are reverted');
+    });
+
+    it('should detect file edits in non-git directories as well', async () => {
+      const cache = new CacheManager(testCacheDir);
+      const tempNonGit = path.join(testCacheDir, 'nongit_probe');
+      await fs.mkdir(path.join(tempNonGit, 'src'), { recursive: true });
+      const testFile = path.join(tempNonGit, 'src', 'code.ts');
+      await fs.writeFile(testFile, 'export const a = 1;');
+
+      const fp1 = await cache.computeWorkspaceFingerprint(tempNonGit);
+      await new Promise((r) => setTimeout(r, 40));
+      await fs.writeFile(testFile, 'export const a = 2;');
+      const fp2 = await cache.computeWorkspaceFingerprint(tempNonGit);
+
+      assert.notStrictEqual(fp1, fp2, 'Non-git workspace fingerprint must reflect subfolder file changes');
+    });
+
+    it('P2 Fix: CacheManager should enforce memory capacity limit and LRU eviction', async () => {
+      const smallCacheDir = path.join(testCacheDir, 'lru_test_cache');
+      const smallCache = new CacheManager(smallCacheDir, 3, 3);
+      await smallCache.initialize();
+
+      await smallCache.set('k1', 'val1');
+      await smallCache.set('k2', 'val2');
+      await smallCache.set('k3', 'val3');
+      assert.strictEqual(smallCache.memoryEntryCount, 3);
+
+      // Access k1 to make it most recently used (LRU order: k2, k3, k1)
+      const hit = await smallCache.get('k1');
+      assert.strictEqual(hit, 'val1');
+
+      // Adding k4 should evict k2 (oldest)
+      await smallCache.set('k4', 'val4');
+      assert.ok(smallCache.memoryEntryCount <= 3);
+
+      // k1, k3, k4 should be accessible
+      assert.strictEqual(await smallCache.get('k1'), 'val1');
+      assert.strictEqual(await smallCache.get('k4'), 'val4');
+    });
   });
 
   // ==========================================
@@ -103,7 +168,7 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       const testFile = path.join(root, 'tdd_temp_file_for_trash.txt');
       await fs.writeFile(testFile, 'Crucial content that should never be permanently deleted', 'utf-8');
 
-      const result = await ws.moveToTrash(testFile, 'TDD safety test');
+      const result = await ws.moveToTrash('tdd_temp_file_for_trash.txt', 'TDD safety test');
       assert.strictEqual(result.success, true);
       assert.ok(result.trashPath.includes('trash'));
 
@@ -125,11 +190,92 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.strictEqual(metaContent.reason, 'TDD safety test');
     });
 
-    it('Resilience: moveToTrash on non-existent file should fail gracefully without throwing', async () => {
-      const fakePath = path.join(root, 'non_existent_file_99999.xyz');
-      const result = await ws.moveToTrash(fakePath, 'Test non-existent');
+    it('Resilience: moveToTrash on non-existent file within workspace should fail gracefully without throwing', async () => {
+      const result = await ws.moveToTrash('non_existent_file_99999.xyz', 'Test non-existent');
       assert.strictEqual(result.success, false);
       assert.ok(result.message.includes('Failed to move file to trash'));
+    });
+
+    it('Security Boundary: moveToTrash strictly accepts only non-empty relative paths within workspace with zero rename calls', async () => {
+      // Intercept fs.rename to verify zero calls on rejected inputs
+      const originalRename = fs.rename;
+      let renameCallCount = 0;
+      (fs as any).rename = async (...args: any[]) => {
+        renameCallCount++;
+        return originalRename.apply(fs, args as any);
+      };
+
+      try {
+        // 1. Empty or whitespace
+        const emptyRes = await ws.moveToTrash('   ', 'Empty path');
+        assert.strictEqual(emptyRes.success, false);
+        assert.ok(emptyRes.message.includes('Path cannot be empty'));
+
+        // 2. Absolute path (same drive)
+        const absRes = await ws.moveToTrash(path.join(root, 'tdd_temp_file_for_trash.txt'), 'Absolute path');
+        assert.strictEqual(absRes.success, false);
+        assert.ok(absRes.message.includes('Only non-empty relative paths within the workspace are accepted'));
+
+        // 3. Absolute path (different drive / external)
+        const extAbsRes = await ws.moveToTrash('C:\\Windows\\System32\\cmd.exe', 'External absolute path');
+        assert.strictEqual(extAbsRes.success, false);
+        assert.ok(extAbsRes.message.includes('Only non-empty relative paths within the workspace are accepted'));
+
+        // 4. Windows drive-relative path (e.g. C:foo or D:bar)
+        const driveRelRes = await ws.moveToTrash('C:some_file.txt', 'Drive-relative path');
+        assert.strictEqual(driveRelRes.success, false);
+        assert.ok(driveRelRes.message.includes('Only non-empty relative paths within the workspace are accepted'));
+
+        // 5. UNC network share path
+        const uncRes = await ws.moveToTrash('\\\\server\\share\\file.txt', 'UNC path');
+        assert.strictEqual(uncRes.success, false);
+        assert.ok(uncRes.message.includes('Only non-empty relative paths within the workspace are accepted'));
+
+        // 6. Relative ../ escaping workspace root
+        const relEscapeRes = await ws.moveToTrash('../outside_secret.txt', 'Parent traversal escape');
+        assert.strictEqual(relEscapeRes.success, false);
+        assert.ok(relEscapeRes.message.includes('outside the workspace boundary'));
+
+        // 7. Workspace root itself
+        const rootRes = await ws.moveToTrash('.', 'Workspace root itself');
+        assert.strictEqual(rootRes.success, false);
+        assert.ok(rootRes.message.includes('outside the workspace boundary'));
+
+        // 8. Trash directory itself
+        const trashDirRes = await ws.moveToTrash('trash', 'Trash directory itself');
+        assert.strictEqual(trashDirRes.success, false);
+        assert.ok(trashDirRes.message.includes('Cannot move items from or within the trash directory'));
+
+        // 9. Files inside trash directory sub-tree (prevent recursive archiving and metadata corruption)
+        const testTrashFile = path.join(ws.trashDir, 'already_trashed.txt');
+        await fs.mkdir(ws.trashDir, { recursive: true });
+        await fs.writeFile(testTrashFile, 'already in trash', 'utf-8');
+        const trashSubRes = await ws.moveToTrash('trash/already_trashed.txt', 'File inside trash');
+        assert.strictEqual(trashSubRes.success, false);
+        assert.ok(trashSubRes.message.includes('Cannot move items from or within the trash directory'));
+        await fs.rm(testTrashFile, { force: true }).catch(() => {});
+
+        // 10. Symlink pointing outside workspace
+        const symlinkPath = path.join(root, 'temp_symlink_to_outside.txt');
+        const outsideTarget = path.resolve(root, '..', 'temp_outside_real_file.txt');
+        await fs.writeFile(outsideTarget, 'outside real file', 'utf-8');
+        try {
+          await fs.symlink(outsideTarget, symlinkPath, 'file');
+          const symlinkRes = await ws.moveToTrash('temp_symlink_to_outside.txt', 'Symlink to outside');
+          assert.strictEqual(symlinkRes.success, false);
+          assert.ok(symlinkRes.message.includes('resolves outside the workspace via symlink or junction'));
+        } catch {
+          // On Windows, non-admin symlink creation may require privilege; skip if OS denies
+        } finally {
+          await fs.rm(symlinkPath, { force: true }).catch(() => {});
+          await fs.rm(outsideTarget, { force: true }).catch(() => {});
+        }
+
+        // CRITICAL: Verify rename was NEVER called for any of the above invalid/escaping inputs
+        assert.strictEqual(renameCallCount, 0, 'fs.rename call count must be ZERO for all rejected boundary inputs');
+      } finally {
+        (fs as any).rename = originalRename;
+      }
     });
 
     it('Phase 2: openWorkspace accurately parses .NET solutions, projects, git, metadata and tree', async () => {
@@ -145,6 +291,41 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
 
       // Restore root to current workspace
       ws.setRoot(root);
+    });
+
+    it('Workspace switching: openWorkspace and setRoot must synchronize trashDir and isolate cross-project deletions', async () => {
+      const tavernPath = path.resolve('d:/CODEX PROJECT/New-tavern');
+      const initialTrash = path.resolve(ws.trashDir);
+      assert.strictEqual(initialTrash, path.join(root, 'trash'));
+
+      // Switch to project B
+      await ws.openWorkspace(tavernPath);
+      assert.strictEqual(path.resolve(ws.root), tavernPath);
+      const switchedTrash = path.resolve(ws.trashDir);
+      assert.strictEqual(switchedTrash, path.join(tavernPath, 'trash'), 'trashDir must update to project B');
+
+      // Attempting to delete a file from project A while in project B must be rejected
+      const rejectCrossProject = await ws.moveToTrash('../WinCode MCP/file_belonging_to_a.txt', 'Try deleting A file from B');
+      assert.strictEqual(rejectCrossProject.success, false);
+      assert.ok(rejectCrossProject.message.includes('outside the workspace boundary'));
+
+      // Deleting a file in project B moves it into project B's trash, not project A's trash
+      const tempBFile = path.join(tavernPath, 'temp_test_b_file.txt');
+      await fs.writeFile(tempBFile, 'File in B project', 'utf-8');
+
+      const trashBResult = await ws.moveToTrash('temp_test_b_file.txt', 'Safe deletion in project B');
+      assert.strictEqual(trashBResult.success, true);
+      assert.ok(trashBResult.trashPath.startsWith(path.join(tavernPath, 'trash')), 'Must move to project B trash');
+      assert.ok(!trashBResult.trashPath.startsWith(path.join(root, 'trash')), 'Must NOT move to project A trash');
+
+      // Clean up temp trash in B
+      await fs.rm(trashBResult.trashPath, { force: true }).catch(() => {});
+      await fs.rm(`${trashBResult.trashPath}.meta.json`, { force: true }).catch(() => {});
+
+      // Switch back to project A
+      ws.setRoot(root);
+      assert.strictEqual(path.resolve(ws.root), root);
+      assert.strictEqual(path.resolve(ws.trashDir), path.join(root, 'trash'), 'trashDir must restore to project A');
     });
   });
 
@@ -198,6 +379,189 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(refResult.totalReferences > 0);
       assert.ok(refResult.references.some((r) => r.file.includes('App.xaml.cs')));
     });
+
+    it('should correctly map Serena official upstream format for symbols (name_path, relative_path, body_location)', () => {
+      const upstreamSerenaJson = JSON.stringify([
+        {
+          name_path: 'App/MainWindow',
+          kind: 'Class',
+          relative_path: 'src/MainWindow.xaml.cs',
+          body_location: {
+            start_line: 25,
+            end_line: 150,
+          },
+        },
+        {
+          name_path: 'ToolRouter',
+          kind: 'Class',
+          relative_path: 'src/Core/ToolRouter.ts',
+          body_location: {
+            start_line: 42,
+            end_line: 220,
+          },
+        },
+      ]);
+
+      const mapped = serena.mapSerenaSymbols(upstreamSerenaJson, 'query');
+      assert.strictEqual(mapped.length, 2);
+
+      assert.strictEqual(mapped[0].name, 'MainWindow');
+      assert.strictEqual(mapped[0].containerName, 'App');
+      assert.strictEqual(mapped[0].file, 'src/MainWindow.xaml.cs');
+      assert.strictEqual(mapped[0].line, 25);
+      assert.strictEqual(mapped[0].kind, 'class');
+
+      assert.strictEqual(mapped[1].name, 'ToolRouter');
+      assert.strictEqual(mapped[1].file, 'src/Core/ToolRouter.ts');
+      assert.strictEqual(mapped[1].line, 42);
+      assert.strictEqual(mapped[1].kind, 'class');
+    });
+
+    it('should correctly map Serena official grouped references format (relative_path and kind grouping)', () => {
+      const upstreamGroupedRefsJson = JSON.stringify({
+        'src/Core/ToolRouter.ts': {
+          Method: [
+            {
+              name_path: 'ToolRouter/dispatch',
+              body_location: {
+                start_line: 55,
+                end_line: 80,
+              },
+              content_around_reference: 'const refs = await this.serena.findReferences(symbolName);',
+            },
+          ],
+        },
+        'src/CompositeTools/ImpactAnalyzer.ts': {
+          Method: [
+            {
+              name_path: 'ImpactAnalyzer/analyze',
+              body_location: {
+                start_line: 90,
+                end_line: 120,
+              },
+              content_around_reference: 'const refs = await this.serena.findReferences(symbolName, targetFile);',
+            },
+          ],
+        },
+      });
+
+      const refs = serena.mapSerenaReferences(upstreamGroupedRefsJson, 'findReferences');
+      assert.strictEqual(refs.length, 2);
+
+      assert.strictEqual(refs[0].symbolName, 'findReferences');
+      assert.strictEqual(refs[0].file, 'src/Core/ToolRouter.ts');
+      assert.strictEqual(refs[0].line, 55);
+      assert.ok(refs[0].preview.includes('const refs = await this.serena.findReferences(symbolName);'));
+
+      assert.strictEqual(refs[1].symbolName, 'findReferences');
+      assert.strictEqual(refs[1].file, 'src/CompositeTools/ImpactAnalyzer.ts');
+      assert.strictEqual(refs[1].line, 90);
+      assert.ok(refs[1].preview.includes('const refs = await this.serena.findReferences(symbolName, targetFile);'));
+    });
+
+    it('Resilience: when Serena upstream returns isError (e.g. 没有激活项目), it must fall back to local scanning', async () => {
+      const mockSerena = new SerenaAdapter(config, cache);
+
+      // Inject a mock connected client that returns an MCP error (isError: true)
+      (mockSerena as any).isConnectedToSerena = true;
+      (mockSerena as any).serenaTools = new Set(['find_symbol', 'find_referencing_symbols']);
+      (mockSerena as any).serenaClient = {
+        callTool: async () => ({
+          isError: true,
+          content: [{ type: 'text', text: 'Error: 没有激活项目' }],
+        }),
+      };
+
+      const result = await mockSerena.findSymbolsDetailed('ToolRouter');
+      assert.strictEqual(result.source, 'serena-adapter-fallback', 'Source must fall back to local adapter');
+      assert.ok(result.symbols.length > 0, 'Local indexing should have found ToolRouter symbols');
+      assert.strictEqual(result.symbols[0].name, 'ToolRouter');
+
+      const refResult = await mockSerena.findReferencesDetailed('ToolRouter');
+      assert.strictEqual(refResult.source, 'serena-adapter-fallback', 'References source must fall back to local adapter');
+      assert.ok(refResult.references.length > 0, 'Local references scanner should have found references to ToolRouter');
+    });
+
+    it('Lifecycle safety: re-initializing SerenaAdapter must close existing client and transport', async () => {
+      const adapter = new SerenaAdapter(config, cache);
+      let closeClientCalls = 0;
+      let closeTransportCalls = 0;
+
+      const mockClient = {
+        close: async () => {
+          closeClientCalls++;
+        },
+      };
+      const mockTransport = {
+        close: async () => {
+          closeTransportCalls++;
+        },
+      };
+
+      // Set existing connection
+      (adapter as any).serenaClient = mockClient;
+      (adapter as any).serenaTransport = mockTransport;
+      (adapter as any).isConnectedToSerena = true;
+      (adapter as any).serenaTools.add('test_tool');
+
+      // Call initialize
+      await adapter.initialize();
+
+      // Verify previous instances were closed
+      assert.strictEqual(closeClientCalls, 1, 'Previous client must be closed upon re-initialize');
+      assert.strictEqual(closeTransportCalls, 1, 'Previous transport must be closed upon re-initialize');
+      assert.strictEqual((adapter as any).serenaTools.size, 0, 'Tools set must be cleared');
+    });
+
+    it('Lifecycle safety: repeated openWorkspace on ToolRouter must close old Serena instances', async () => {
+      const testRouter = new ToolRouter(config);
+      await testRouter.initialize();
+
+      let closeClient1Calls = 0;
+      let closeTransport1Calls = 0;
+
+      const mockClient1 = {
+        close: async () => {
+          closeClient1Calls++;
+        },
+      };
+      const mockTransport1 = {
+        close: async () => {
+          closeTransport1Calls++;
+        },
+      };
+
+      // Inject active Serena connection for initial workspace
+      (testRouter.serena as any).serenaClient = mockClient1;
+      (testRouter.serena as any).serenaTransport = mockTransport1;
+      (testRouter.serena as any).isConnectedToSerena = true;
+
+      // Open new workspace
+      const tavernPath = path.resolve('d:/CODEX PROJECT/New-tavern');
+      await testRouter.openWorkspace(tavernPath);
+
+      assert.strictEqual(closeClient1Calls, 1, 'Old Serena client must be closed when opening new workspace');
+      assert.strictEqual(closeTransport1Calls, 1, 'Old Serena transport must be closed when opening new workspace');
+
+      // Clean up router
+      await testRouter.dispose();
+      testRouter.workspace.setRoot(root);
+    });
+
+    it('Lifecycle safety: failed Serena connection must close newly created transport and client', async () => {
+      const failingConfig = getDefaultConfig(root);
+      // Point custom command to a non-existent command to trigger connection failure
+      failingConfig.adapters.serena.customCommand = 'non_existent_serena_cmd_12345';
+      failingConfig.cacheDir = testCacheDir;
+
+      const adapter = new SerenaAdapter(failingConfig, cache);
+      await adapter.initialize();
+
+      assert.strictEqual((adapter as any).isConnectedToSerena, false);
+      assert.strictEqual((adapter as any).serenaClient, null);
+      assert.strictEqual((adapter as any).serenaTransport, null);
+      assert.strictEqual((adapter as any).serenaTools.size, 0);
+    });
   });
 
   // ==========================================
@@ -238,6 +602,71 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(prep.guidance.length > 0);
       assert.ok(prep.executiveSummary.includes('Target Task'));
       assert.ok(prep.formattedContent.includes('Repomix'));
+    });
+
+    it('Resilience: checkHealth should respect timeout, terminate hung process tree, and gracefully fallback', async () => {
+      const slowRepomix = new RepomixAdapter(config, cache);
+      const startTime = Date.now();
+
+      // Test with a tiny timeout (50ms) to ensure timeout handling kicks in without hanging
+      const health = await slowRepomix.checkHealth(50);
+      const elapsed = Date.now() - startTime;
+
+      assert.ok(health.available, 'Should be marked available');
+      // Either it finishes immediately if cached/fast or times out and falls back
+      if (health.source === 'fallback') {
+        assert.ok(health.details?.includes('timed out') || health.details?.includes('built-in'));
+      }
+      assert.ok(elapsed < 2000, `Health check must not block, took ${elapsed}ms`);
+      assert.strictEqual(slowRepomix.activeProcessCount, 0, 'Active process count must be 0 after completion or timeout');
+    });
+
+    it('Process Management & Dispose: should terminate all active child process trees on dispose()', async () => {
+      const managedRepomix = new RepomixAdapter(config, cache);
+
+      // Start a long-running child process simulated via checkHealth with large timeout
+      const healthPromise = managedRepomix.checkHealth(15000);
+
+      // Give it a few ms to spawn the child process
+      await new Promise((r) => setTimeout(r, 100));
+
+      assert.ok(managedRepomix.activeProcessCount >= 1, 'Should track active child process');
+
+      // Call dispose, which must kill the process tree and clear tracking
+      await managedRepomix.dispose();
+      assert.strictEqual(managedRepomix.activeProcessCount, 0, 'activeProcessCount must be 0 after dispose');
+
+      // The health check promise should settle gracefully without throwing unhandled rejection
+      const result = await healthPromise;
+      assert.ok(result.available);
+    });
+
+    it('P2 Fix: fallback packer must strictly cap files at maxFiles (e.g. maxFiles: 1)', async () => {
+      const fallbackResult = await (repomix as any).packWithFallback({ maxFiles: 1 });
+      assert.strictEqual(fallbackResult.fileCount, 1, 'maxFiles: 1 must collect strictly 1 file');
+    });
+
+    it('P2 Fix: fallback packer must output valid XML when outputFormat is xml', async () => {
+      const xmlResult = await (repomix as any).packWithFallback({ outputFormat: 'xml', maxFiles: 2 });
+      assert.ok(xmlResult.content.includes('<project_context'));
+      assert.ok(xmlResult.content.includes('<file path='));
+      assert.ok(xmlResult.content.includes('</project_context>'));
+    });
+
+    it('P2 Fix: candidateFiles and focusAreas filtering must be respected', async () => {
+      const candResult = await (repomix as any).packWithFallback({
+        candidateFiles: ['package.json'],
+        maxFiles: 5,
+      });
+      assert.strictEqual(candResult.fileCount, 1);
+      assert.ok(candResult.content.includes('package.json'));
+
+      const focusResult = await (repomix as any).packWithFallback({
+        include: ['src/Gateway'],
+        maxFiles: 10,
+      });
+      assert.ok(focusResult.fileCount > 0);
+      assert.ok(focusResult.content.includes('src/Gateway'));
     });
   });
 
@@ -336,6 +765,27 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(impact.formattedReport.includes('References:\n12'));
       assert.ok(impact.formattedReport.includes('Affected:\n- GameSession\n- SaveManager\n- ExportService'));
       assert.ok(impact.formattedReport.includes('Risk:\nHIGH'));
+    });
+
+    it('P1 Fix: non-existent/unindexed symbol must report UNKNOWN risk, UNCERTAIN confidence, and never claim safe', async () => {
+      const mysterySymbol = 'NonExistent_Ghost_Symbol_987654';
+      const impact = await router.impact.analyzeImpact(mysterySymbol);
+
+      assert.strictEqual(impact.riskLevel, 'UNKNOWN', 'Unindexed symbol risk must be UNKNOWN');
+      assert.strictEqual(impact.confidence, 'UNCERTAIN', 'Confidence must be UNCERTAIN');
+      assert.ok(impact.riskReason.includes('not found in workspace index'));
+      assert.ok(!impact.formattedReport.includes('Safe for targeted in-place refactoring'));
+      assert.ok(impact.recommendations.some((r) => r.includes('Verify symbol spelling')));
+    });
+
+    it('P1 Fix: local fallback reference scanner must ignore comment lines and non-code docs', async () => {
+      const testSerena = router.serena;
+      const refs = await testSerena.findReferences('ToolRouter');
+      for (const r of refs) {
+        assert.ok(!r.preview.startsWith('//'), `Preview must not be a comment: ${r.preview}`);
+        assert.ok(!r.preview.startsWith('/*'), `Preview must not be a comment: ${r.preview}`);
+        assert.ok(!r.file.endsWith('.md'), `Must not count markdown as code references: ${r.file}`);
+      }
     });
 
     it('ProjectDiagnostics should verify Windows and SDK health', async () => {
@@ -575,17 +1025,33 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.ok(plan.recommendedSteps.length > 0);
     });
 
-    it('Tool 9: wincode_safe_move_to_trash works safely', async () => {
+    it('Tool 9: wincode_safe_move_to_trash works safely with relative paths and rejects boundary violations', async () => {
       const tempTddFile = path.join(root, 'tdd_mcp_trash_test.txt');
       await fs.writeFile(tempTddFile, 'Temporary file to test MCP safe trash tool', 'utf-8');
 
+      // Valid relative path
       const res = await callMcp('tools/call', {
         name: 'wincode_safe_move_to_trash',
-        arguments: { filePath: tempTddFile, reason: 'Testing via MCP call' },
+        arguments: { filePath: 'tdd_mcp_trash_test.txt', reason: 'Testing via MCP call' },
       });
+      assert.ok(!res.result?.isError);
       const result = JSON.parse(res.result?.content?.[0]?.text);
       assert.strictEqual(result.success, true);
       assert.ok(result.trashPath.includes('trash'));
+
+      // Absolute path rejection via MCP
+      const absRes = await callMcp('tools/call', {
+        name: 'wincode_safe_move_to_trash',
+        arguments: { filePath: tempTddFile, reason: 'Absolute path rejection via MCP' },
+      });
+      assert.strictEqual(absRes.result?.isError, true);
+
+      // Traversal ../ rejection via MCP
+      const escapeRes = await callMcp('tools/call', {
+        name: 'wincode_safe_move_to_trash',
+        arguments: { filePath: '../escape_via_mcp.txt', reason: 'Escape rejection via MCP' },
+      });
+      assert.strictEqual(escapeRes.result?.isError, true);
     });
 
     it('Error Handling: Unknown tool name returns isError without crashing server', async () => {

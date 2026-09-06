@@ -69,6 +69,7 @@ export class ContextManager {
       outputFormat: opts.outputFormat || 'markdown',
       compress: opts.compress ?? (task.includes('架构') || task.toLowerCase().includes('architecture')),
       include: opts.focusAreas,
+      candidateFiles: opts.candidateFiles,
     };
 
     const snapshot = await this.repomix.packWorkspace(packOptions);
@@ -119,7 +120,19 @@ export class ContextManager {
     }
 
     formattedContent += `## 📦 Distilled Codebase Snapshot (Repomix)\n\n`;
-    formattedContent += snapshot.content;
+
+    // 5. Constrain output to maxTokensPerContext
+    const maxTokens = this.config.maxTokensPerContext || 32000;
+    const maxChars = maxTokens * 4;
+    let snapshotContent = snapshot.content;
+
+    if (formattedContent.length + snapshotContent.length > maxChars) {
+      const truncationNotice = `\n\n[Warning: Code snapshot truncated to satisfy maxTokensPerContext limit (${maxTokens} tokens)]\n`;
+      const availableChars = Math.max(500, maxChars - formattedContent.length - truncationNotice.length);
+      snapshotContent = snapshotContent.substring(0, availableChars) + truncationNotice;
+    }
+
+    formattedContent += snapshotContent;
 
     return {
       task,

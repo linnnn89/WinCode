@@ -38,10 +38,14 @@ async function runVerification() {
   console.log('✓ SerenaAdapter symbol search & reference tracking verified.');
 
   console.log('5. Testing RepomixAdapter & ContextManager...');
-  const context = await router.context.prepareContext('Refactor ToolRouter to add extensions', ['src/Core/ToolRouter.ts']);
-  console.log(`   Prepared context: ${context.summary}, estimated tokens: ${context.estimatedTokens}`);
-  assert.ok(context.targetFiles.includes('src/Core/ToolRouter.ts'), 'Should include target file');
-  assert.ok(context.packedContent.length > 0, 'Should have packed context content');
+  const context = await router.context.prepareContext({
+    task: 'Refactor ToolRouter to add extensions',
+    candidateFiles: ['src/Core/ToolRouter.ts', 'package.json'],
+    outputFormat: 'markdown',
+  });
+  console.log(`   Estimated tokens: ${context.metrics.estimatedTokens}, packedFiles: ${context.metrics.packedFiles}`);
+  assert.ok(context.formattedContent.length > 0, 'Should have packed context content');
+  assert.ok(context.metrics.packedFiles > 0, 'Should have packed candidate files');
   console.log('✓ ContextManager & RepomixAdapter verified.');
 
   console.log('6. Testing ArchitectureAnalyzer...');
@@ -52,9 +56,15 @@ async function runVerification() {
 
   console.log('7. Testing ImpactAnalyzer...');
   const impact = await router.impact.analyzeImpact('ToolRouter');
-  console.log(`   Impact for ToolRouter: Risk=${impact.riskLevel}, AffectedFiles=${impact.affectedFiles.length}, Refs=${impact.referencesCount}`);
-  assert.ok(impact.affectedFiles.length > 0, 'Impact analyzer should report affected files');
-  console.log('✓ ImpactAnalyzer verified.');
+  console.log(`   Impact for ToolRouter: Risk=${impact.riskLevel}, Confidence=${impact.confidence}, Refs=${impact.referencesCount}, Affected=${impact.affected.join(', ')}`);
+  assert.ok(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(impact.riskLevel));
+  assert.ok(impact.recommendations.length > 0, 'Impact analyzer should report recommendations');
+
+  // Verify unknown symbol returns UNKNOWN
+  const unknownImpact = await router.impact.analyzeImpact('NonExistent_Probe_Symbol_999');
+  assert.strictEqual(unknownImpact.riskLevel, 'UNKNOWN', 'Unindexed symbol must be reported as UNKNOWN');
+  assert.strictEqual(unknownImpact.confidence, 'UNCERTAIN');
+  console.log('✓ ImpactAnalyzer verified (including UNKNOWN safety guard).');
 
   console.log('8. Testing ProjectDiagnostics...');
   const diag = await router.diagnostics.runDiagnostics();
@@ -67,7 +77,7 @@ async function runVerification() {
   await fs.writeFile(tempTestFile, 'This is a temporary file to verify safe trash move policy.', 'utf-8');
   assert.ok(await fs.stat(tempTestFile).then(() => true).catch(() => false), 'Temp file should exist');
 
-  const trashResult = await router.workspace.moveToTrash(tempTestFile, 'Automated verification test of trash policy');
+  const trashResult = await router.workspace.moveToTrash('temp_test_to_trash.txt', 'Automated verification test of trash policy');
   console.log('   Trash operation result:', trashResult.message);
   assert.ok(trashResult.success, 'Trash operation should succeed');
 

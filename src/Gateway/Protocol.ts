@@ -94,7 +94,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_find_references',
-    description: 'Finds all call sites and usages of a specified symbol across the repository.',
+    description: 'Finds all call sites and usages of a specified symbol across the repository. Uses Serena semantic references when available; degrades to local text retrieval with explicit limitations annotation (text retrieval does not guarantee symbol identity or cross-file reference completeness).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -102,13 +102,17 @@ export const WINCODE_TOOLS: Tool[] = [
           type: 'string',
           description: 'Exact name of the symbol to trace.',
         },
+        relativePath: {
+          type: 'string',
+          description: 'Optional relative path to the file containing the symbol definition. If omitted, it will be automatically resolved.',
+        },
       },
       required: ['symbolName'],
     },
   },
   {
     name: 'analyze_change_impact',
-    description: 'Analyzes downstream blast radius, affected caller components, risk rating, and architectural decoupling recommendations before modifying code (AI change safety guard).',
+    description: 'Analyzes downstream blast radius, affected caller components, risk rating, and architectural decoupling recommendations before modifying code (AI change safety guard). When operating in degraded text retrieval mode, never interprets "0 references found" as low risk or safe.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -122,7 +126,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_analyze_change_impact',
-    description: 'Alias for analyze_change_impact. Analyzes blast radius, affected callers, and risk rating before modifying code.',
+    description: 'Alias for analyze_change_impact. Analyzes blast radius, affected callers, and risk rating before modifying code (never treats degraded 0 references as low risk).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -168,7 +172,7 @@ export const WINCODE_TOOLS: Tool[] = [
       properties: {
         filePath: {
           type: 'string',
-          description: 'Relative or absolute path of the file to move to trash.',
+          description: 'Non-empty relative path of the file within the current workspace to safely move to trash. Absolute paths and drive-relative paths (e.g., C:foo) are strictly rejected.',
         },
         reason: {
           type: 'string',

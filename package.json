@@ -10,7 +10,8 @@
     "dev": "tsx src/index.ts",
     "test": "tsx --test tests/tdd-suite.test.ts",
     "test:verify": "tsx tests/verify.ts",
-    "test:e2e": "tsx scripts/test-mcp-client.ts"
+    "test:e2e": "tsx scripts/test-mcp-client.ts",
+    "typecheck": "tsc -p tsconfig.test.json"
   },
   "keywords": [
     "mcp",

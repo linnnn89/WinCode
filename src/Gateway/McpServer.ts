@@ -165,7 +165,8 @@ export class WinCodeMcpServer {
 
           case 'wincode_find_references': {
             const symbolName = String(args.symbolName || '');
-            const result = await this.router.serena.findReferencesDetailed(symbolName);
+            const relativePath = args.relativePath ? String(args.relativePath) : undefined;
+            const result = await this.router.serena.findReferencesDetailed(symbolName, relativePath);
             return {
               content: [
                 {
@@ -234,6 +235,7 @@ export class WinCodeMcpServer {
                   text: JSON.stringify(result, null, 2),
                 },
               ],
+              isError: !result.success,
             };
           }
 

@@ -77,17 +77,97 @@ export class WorkspaceManager {
 
   constructor(config: WinCodeConfig) {
     this.config = config;
+    if (this.config.workspaceRoot && !this.config.trashDir) {
+      this.config.trashDir = path.join(this.config.workspaceRoot, 'trash');
+    }
   }
 
   get root(): string {
     return this.config.workspaceRoot;
   }
 
+  get trashDir(): string {
+    return this.config.trashDir;
+  }
+
   /**
-   * Sets the workspace root path
+   * Checks if targetPath is strictly inside parentDir (not parentDir itself, and not outside)
+   */
+  private isPathInside(parentDir: string, targetPath: string): boolean {
+    const resolvedParent = path.resolve(parentDir);
+    const resolvedTarget = path.resolve(targetPath);
+
+    const normalizedParent = process.platform === 'win32' ? resolvedParent.toLowerCase() : resolvedParent;
+    const normalizedTarget = process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
+
+    const rel = path.relative(normalizedParent, normalizedTarget);
+    if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Checks if targetPath is parentDir itself or strictly inside parentDir
+   */
+  private isPathInsideOrEqual(parentDir: string, targetPath: string): boolean {
+    const resolvedParent = path.resolve(parentDir);
+    const resolvedTarget = path.resolve(targetPath);
+
+    const normalizedParent = process.platform === 'win32' ? resolvedParent.toLowerCase() : resolvedParent;
+    const normalizedTarget = process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
+
+    if (normalizedParent === normalizedTarget) {
+      return true;
+    }
+
+    const rel = path.relative(normalizedParent, normalizedTarget);
+    if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Resolves the real filesystem path, following any symlinks or directory junctions.
+   * If the target does not exist, traverses up to the nearest existing ancestor.
+   */
+  private async getRealPath(targetPath: string): Promise<string> {
+    let current = path.resolve(targetPath);
+    const remainingSegments: string[] = [];
+
+    while (true) {
+      try {
+        const real = await fs.realpath(current);
+        return remainingSegments.length > 0 ? path.join(real, ...remainingSegments) : real;
+      } catch {
+        const parent = path.dirname(current);
+        if (parent === current) {
+          return targetPath;
+        }
+        remainingSegments.unshift(path.basename(current));
+        current = parent;
+      }
+    }
+  }
+
+  /**
+   * Sets the workspace root path and synchronizes the trash directory
    */
   setRoot(newRoot: string): void {
-    this.config.workspaceRoot = path.resolve(newRoot);
+    const oldRoot = this.config.workspaceRoot ? path.resolve(this.config.workspaceRoot) : '';
+    const resolvedRoot = path.resolve(newRoot);
+    this.config.workspaceRoot = resolvedRoot;
+
+    // Synchronize trashDir to the new workspace root
+    if (!oldRoot || !this.config.trashDir || this.isPathInside(oldRoot, this.config.trashDir) || path.resolve(this.config.trashDir) === path.join(oldRoot, 'trash')) {
+      const relTrash = (oldRoot && this.config.trashDir && this.isPathInside(oldRoot, this.config.trashDir))
+        ? path.relative(oldRoot, this.config.trashDir)
+        : 'trash';
+      this.config.trashDir = path.resolve(resolvedRoot, relTrash);
+    } else {
+      this.config.trashDir = path.resolve(resolvedRoot, 'trash');
+    }
   }
 
   /**
@@ -427,12 +507,73 @@ export class WorkspaceManager {
 
   /**
    * Safe file deletion policy: Moves files to the project trash directory.
+   * Only accepts non-empty relative paths strictly within the workspace.
    */
-  async moveToTrash(relativeOrAbsolutePath: string, reason?: string): Promise<{ success: boolean; trashPath: string; message: string }> {
-    const targetPath = path.isAbsolute(relativeOrAbsolutePath)
-      ? relativeOrAbsolutePath
-      : path.join(this.root, relativeOrAbsolutePath);
+  async moveToTrash(relativeFilePath: string, reason?: string): Promise<{ success: boolean; trashPath: string; message: string }> {
+    // 1. Validate non-empty input
+    if (!relativeFilePath || !relativeFilePath.trim()) {
+      return {
+        success: false,
+        trashPath: '',
+        message: 'Failed to move file to trash: Path cannot be empty.',
+      };
+    }
 
+    // 2. Reject absolute paths, Windows drive-relative paths (e.g. C:foo), and UNC paths
+    if (
+      path.isAbsolute(relativeFilePath) ||
+      /^[a-zA-Z]:/.test(relativeFilePath) ||
+      /^(\/\/|\\\\)/.test(relativeFilePath)
+    ) {
+      return {
+        success: false,
+        trashPath: '',
+        message: `Failed to move file to trash: Only non-empty relative paths within the workspace are accepted. Received: "${relativeFilePath}".`,
+      };
+    }
+
+    const targetPath = path.resolve(this.root, relativeFilePath);
+
+    // 3. Lexical boundary check: must be strictly inside workspace root (reject root itself and parent traversal)
+    if (!this.isPathInside(this.root, targetPath)) {
+      return {
+        success: false,
+        trashPath: '',
+        message: `Failed to move file to trash: Path "${relativeFilePath}" is outside the workspace boundary.`,
+      };
+    }
+
+    // 4. Lexical trash directory & sub-tree check: cannot move trash root or anything inside trash
+    if (this.isPathInsideOrEqual(this.config.trashDir, targetPath)) {
+      return {
+        success: false,
+        trashPath: '',
+        message: 'Failed to move file to trash: Cannot move items from or within the trash directory.',
+      };
+    }
+
+    // 5. Realpath boundary check: resolve symlinks and Windows junctions to prevent escaping via links
+    const realRoot = await this.getRealPath(this.root);
+    const realTarget = await this.getRealPath(targetPath);
+    const realTrash = await this.getRealPath(this.config.trashDir);
+
+    if (!this.isPathInside(realRoot, realTarget)) {
+      return {
+        success: false,
+        trashPath: '',
+        message: `Failed to move file to trash: Target path "${relativeFilePath}" resolves outside the workspace via symlink or junction.`,
+      };
+    }
+
+    if (this.isPathInsideOrEqual(realTrash, realTarget)) {
+      return {
+        success: false,
+        trashPath: '',
+        message: 'Failed to move file to trash: Cannot move items from or within the trash directory.',
+      };
+    }
+
+    // All checks passed without side-effects -> proceed to file operations
     await fs.mkdir(this.config.trashDir, { recursive: true });
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');

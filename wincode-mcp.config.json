@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "wincode": {
+      "command": "node",
+      "args": [
+        "D:\\CODEX PROJECT\\WinCode MCP\\dist\\index.js",
+        "--workspace",
+        "D:\\CODEX PROJECT\\WinCode MCP"
+      ]
+    }
+  }
+}

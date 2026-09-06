@@ -2,6 +2,19 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 export const WINCODE_TOOLS: Tool[] = [
   {
+    name: 'wincode_hello_world',
+    description: 'Minimal connectivity and heartbeat verification tool for AI coding agents (Codex, Claude, etc.). Confirms WinCode Gateway is online.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        greeting: {
+          type: 'string',
+          description: 'Optional custom greeting message to echo back.',
+        },
+      },
+    },
+  },
+  {
     name: 'wincode_analyze_workspace',
     description: 'High-level workspace and architecture analysis. Detects project types, .NET solutions, architecture layers, and key entry points without dumping raw files.',
     inputSchema: {

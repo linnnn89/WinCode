@@ -42,6 +42,41 @@ export class WinCodeMcpServer {
 
       try {
         switch (name) {
+          case 'wincode_hello_world': {
+            const greeting = args.greeting ? String(args.greeting) : 'Hello from WinCode MCP Gateway!';
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'online',
+                      message: greeting,
+                      gateway: 'WinCode Agent Gateway',
+                      version: '0.1.0',
+                      platform: process.platform,
+                      workspace: this.router.config.workspaceRoot,
+                      timestamp: new Date().toISOString(),
+                      capabilities: [
+                        'wincode_hello_world',
+                        'wincode_analyze_workspace',
+                        'wincode_prepare_context',
+                        'wincode_find_code_symbol',
+                        'wincode_find_references',
+                        'wincode_analyze_change_impact',
+                        'wincode_diagnose_project',
+                        'wincode_plan_refactoring',
+                        'wincode_safe_move_to_trash',
+                      ],
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
           case 'wincode_analyze_workspace': {
             const report = await this.router.architecture.analyze();
             return {

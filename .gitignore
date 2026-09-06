@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+.deps/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Local cache & data
+.cache/
+*.log
+
+# Trash folder (files to be deleted are moved here instead of hard delete)
+trash/
+!trash/.gitkeep
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

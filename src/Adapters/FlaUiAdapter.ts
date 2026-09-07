@@ -18,6 +18,7 @@ import {
   UiInspectResult,
   UiErrorCodes,
   UI_INSPECT_DEFAULTS,
+  UiListWindowsRequest, validateWindowQuery,
 } from '../Core/UiContracts.js';
 
 export class FlaUiAdapter implements IAdapter {
@@ -220,6 +221,16 @@ export class FlaUiAdapter implements IAdapter {
     }
   }
 
+  async listWindows(request: UiListWindowsRequest, signal?: AbortSignal): Promise<UiInspectResult> {
+    try { validateWindowQuery(request); }
+    catch (error) {
+      return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: randomUUID(), success: false,
+        errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message };
+    }
+    // Reuse the same queue, cancellation deadline and exit-confirmed cleanup as inspection.
+    return this.inspect({ ...request, action: 'listWindows', timeoutMs: 3000 }, signal);
+  }
+
   async inspect(
     request: UiInspectRequest, signal?: AbortSignal
   ): Promise<UiInspectResult> {
@@ -242,6 +253,11 @@ export class FlaUiAdapter implements IAdapter {
       ...request,
       requestId,
     };
+    if ((request.backgroundOnly !== undefined && typeof request.backgroundOnly !== 'boolean') ||
+        (request.backgroundOnly && (!request.pid || !request.hwnd))) {
+      return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
+        errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: 'backgroundOnly requires explicit pid and hwnd.' };
+    }
 
     if (this.shuttingDown) {
       return {
@@ -265,7 +281,7 @@ export class FlaUiAdapter implements IAdapter {
       };
     }
 
-    if (!normRequest.pid && !normRequest.hwnd) {
+    if (normRequest.action !== 'listWindows' && !normRequest.pid && !normRequest.hwnd) {
       return {
         schemaVersion: '1.0',
         protocolVersion: '1.0',
@@ -392,6 +408,10 @@ export class FlaUiAdapter implements IAdapter {
       schemaVersion: request.schemaVersion ?? '1.0',
       requestId: request.requestId,
       action: request.action ?? 'inspect',
+      backgroundOnly: request.backgroundOnly,
+      processName: request.processName,
+      titleContains: request.titleContains,
+      maxWindows: request.maxWindows,
       pid: request.pid,
       hwnd: request.hwnd,
       capture: request.capture ?? 'none',

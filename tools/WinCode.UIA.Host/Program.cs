@@ -48,10 +48,10 @@ public static class Program
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hWnd);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
     [DllImport("user32.dll")]
@@ -108,9 +108,20 @@ public static class Program
                 return;
             }
 
+            if (request.Action == "listWindows")
+            {
+                WriteSuccessResponse(request.RequestId, ListWindows(request));
+                return;
+            }
+
             if (request.Pid <= 0 && string.IsNullOrWhiteSpace(request.Hwnd))
             {
                 WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "Either 'pid' or 'hwnd' must be provided.");
+                return;
+            }
+            if (request.BackgroundOnly && (request.Pid <= 0 || string.IsNullOrWhiteSpace(request.Hwnd)))
+            {
+                WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "backgroundOnly requires explicit pid and hwnd.");
                 return;
             }
 
@@ -129,6 +140,50 @@ public static class Program
             Console.Error.WriteLine($"[WinCode.UIA.Host] Unhandled exception: {ex}");
             WriteErrorResponse(request?.RequestId, "HOST_ERROR", ex.Message);
         }
+    }
+
+    private static InspectResponse ListWindows(InspectRequest request)
+    {
+        int limit = request.MaxWindows ?? 30;
+        if (request.Pid < 0 || limit < 1 || limit > 100 ||
+            new[] { request.ProcessName, request.TitleContains }.Any(s => s != null &&
+                (string.IsNullOrWhiteSpace(s) || s.Length > 128 || s.Any(char.IsControl))))
+            return new InspectResponse { Success = false, ErrorCode = "INVALID_ARGUMENT", ErrorMessage = "Invalid window filters." };
+
+        var windows = new List<CandidateWindowDto>();
+        var watch = Stopwatch.StartNew();
+        string? stopReason = null;
+        // No UIA COM objects or activation. Native enumeration is bounded independently of output.
+        // Do not throw across a native callback; the parent additionally enforces the 3s deadline.
+        bool completed = EnumWindows((handle, _) =>
+        {
+            if (watch.ElapsedMilliseconds >= 2000) { stopReason = "timeout"; return false; }
+            if (!IsWindowVisible(handle)) return true;
+            GetWindowThreadProcessId(handle, out var pid);
+            if (pid == 0 || (request.Pid > 0 && pid != request.Pid)) return true;
+            if (!GetWindowRect(handle, out var rect)) return true;
+            var title = new StringBuilder(32769);
+            GetWindowText(handle, title, title.Capacity);
+            if (request.TitleContains != null && !title.ToString().Contains(request.TitleContains, StringComparison.OrdinalIgnoreCase)) return true;
+            string? processName = null;
+            try { using var process = Process.GetProcessById((int)pid); processName = process.ProcessName; }
+            catch (Exception) { /* A vanished or inaccessible process must not fail other candidates. */ }
+            if (request.ProcessName != null && !string.Equals(processName, request.ProcessName, StringComparison.OrdinalIgnoreCase)) return true;
+            // Discover one extra match before marking the output cap, rather than claiming a total.
+            if (windows.Count == limit) { stopReason = "maxWindows"; return false; }
+            var className = new StringBuilder(257);
+            GetClassName(handle, className, className.Capacity);
+            GetWindowThreadProcessId(handle, out var finalPid);
+            if (finalPid != pid || !IsWindowVisible(handle)) return true;
+            windows.Add(new CandidateWindowDto { Pid = (int)pid, Hwnd = $"0x{handle.ToInt64():X}",
+                Title = title.ToString()[..Math.Min(256, title.Length)], TitleTruncated = title.Length > 256, ClassName = className.ToString(),
+                ProcessName = processName, ProcessNameStatus = processName == null ? "unavailable" : "available",
+                Bounds = new RectDto(rect.Left, rect.Top, rect.Width, rect.Height), IsIconic = IsIconic(handle) });
+            return true;
+        }, IntPtr.Zero);
+        return new InspectResponse { Success = true, Action = "listWindows", Windows = windows,
+            CapturedAt = DateTimeOffset.UtcNow.ToString("O"), EnumerationComplete = completed,
+            Truncated = !completed, TruncateReason = stopReason ?? (completed ? null : "enumerationFailed") };
     }
 
     private static InspectResponse ExecuteInspect(InspectRequest request, CancellationToken ct)
@@ -220,7 +275,7 @@ public static class Program
 
         if (captureMode is "original" or "annotated")
         {
-            var capture = CaptureWindowArea(targetHwnd, captureRect);
+            var capture = CaptureWindowArea(targetHwnd, captureRect, request.BackgroundOnly);
             if (capture.Bitmap != null)
             {
                 using var rawBitmap = capture.Bitmap;
@@ -248,6 +303,13 @@ public static class Program
                     imageOmittedReason = reason;
                 }
             }
+            else
+            {
+                imageOmitted = true;
+                imageOmittedReason = request.BackgroundOnly
+                    ? "Window capture failed; screen fallback disabled by backgroundOnly."
+                    : "Window capture failed.";
+            }
         }
 
         return new InspectResponse
@@ -260,6 +322,7 @@ public static class Program
             Hwnd = $"0x{targetHwnd.ToInt64():X}",
             CaptureOrigin = captureOrigin,
             CaptureMethod = captureMethod,
+            BackgroundOnly = request.BackgroundOnly,
             ImageWidth = imageWidth,
             ImageHeight = imageHeight,
             ImageScale = imageScale,
@@ -438,7 +501,7 @@ public static class Program
     private const uint PW_RENDERFULLCONTENT = 2;
     private const int SRCCOPY = 0x00CC0020;
 
-    private static (Bitmap? Bitmap, string? Method) CaptureWindowArea(IntPtr hwnd, RECT rect)
+    private static (Bitmap? Bitmap, string? Method) CaptureWindowArea(IntPtr hwnd, RECT rect, bool backgroundOnly)
     {
         if (rect.Width <= 0 || rect.Height <= 0) return (null, null);
 
@@ -449,7 +512,8 @@ public static class Program
             {
                 g.Clear(Color.Black);
 
-                // Priority 1: PrintWindow with PW_RENDERFULLCONTENT (handles WPF hardware acceleration & occlusion)
+                // Window-directed capture does not require foreground activation. Success is not
+                // proof of usable pixels: rendering support depends on the target application.
                 if (hwnd != IntPtr.Zero && IsWindow(hwnd))
                 {
                     var hdc = g.GetHdc();
@@ -470,6 +534,10 @@ public static class Program
                         g.ReleaseHdc(hdc);
                     }
                 }
+
+                // A covered screen region belongs to the foreground application (e.g. a game).
+                // Fail closed before any screen DC is read; never label those pixels as the target.
+                if (backgroundOnly) { bmp.Dispose(); return (null, null); }
 
                 // Priority 2: BitBlt from screen DC
                 var hdcDest = g.GetHdc();
@@ -811,6 +879,10 @@ public static class Program
 
 public class InspectRequest
 {
+    public bool BackgroundOnly { get; set; }
+    public string? ProcessName { get; set; }
+    public string? TitleContains { get; set; }
+    public int? MaxWindows { get; set; }
     public string? SchemaVersion { get; set; }
     public string? RequestId { get; set; }
     public string? Action { get; set; } // "inspect" | "health" | "ping"
@@ -824,6 +896,10 @@ public class InspectRequest
 
 public class InspectResponse
 {
+    public bool? BackgroundOnly { get; set; }
+    public List<CandidateWindowDto>? Windows { get; set; }
+    public string? CapturedAt { get; set; }
+    public bool? EnumerationComplete { get; set; }
     public string SchemaVersion { get; set; } = "1.0";
     public string ProtocolVersion { get; set; } = "1.0";
     public string? RequestId { get; set; }
@@ -886,6 +962,10 @@ public class RectDto
 
 public class CandidateWindowDto
 {
+    public bool? TitleTruncated { get; set; }
+    public int? Pid { get; set; }
+    public string? ProcessName { get; set; }
+    public string? ProcessNameStatus { get; set; }
     public string Hwnd { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string ClassName { get; set; } = string.Empty;

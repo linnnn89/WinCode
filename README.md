@@ -1,5 +1,23 @@
 # WinCode
 
+### 后台取证：避免前台游戏污染截图
+
+对 wincode_ui_inspect 或 wincode_ui_review 传入 backgroundOnly: true，并同时指定 pid 与 hwnd。此模式不激活或还原窗口，只允许 PrintWindow 窗口定向截图；失败后禁用 BitBlt/CopyFromScreen 屏幕回退，正常返回的捕获失败保留控件树并设置 imageOmitted。默认 false 保持旧行为；capture: "none" 可完全跳过截图。
+
+PrintWindow 返回成功不保证图片可用；最小化窗口仍按原契约拒绝，后台暂停渲染的应用可能黑屏或陈旧。若原生调用挂起并触发整个 Helper 超时，本次请求仍返回 TIMEOUT，不能保证保留树。模式不会自动操纵前台或修改游戏设置。
+
+显式手动验收脚本：npx tsx scripts/verify-ui-background.ts。脚本创建专用不激活测试夹具，采集 5 次原始窗口图片和树，每 100ms 采样前台 PID/HWND，保存到 Git 忽略的 test-tmp/background-*，最后关闭测试夹具。此脚本不加入默认 npm test；采样不是零失焦的严格证明，截图内容需目视核验。
+
+
+### v0.8.0 window discovery / 窗口发现（第一阶段）
+
+新增只读 wincode_ui_list_windows。可传 pid、processName（不含 .exe，忽略大小写精确匹配）、titleContains（忽略大小写字面量子串）、maxWindows（默认 30，上限 100）；筛选条件同时满足。返回窗口 PID/HWND、标题、进程名、状态、采集时间及 enumerationComplete。仅列出可见顶层窗口，含最小化窗口；不激活窗口、不截图、不读取控件树。标题输出最多 256 字符，titleTruncated 明示裁剪；进程信息无法读取时标记 unavailable。
+
+示例：wincode_ui_list_windows({ processName: "TavernDesk.App", maxWindows: 30 })。选定候选后，将返回的 pid 和 hwnd 一起传给 wincode_ui_inspect/review。窗口标题不证明源码归属，结果可能立即失效；达到数量或时间预算时 truncated=true，不承诺完整列表。Host 枚举软预算 2 秒，Adapter 含排队硬期限 3 秒；进程清理时间另计。新能力沿用 Helper 串行化、取消、退出确认与 128 KiB MCP 文本预算，不缓存窗口句柄。
+
+局部控件查询、状态模式读取仍未实现。本轮 SDK stdio 端到端已验证；Codex 原生工具接入仍需客户端单独配置/刷新，未自动更改客户端设置。
+
+
 ### v0.7.2 optional UI text evidence / 可选界面关键词检索
 
 在现有 wincode_ui_review 参数中增加 textQueries，例如 ["TavernDesk", "FirstRun.Language.Title"]。最多 5 个显式关键词，每个 80 字符，仅扫描 candidateFiles 指定的 XAML，复用既有文件、时间及 128 KiB 文本输出预算。
@@ -236,7 +254,7 @@ npx tsx --test tests/ui-inspect-mcp.test.ts
 npm run test:verify
 ```
 
-`npm test` runs the eight suites listed in `package.json`, including UI MCP, hardening, source-review and v0.7.1 acceptance tests. End-to-end MCP cases spawn `dist/index.js`, so build first.
+`npm test` runs the ten suites listed in `package.json`, including UI MCP, hardening, source-review and v0.7.1 acceptance tests. End-to-end MCP cases spawn `dist/index.js`, so build first.
 `tests/ui-inspect-mcp.test.ts` executes end-to-end MCP UI inspection tests against a live WPF fixture.
 
 Default tests use `tests/fixtures/dotnet-mini`. To optionally exercise a local live solution:
@@ -442,7 +460,7 @@ npx tsx --test tests/ui-inspect-mcp.test.ts
 npm run test:verify
 ```
 
-`npm test` 会运行 `package.json` 中的八个套件，包括 UI MCP 端到端、加固、源码关联及 v0.7.1 验收测试。端到端 MCP 用例会拉起 `dist/index.js`，所以要先 build。
+`npm test` 会运行 `package.json` 中的十个套件，包括 UI MCP 端到端、加固、源码关联及 v0.7.1 验收测试。端到端 MCP 用例会拉起 `dist/index.js`，所以要先 build。
 `tests/ui-inspect-mcp.test.ts` 会拉起真实 WPF 测试夹具并执行 MCP UI 取证全链路端到端测试。
 
 默认测试使用 `tests/fixtures/dotnet-mini`。若要可选跑本地真实解决方案：

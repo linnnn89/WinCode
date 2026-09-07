@@ -2,6 +2,17 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 export const WINCODE_TOOLS: Tool[] = [
   {
+    name: 'wincode_ui_list_windows',
+    description: 'Lists visible top-level Windows windows without activation, screenshots or control traversal. Optional filters are combined with AND. Select a returned PID and HWND explicitly; titles do not establish project ownership. Results may become stale immediately.',
+    annotations: { readOnlyHint: true, destructiveHint: false },
+    inputSchema: { type: 'object', additionalProperties: false, properties: {
+      pid: { type: 'integer', minimum: 1, maximum: 2147483647 },
+      processName: { type: 'string', minLength: 1, maxLength: 128, description: 'Exact process name without .exe, case-insensitive.' },
+      titleContains: { type: 'string', minLength: 1, maxLength: 128, description: 'Literal case-insensitive title substring.' },
+      maxWindows: { type: 'integer', minimum: 1, maximum: 100, default: 30 },
+    } },
+  },
+  {
     name: 'workspace_open',
     description: 'Opens and analyzes a project workspace directory. Identifies project type (dotnet, node, python, etc.), solution file, project count, primary language, git status, metadata, and file tree.',
     inputSchema: {
@@ -210,6 +221,10 @@ export const WINCODE_TOOLS: Tool[] = [
           enum: ['none', 'original', 'annotated'],
           default: 'none',
           description: 'Screenshot capture mode: "none" (default), "original" (raw window image), or "annotated" (with numbered badges matching UiNode.id).',
+        },
+        backgroundOnly: {
+          type: 'boolean', default: false,
+          description: 'Require explicit PID+HWND; never use screen-pixel capture fallback. No activation or restore. Window capture may fail or produce unusable pixels; inspect captureMethod and imageOmitted.',
         },
         maxDepth: {
           type: 'integer',

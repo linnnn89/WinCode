@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 (unreleased, stage 1)
+
+- Add opt-in backgroundOnly inspection/review requiring PID+HWND, disabling screen capture fallback and reporting normal capture failure without discarding the tree.
+- Add no-activate background fixture and opt-in live foreground sampling acceptance script.
+
+- Add bounded read-only top-level window discovery with explicit filters, PID/HWND candidates and completeness metadata.
+- Reuse helper cancellation, timeout and serialized lifecycle; preserve Unicode window titles.
+- Add duplicate-window WPF fixture and stdio MCP acceptance coverage. Local subtree queries and pattern state inspection remain deferred.
+
 ## 0.7.2 (unreleased)
 
 - Add optional bounded textQueries to UI review; preserve independent ID candidates and runtime evidence.

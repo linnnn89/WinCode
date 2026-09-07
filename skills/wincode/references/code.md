@@ -4,6 +4,8 @@
 
 怀疑源码与连接不同步时，先调用 wincode_hello_world({toolName:"wincode_prepare_context"})，对照本连接 tools/list 的参数及 schemaHash，并记录 runtime.instanceId/build.buildId。旧实例没有这些字段时明确为旧契约，不再反复尝试新参数。构建后需要客户端重连；build.status=unknown 不能当成当前源码已运行。test:e2e 只证明它自己启动的隔离 stdio 进程。
 
+lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details 中的 missingRanges/nextRequest。末行 endLineComplete=false 时从该整行补取，不能把“行号落入区间”算作完整正文。nextRequest 可能提高预算；maximum-budget-without-progress 表示不要反复提交同一请求。明细缺省还需检查 omittedItemCount。scopeFiles/symbol 的 coverage=null，taskCoverage=null；queryComplete 或非空片段均不证明整个方法覆盖。
+
 | 目的 | 调用 |
 |---|---|
 | 打开/切换项目 | workspace_open({path: "I:/project"}) |

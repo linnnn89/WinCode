@@ -29,6 +29,8 @@ export interface ContextEvidence {
   symbol?: string;
   startLine: number;
   endLine: number;
+  /** Whether the final displayed line contains its entire source text, excluding its newline. */
+  endLineComplete?: boolean;
   locationKind: 'symbol' | 'file-start' | 'full-file' | 'line-range';
   truncated: boolean;
   snippet: string;
@@ -36,6 +38,8 @@ export interface ContextEvidence {
 }
 
 export interface PreparedContextResult {
+  /** Internal immutable request coordinates; serialized coverage is computed after all clipping. */
+  requestedLineRanges?: { file: string; startLine: number; endLine: number }[];
   task: string;
   project: {
     name: string;
@@ -279,7 +283,8 @@ export class ContextManager {
       if (opts.symbol && !selectedSymbols.has(rel)) continue;
       if (ranges.size && !ranges.has(rel)) continue;
       if (usedChars >= maxChars || evidence.length >= 20) { truncated = true; break; }
-      const snippet = await this.readSnippet(rel, [...selectedSymbols.values()], includeFullText, Math.min(4000, maxChars - usedChars), fileIssues, ranges.get(rel), sourceContents.get(rel));
+      const snippet = await this.readSnippet(rel, [...selectedSymbols.values()], includeFullText,
+        ranges.has(rel) ? maxChars - usedChars : Math.min(4000, maxChars - usedChars), fileIssues, ranges.get(rel), sourceContents.get(rel));
       if (!snippet) continue;
       const symbol = snippet.symbol;
       evidence.push({
@@ -288,6 +293,7 @@ export class ContextManager {
         symbol: symbol?.name,
         startLine: snippet.startLine,
         endLine: snippet.endLine,
+        endLineComplete: snippet.endLineComplete,
         locationKind: ranges.has(rel) ? 'line-range' : includeFullText ? 'full-file' : symbol ? 'symbol' : 'file-start',
         truncated: snippet.truncated,
         snippet: snippet.text,
@@ -415,6 +421,7 @@ export class ContextManager {
     }));
 
     return {
+      ...(ranges.size ? { requestedLineRanges: [...ranges].map(([file, range]) => ({ file, startLine: range.startLine, endLine: range.endLine })) } : {}),
       task,
       project: {
         name: identity.name,
@@ -531,7 +538,7 @@ export class ContextManager {
     issues: PreparedContextResult['fileIssues'],
     range?: { startLine: number; endLine: number },
     sourceContent?: string
-  ): Promise<{ text: string; startLine: number; endLine: number; truncated: boolean; symbol?: CodeSymbol } | null> {
+  ): Promise<{ text: string; startLine: number; endLine: number; endLineComplete: boolean; truncated: boolean; symbol?: CodeSymbol } | null> {
     try {
       const fullPath = await this.resolveFile(rel);
       const stat = await fs.stat(fullPath);
@@ -556,7 +563,9 @@ export class ContextManager {
         text = clipContextText(slice, maxChars);
       }
       const endLine = start + text.split('\n').length;
-      return { text, startLine: start + 1, endLine, truncated: Boolean(skippedPrefix) || text.length < slice.length,
+      return { text, startLine: start + 1, endLine,
+        endLineComplete: text.length === slice.length || slice[text.length] === '\n',
+        truncated: Boolean(skippedPrefix) || text.length < slice.length,
         symbol: symbol && symbol.line! >= start + 1 && symbol.line! <= endLine ? symbol : undefined };
     } catch (error) {
       issues.push({ path: rel, reason: this.readIssue(error) });

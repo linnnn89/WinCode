@@ -89,7 +89,7 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_prepare_context',
-    description: 'Returns compact file evidence with actual source ranges and omission metadata. maxTokens budgets ALL response text using characters/4 (not a model tokenizer). Set includeFullText for packed bodies; legacy opts into JSON plus Markdown.',
+    description: 'Returns compact file evidence with actual source ranges and omission metadata. Explicit lineRanges report final complete-line coverage and recoverable missing ranges after serialization; a partial last line is not covered. Other requests do not establish full method/task coverage. maxTokens budgets ALL response text using characters/4 (not a model tokenizer). Set includeFullText for packed bodies; legacy opts into JSON plus Markdown.',
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.3
+
+- Explicit line-range requests use the available response budget instead of a fixed 4000-character source cap. Final serialization recomputes complete-line coverage, partial tail lines and omission reasons.
+- Recoverable gaps offer bounded stateless continuation; missing/EOF inputs and maximum-budget retries cannot silently loop. Non-range excerpts do not claim method/task coverage.
+- Add opt-in TavernDesk source acceptance with actual body/range assertions, separate from host-connection and GUI validation.
+
 ## 0.9.2
 
 - Build manifests fingerprint source inputs and compiled outputs; runtime identity is frozen at startup and reports unknown for missing, stale or development builds.

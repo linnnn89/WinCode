@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { IAdapter, AdapterHealth, AdapterLastError, UpstreamConnectionStatus } from './IAdapter.js';
 import { WINCODE_VERSION, WinCodeConfig, WinCodeTimeouts, getDefaultTimeouts } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';

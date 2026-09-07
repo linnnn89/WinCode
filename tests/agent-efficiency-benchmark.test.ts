@@ -4,7 +4,7 @@ import { EvidenceOverlap, runBenchmark, validateEvidence, writeBenchmarkReport }
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Client } from '@modelcontextprotocol/client';
 
 it('evidence overlap distinguishes partial overlaps, changed content and different files', () => {
   const overlap = new EvidenceOverlap();

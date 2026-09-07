@@ -1,7 +1,7 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport } from '@modelcontextprotocol/client';
 import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { getDefaultConfig } from '../src/Core/Config.js';

@@ -20,11 +20,11 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.9.4**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.10.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
-**Requirements:** Git, Node.js `>= 18.0.0` (validated up to Node.js 24), and Windows x64. Building the UI helper requires the .NET 10 SDK; running it requires the corresponding .NET runtime installed on the machine.
+**Requirements:** Git, Node.js `>= 20.0.0`, and Windows x64. This iteration was tested on Node.js 24.19.0; Node.js 20 was not separately executed. Building the UI helper requires the .NET 10 SDK; running it requires the corresponding .NET runtime installed on the machine.
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git
@@ -205,11 +205,11 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.9.4**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.10.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
-**环境要求：**Git、Node.js `>= 18.0.0`（本地验证覆盖至 Node.js 24），以及 Windows x64 系统。编译 UI Helper 需安装 .NET 10 SDK；运行依赖宿主机对应的 .NET 运行时。
+**环境要求：**Git、Node.js `>= 20.0.0`、Windows x64。本轮实际测试使用 Node.js 24.19.0，未另行运行 Node.js 20。编译 UI Helper 需安装 .NET 10 SDK；运行依赖宿主机对应的 .NET 运行时。
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git

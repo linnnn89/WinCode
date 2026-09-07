@@ -1,4 +1,4 @@
-import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { Tool } from '@modelcontextprotocol/server';
 import { createHash } from 'node:crypto';
 
 /** Stable across object key order; array order is part of a schema's contract. */

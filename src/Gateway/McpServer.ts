@@ -1,11 +1,9 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { Server } from '@modelcontextprotocol/server';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ErrorCode,
-  McpError,
-} from '@modelcontextprotocol/sdk/types.js';
+  ProtocolErrorCode,
+  ProtocolError,
+} from '@modelcontextprotocol/server';
 import { ToolRouter } from '../Core/ToolRouter.js';
 import { WINCODE_TOOLS, contractHash, toolsContractHash } from './Protocol.js';
 import { RUNTIME_IDENTITY } from '../Core/RuntimeIdentity.js';
@@ -44,14 +42,14 @@ export class WinCodeMcpServer {
 
   private registerHandlers(): void {
     // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    this.server.setRequestHandler('tools/list', async () => {
       return { tools: structuredClone(this.registeredTools) };
     });
 
     // Call tool
-    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    this.server.setRequestHandler('tools/call', async (request, ctx) => {
       const { name, arguments: args = {} } = request.params;
-      const signal = extra?.signal;
+      const signal = ctx.mcpReq.signal;
 
       if (this.router.isShuttingDown) {
         return {
@@ -602,7 +600,7 @@ export class WinCodeMcpServer {
           }
 
           default:
-            throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+            throw new ProtocolError(ProtocolErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
       } catch (err: any) {
         if (err instanceof AbortError || err?.name === 'AbortError' || signal?.aborted) {

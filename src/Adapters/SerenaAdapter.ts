@@ -836,6 +836,11 @@ export class SerenaAdapter implements IAdapter {
     return results;
   }
 
+  /** Bounded callers supply already validated file content; no workspace traversal or semantic guarantees. */
+  findSymbolsInContent(content: string, relPath: string): CodeSymbol[] {
+    return this.parseFileSymbols(content, relPath, path.extname(relPath).toLowerCase());
+  }
+
   private parseFileSymbols(content: string, relPath: string, ext: string): CodeSymbol[] {
     const symbols: CodeSymbol[] = [];
     const lines = content.split(/\r?\n/);

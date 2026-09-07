@@ -231,3 +231,27 @@
 
 - 用户授权提交合并，并确认删除旧的 v0.6 实施方案与初步构思；两项删除纳入版本记录。用户已将独立替换稿覆盖到 README，提交当前双语版本。
 - 本轮验证：typecheck、build、局部查询 4/4 通过；npm test 共 130 项，129 通过、1 跳过、0 失败。未重复运行交互 GUI 套件。提交前确认远端 linnnn89/WinCode、分支 codex/v0.9-local-ui 与 origin/main 无分歧，忽略的临时截图及构建产物不提交。
+
+## 2026-09-07（北京时间）— Agent 效率第一轮
+
+- 目标与范围：用户在迭代方案后要求开始，先落实第一轮现有工具修正；从干净 main（1dca8ab）建立 codex/agent-efficiency-round1。未增加依赖、外部服务或进程常驻机制，未提交/推送。执行期间发现 README 有并行改动，保留且未编辑，本轮文档集中在 CHANGELOG 和仓库 Skill 代码手册。
+- 响应：prepare_context 默认 compact 单一 JSON；responseFormat=legacy 保留 JSON + Markdown。新增 ContextResponse 负责最终序列化，完整文本预算包含 JSON 转义、所有文本块及计量字段本身。maxTokens 为 512–65536 的整数，口径为 UTF-16 字符数÷4，显式声明并非模型 tokenizer 或整个协议传输字节上限。兼容模式仍有重复表示，使用方可显式选择。
+- 证据：优先同文件中与任务精确匹配的符号，统一 reason/line/startLine/endLine；前缀过长或后续裁剪时保留目标声明。locationKind 区分符号附近、文件开头和全文片段；evidenceInsufficient=false 只表示获得片段，不证明覆盖任务。紧凑全文只返回 packedContent 一份正文，空 pack 保持不足，部分 pack 保留 truncated。
+- 参数：candidateFiles 仍为优先候选，未改成排他范围。focusAreas 对齐为最多 5 个字面量文件/目录，不支持 glob，并在检索前拒绝通配符和非法输入；流式读取目录直属项，最多追加 8 个文件，每目录最多检查 1000 项。缺失/不可读/过大/越界/选择上限进入 fileIssues；源码读取校验工作区真实路径，单文件上限与内置打包器的 500000 字节阈值一致。
+- 完整性：小预算下保留 queryComplete/truncated/evidenceInsufficient；元数据裁剪显式标记 metadataTruncated、limitationsOmitted，omittedFileCount 保留完整遗漏计数。重构计划返回影响分析的风险、来源、歧义与局限；先提示具体待核证据，取消固定提取接口和零回归承诺。
+- 验证过程：先增加 11 个专项场景，旧实现 11 项失败；修复后逐项通过。一次整文件补丁因同路径重复操作被 apply_patch 格式校验拒绝，没有文件变更，改用单文件增量补丁完成。反证自审增加空打包、长前缀挤掉目标、外部 junction 与元数据遗漏计数场景。
+- 验证结果：完整默认非交互 npm test 为 145 项，144 通过、1 跳过、0 失败，包含真实 stdio MCP 紧凑/兼容调用；随后补充遗漏列表标志及第 16 个专项场景，最终专项 16/16、typecheck、build 均通过。该全量结果先于最后两项局部补充，不冒称是最终全量重复验收。未启动交互 GUI 或读取个人应用数据。
+- 同证据对比：隔离夹具 compact 1493 字符、legacy 2281 字符，证据与局限数组一致，文本量减少约 34.5%。这是本版本两种输出模式的单夹具对照，不是旧版本整体基准，不证明真实模型 Token、调用次数或时延下降。
+- 交付与后续：已构建 dist；既有 MCP 进程未重启，需要重新加载连接取得新 Schema/实现。本机安装目录的 Skill 副本未改动，只同步仓库源手册。第二轮精确定位参数/排他范围、第三轮跨调用复用仍未实施；后续效果需固定端到端任务集评估。
+
+## 2026-09-07（北京时间）— Agent 效率复核修补与精确取证
+
+- 授权：用户在四项复核缺陷与第二轮方案后同意继续；保留 candidateFiles 优先语义，新增可选排他范围和精确定位。继续使用现有依赖，未提交、推送、重启 MCP 或更新本机安装 Skill；README 并行修改未触碰。
+- 修补：小预算先缩减辅助列表与说明，避免缺失候选元数据挤掉有用正文；修复前缀恰好截至声明前换行时遗漏目标；focusAreas 使用逻辑工作区路径展示、真实路径校验，支持目录联接；打包器提供内部正文位置，分别报告 selectedFiles、packedFiles、returnedFiles 与 bodyStatus，部分打包/最终裁剪后不再把未返回文件标记为已包含。旧缓存键升级以免复用缺少位置清单的结果；无清单的外部结果保持 unknown/null。
+- 精确取证：scopeFiles 限定最多 20 个文件并跳过全仓库符号搜索；lineRanges 接受最多 8 个文件、每文件一个 1 起始闭区间、最多 500 行，跳过符号查询，越界返回缺口。symbol 必须结合 scopeFiles，复用本地 C#/TS/JS/Python 声明解析，精确区分大小写；读取内容在本次符号解析和片段生成间复用。重名/未找到/语言不支持不返回误导的文件头，始终声明 queryComplete=false 与非语义局限。未新增语义后端调用，也未把正则匹配称为 Serena 语义解析。
+- 参数边界：scopeFiles 不与 focusAreas 混用；candidateFiles/lineRanges 必须在 scopeFiles 内；symbol 与 lineRanges 互斥；lineRanges 不与 includeFullText=true 混用。参数错误在检索前返回，路径仍经真实路径边界校验。
+- 反证自审：检索到了一个同名声明并不能保证唯一；覆盖单文件重载、跨文件重名和一文件重名同时另一文件唯一的组合。全文打包成功也不保证预算裁剪后仍有正文；覆盖 Markdown/XML 正文位置、部分 pack、截断至正文之前以及未知位置结果。500 行上限并不保证全部返回，compact/legacy 的 512 预算均保留实际范围与截断状态。
+- 验证：专项 25/25；最终 typecheck、build 通过；完整默认非交互 npm test 共 155 项，154 通过、1 跳过、0 失败（约 31.2 秒）。测试中有意注入的 Serena 失败/超时和 watcher 失败被对应断言覆盖，不是未处理故障。git diff --check 通过，仅提示现有 Windows 行尾转换。未重复运行交互 GUI 或读取个人应用数据。
+- 效率证据：精确行号及排他文件夹具均记录全仓库符号查询为 0；相同证据夹具 compact 1553、legacy 2341 字符，减少约 33.7%。这是当前两种格式对照，并非旧版本端到端基准；未测真实模型 Token、复杂项目时延或用户任务成功率。
+- GitHub 对照复核：Serena（https://github.com/oraios/serena）提供符号级语义检索，Repomix（https://github.com/yamadashy/repomix）提供仓库打包；本轮只复用现有工具边界实现按需取证，没有引入它们的新后端或依赖。不得将当前局部正则定位等同于上游语义能力。
+- 后续建议（未实施）：先用固定任务集记录工具调用数、重复范围读取、返回字符量、耗时和完成率；若重复取证占比足以抵消维护成本，再讨论带内容变化校验的跨调用证据复用。公共接口、失效语义和额外资源预算待方案确认。当前 dist 已更新，既有客户端需重新加载 MCP 才能取得新实现/Schema；仓库 Skill 手册已同步，本机安装副本未更新。

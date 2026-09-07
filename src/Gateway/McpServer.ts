@@ -14,6 +14,8 @@ import { UI_INSPECT_DEFAULTS, validateUiQuery, UiQuery, validateWindowQuery, UiL
 import { validateCandidateFiles } from '../Core/UiSourceMapper.js';
 import { validateTextQueries } from '../Core/UiTextSearch.js';
 import { UiReviewResult } from '../CompositeTools/UiReview.js';
+import { validateContextOptions } from '../Core/Context.js';
+import { contextResponse } from './ContextResponse.js';
 
 export class WinCodeMcpServer {
   private server: Server;
@@ -195,55 +197,10 @@ export class WinCodeMcpServer {
           }
 
           case 'wincode_prepare_context': {
-            const task = String(args.task || 'Analyze workspace architecture and structure');
-            const candidateFiles = Array.isArray(args.candidateFiles)
-              ? (args.candidateFiles as string[])
-              : undefined;
-            const focusAreas = Array.isArray(args.focusAreas)
-              ? (args.focusAreas as string[])
-              : undefined;
-            const compress = typeof args.compress === 'boolean' ? args.compress : undefined;
-            const outputFormat = args.outputFormat === 'xml' ? 'xml' : 'markdown';
-            const includeFullText = typeof args.includeFullText === 'boolean' ? args.includeFullText : false;
-            const maxTokens = typeof args.maxTokens === 'number' ? args.maxTokens : undefined;
+            validateContextOptions(args);
+            const context = await this.router.context.prepareContext(args);
 
-            const context = await this.router.context.prepareContext({
-              task,
-              candidateFiles,
-              focusAreas,
-              compress,
-              outputFormat,
-              includeFullText,
-              maxTokens,
-            });
-
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(
-                    {
-                      task: context.task,
-                      project: context.project,
-                      metrics: context.metrics,
-                      guidance: context.guidance,
-                      executiveSummary: context.executiveSummary,
-                      evidence: context.evidence,
-                      relatedFiles: context.relatedFiles,
-                      omittedFiles: context.omittedFiles,
-                      evidenceInsufficient: context.evidenceInsufficient,
-                      limitations: context.limitations,
-                    },
-                    null,
-                    2
-                  ),
-                },
-                {
-                  type: 'text',
-                  text: context.formattedContent,
-                },
-              ],
-            };
+            return contextResponse(context, args.responseFormat);
           }
 
           case 'wincode_find_code_symbol': {

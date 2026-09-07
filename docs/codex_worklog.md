@@ -298,3 +298,12 @@
 - Debug 与反例：检查链接逃逸、非法目录参数、宽目录、长 Unicode 项目列表、超大 solution；修正 .slnx 命名/数字实体路径及非法实体处理。真实 TavernDesk 入口曾被多语言 README 挤占，缩减通用 README 入口选择后保留 TavernDesk.App/Core/Infrastructure 等项目。workspace 切换异常仍恢复原根和 trash。
 - 验证：typecheck/build 通过；完整非交互回归 170 项，169 pass、1 skip、0 fail；最后 README 入口筛选修正后 build 与专项 9/9 再次通过。报告保存在 test-tmp/r1/（既有忽略目录）。未安装依赖或运行 GUI；版本同步为 0.9.1，README/Skill/CHANGELOG 更新真实契约。
 - 真实目录复测：新编译生产 Gateway + SDK InMemoryTransport 的独立 MCP 会话打开 I:/WinCode 和 I:/New-tarven，断言响应预算、无默认树、入口上限及 TavernDesk.sln/项目身份。WinCode 3554 字符；TavernDesk 最终实测见 test-tmp/r1/real-workspaces.json。深度缺口明确为 partial，不把它当全仓盘点。该会话关闭 Serena/FlaUI/Repomix CLI，不代表当前 Codex MCP 连接或真实应用 GUI 已更新。
+- 合并：最终 TavernDesk 3705 字符；PR #14 的 C#/TypeScript CodeQL 全部成功后按提交 32b2385 锁定合并，远端确认 MERGED，main=7ce737f1923b0dd31935cd453e39b114ce960091。
+
+## 2026-09-08（北京时间）— R2 运行实例与工具契约 0.9.2
+
+- 从 R1 已合并 main 新建 codex/r2-runtime-contract；继续用户已授权的逐版 PR 流程。R4 在 test-tmp/r4-worktree 独立准备，避免混入本版构建/测试/提交。
+- 构建：新增 scripts/build.mjs，复用本地 TypeScript，无依赖安装；指纹包含 WinCode 自身源码、构建配置和锁文件以及实际 JS 产物，编译前后源码变化则失败。manifest 缺失、无效、版本/产物失配或源码模式明确 unknown；RuntimeIdentity 模块初始化时快照并冻结，不读取被分析项目 HEAD，不因重编译磁盘文件而改写旧实例身份。该校验是本地一致性诊断，不是签名或供应链认证。
+- 契约：tools/list 与 hello 使用同一已注册定义快照，默认只返回 schemaHash/toolCount；toolName 按需返回单个 inputSchema 和 hash，capabilities 直接源自注册工具。hello/context 未知参数明确失败，避免拼错后静默成功。原手写 JSON-RPC 脚本换成现有 SDK stdio 客户端，隔离夹具且 finally 清理。
+- 验证：typecheck/build 通过，身份/契约专项 8/8；完整非交互回归 178 项，177 pass、1 skip、0 fail。test:e2e 启动独立生产 Gateway stdio 进程：initialize、tools/list、hello 参数/hash 对照、scopeFiles+symbol 与 lineRanges 的第 50 行实际正文、未知参数拒绝及末次同实例核对均通过。报告 test-tmp/r2/，该测试关闭上游/GUI。
+- 宿主边界：实际调用当前 Codex 的 WinCode hello，仍返回 0.9.0、无新 build/schema 身份，证明重新编译不自动刷新既有连接。未重复尝试新参数；未改全局 MCP 配置或终止宿主进程。后续真实宿主 R3 验收仍需要客户端重连，不能用独立 stdio 成功替代。

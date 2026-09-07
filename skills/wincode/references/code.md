@@ -2,6 +2,8 @@
 
 以下为 MCP 工具名和参数；以客户端实际 Schema 为准。
 
+怀疑源码与连接不同步时，先调用 wincode_hello_world({toolName:"wincode_prepare_context"})，对照本连接 tools/list 的参数及 schemaHash，并记录 runtime.instanceId/build.buildId。旧实例没有这些字段时明确为旧契约，不再反复尝试新参数。构建后需要客户端重连；build.status=unknown 不能当成当前源码已运行。test:e2e 只证明它自己启动的隔离 stdio 进程。
+
 | 目的 | 调用 |
 |---|---|
 | 打开/切换项目 | workspace_open({path: "I:/project"}) |

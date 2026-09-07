@@ -1,162 +1,75 @@
-import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import assert from 'node:assert';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { contractHash, toolsContractHash } from '../src/Gateway/Protocol.js';
 
-interface JsonRpcMessage {
-  jsonrpc: '2.0';
-  id?: number | string;
-  method?: string;
-  params?: any;
-  result?: any;
-  error?: any;
-}
-
-async function runMcpClientVerification() {
-  console.log('=== [Phase 1: Real Stdio MCP Client Handshake Test] ===\n');
-
-  const serverPath = path.resolve('dist/index.js');
-  console.log(`1. Launching WinCode MCP Server process: node ${serverPath}...`);
-
-  const proc = spawn('node', [serverPath, '--workspace', process.cwd()], {
-    cwd: process.cwd(),
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-
-  let procExited = false;
-  proc.on('exit', (code) => {
-    procExited = true;
-    if (code !== 0 && code !== null) {
-      console.error(`[Process exited with code ${code}]`);
-    }
-  });
-
-  proc.stderr.on('data', (d) => {
-    // Log debug stderr
-    const text = d.toString().trim();
-    if (text) {
-      console.log(`   [Server stderr]: ${text}`);
-    }
-  });
-
-  let buffer = '';
-  const pendingRequests = new Map<number | string, (res: JsonRpcMessage) => void>();
-
-  proc.stdout.on('data', (chunk) => {
-    buffer += chunk.toString();
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const msg: JsonRpcMessage = JSON.parse(trimmed);
-        if (msg.id !== undefined && pendingRequests.has(msg.id)) {
-          const resolve = pendingRequests.get(msg.id)!;
-          pendingRequests.delete(msg.id);
-          resolve(msg);
-        }
-      } catch (e) {
-        console.warn('Failed to parse stdout line as JSON:', trimmed);
+/** One child process/connection, isolated workspace, compiled production handlers. */
+async function verify() {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-stdio-'));
+  const client = new Client({ name: 'wincode-runtime-probe', version: '1' });
+  let transport: StdioClientTransport | undefined;
+  try {
+    const lines = Array.from({ length: 60 }, (_, index) => index === 49 ?
+      'export function RuntimeProbeTarget() { return "RUNTIME_TARGET_BODY"; }' : `// padding ${index + 1}`);
+    await fs.writeFile(path.join(root, 'Target.ts'), lines.join('\n'));
+    await fs.writeFile(path.join(root, 'package.json'), '{"name":"runtime-probe"}');
+    const distUrl = (name: string) => JSON.stringify(pathToFileURL(path.join(repo, 'dist', name)).href);
+    const bootstrap = path.join(root, 'probe.mjs');
+    await fs.writeFile(bootstrap, `
+import { getDefaultConfig } from ${distUrl('Core/Config.js')};
+import { ToolRouter } from ${distUrl('Core/ToolRouter.js')};
+import { WinCodeMcpServer } from ${distUrl('Gateway/McpServer.js')};
+const config = getDefaultConfig(${JSON.stringify(root)});
+config.adapters.serena.enabled = false;
+config.adapters.flaui.enabled = false;
+config.adapters.repomix.useCli = false;
+const server = new WinCodeMcpServer(new ToolRouter(config));
+process.stdin.on('end', () => { void server.stop(); });
+process.on('SIGTERM', () => { void server.stop(); });
+await server.start();
+`);
+    transport = new StdioClientTransport({ command: process.execPath, args: [bootstrap], cwd: root, stderr: 'pipe' });
+    await client.connect(transport);
+    const tools = (await client.listTools()).tools;
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name, arguments: args });
+      assert.notEqual(result.isError, true, JSON.stringify(result));
+      assert.ok(Array.isArray(result.content) && result.content[0]?.type === 'text');
+      return JSON.parse((result.content as { text: string }[])[0].text);
+    };
+    const hello = await call('wincode_hello_world', { toolName: 'wincode_prepare_context' });
+    assert.equal(hello.runtime.build.status, 'verified', 'run npm run build before this probe');
+    assert.equal(hello.toolContract.schemaHash, toolsContractHash(tools));
+    assert.equal(hello.toolContract.toolCount, tools.length);
+    const schema = tools.find(tool => tool.name === 'wincode_prepare_context')!.inputSchema;
+    assert.deepEqual(hello.toolContract.tool.inputSchema, schema);
+    assert.equal(hello.toolContract.tool.schemaHash, contractHash(schema));
+    for (const key of ['scopeFiles', 'symbol', 'lineRanges']) assert.ok(Object.hasOwn(schema.properties!, key));
+    const symbol = await call('wincode_prepare_context', { task: 'Inspect runtime target', scopeFiles: ['Target.ts'], symbol: 'RuntimeProbeTarget' });
+    assert.ok(symbol.evidence.some((item: any) => item.file === 'Target.ts' && item.line === 50 && item.snippet.includes('RUNTIME_TARGET_BODY')));
+    const range = await call('wincode_prepare_context', { task: 'Inspect runtime target', lineRanges: [{ file: 'Target.ts', startLine: 50, endLine: 50 }] });
+    assert.ok(range.evidence.some((item: any) => item.startLine === 50 && item.endLine === 50 && item.snippet === lines[49]));
+    const invalid = await client.callTool({ name: 'wincode_prepare_context', arguments: { task: 'Inspect target', scopeFile: ['Target.ts'] } });
+    assert.equal(invalid.isError, true);
+    const after = await call('wincode_hello_world');
+    assert.deepEqual(after.runtime, hello.runtime);
+    console.log(JSON.stringify({ status: 'passed', transport: 'stdio', productionHandlers: true,
+      upstreams: false, gui: false, codexConnectionVerified: false, version: hello.version,
+      runtime: hello.runtime, schemaHash: hello.toolContract.schemaHash, toolCount: tools.length,
+      checks: ['initialize', 'tools/list', 'hello schema agreement', 'symbol body at line 50', 'exact range body', 'unknown parameter rejected', 'stable instance'] }, null, 2));
+  } finally {
+    try { await client.close(); } finally {
+      try { await transport?.close(); } finally {
+        assert.equal(path.dirname(root), os.tmpdir());
+        await fs.rm(root, { recursive: true, force: true });
       }
     }
-  });
-
-  const sendRequest = (method: string, params?: any): Promise<JsonRpcMessage> => {
-    const id = Math.floor(Math.random() * 1000000);
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pendingRequests.delete(id);
-        reject(new Error(`Request ${method} (id=${id}) timed out after 10s`));
-      }, 10000);
-
-      pendingRequests.set(id, (res) => {
-        clearTimeout(timeout);
-        resolve(res);
-      });
-
-      const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
-      proc.stdin.write(payload);
-    });
-  };
-
-  const sendNotification = (method: string, params?: any): void => {
-    const payload = JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n';
-    proc.stdin.write(payload);
-  };
-
-  // Wait a brief moment for server to initialize
-  await new Promise((r) => setTimeout(r, 800));
-
-  console.log('\n2. Sending MCP "initialize" handshake...');
-  const initRes = await sendRequest('initialize', {
-    protocolVersion: '2024-11-05',
-    capabilities: { roots: { listChanged: true } },
-    clientInfo: { name: 'Codex-TestClient', version: '1.0.0' },
-  });
-
-  console.log('   ✓ Received initialize response from server:');
-  console.log(`     Protocol Version: ${initRes.result?.protocolVersion}`);
-  console.log(`     Server Name: ${initRes.result?.serverInfo?.name}`);
-  console.log(`     Server Version: ${initRes.result?.serverInfo?.version}`);
-  assert.strictEqual(initRes.result?.serverInfo?.name, 'wincode-agent-gateway');
-
-  // Send initialized notification
-  sendNotification('notifications/initialized');
-
-  console.log('\n3. Requesting "tools/list" from WinCode MCP...');
-  const toolsRes = await sendRequest('tools/list', {});
-  const tools: any[] = toolsRes.result?.tools || [];
-  console.log(`   ✓ Server returned ${tools.length} available tools:`);
-  for (const t of tools) {
-    console.log(`     - [${t.name}]: ${t.description.slice(0, 70)}...`);
   }
-
-  const hasHelloWorld = tools.some((t) => t.name === 'wincode_hello_world');
-  const hasAnalyzeWorkspace = tools.some((t) => t.name === 'wincode_analyze_workspace');
-
-  assert.ok(hasHelloWorld, 'Must expose "wincode_hello_world"');
-  assert.ok(hasAnalyzeWorkspace, 'Must expose "wincode_analyze_workspace"');
-  console.log('   ✓ Confirmed: Codex/Claude can see "wincode_hello_world" & "wincode_analyze_workspace"');
-
-  console.log('\n4. Calling "wincode_hello_world()" via MCP...');
-  const helloCallRes = await sendRequest('tools/call', {
-    name: 'wincode_hello_world',
-    arguments: { greeting: 'Codex connecting to WinCode MCP!' },
-  });
-
-  const helloContent = helloCallRes.result?.content?.[0]?.text;
-  console.log('   ✓ Result from hello_world:');
-  console.log('----------------------------------------------------');
-  console.log(helloContent);
-  console.log('----------------------------------------------------');
-  assert.ok(helloContent.includes('online'), 'Response must confirm server status is online');
-
-  console.log('\n5. Calling "wincode_analyze_workspace()" via MCP...');
-  const analyzeCallRes = await sendRequest('tools/call', {
-    name: 'wincode_analyze_workspace',
-    arguments: {},
-  });
-
-  const analyzeContent = analyzeCallRes.result?.content?.[0]?.text;
-  console.log('   ✓ Result from wincode_analyze_workspace:');
-  console.log('----------------------------------------------------');
-  console.log(analyzeContent.slice(0, 500) + '...\n');
-  console.log('----------------------------------------------------');
-  assert.ok(analyzeContent.includes('WinCode MCP'), 'Must analyze current workspace');
-
-  console.log('\n6. Closing test client connection...');
-  proc.stdin.end();
-  await new Promise((r) => setTimeout(r, 500));
-  if (!procExited) {
-    proc.kill();
-  }
-
-  console.log('\n=== [PHASE 1 VERIFICATION PASSED PERFECTLY!] ===');
-  console.log('Link verified: Codex -> MCP (stdio) -> WinCode -> hello_world() & analyze_workspace()');
 }
 
-runMcpClientVerification().catch((err) => {
-  console.error('Phase 1 test failed:', err);
-  process.exit(1);
-});
+verify().catch(error => { console.error(error); process.exitCode = 1; });

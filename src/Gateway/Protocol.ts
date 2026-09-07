@@ -1,4 +1,17 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { createHash } from 'node:crypto';
+
+/** Stable across object key order; array order is part of a schema's contract. */
+export function contractHash(value: unknown): string {
+  const canonical = (item: unknown): unknown => Array.isArray(item) ? item.map(canonical) :
+    item && typeof item === 'object' ? Object.fromEntries(Object.entries(item)
+      .sort(([a], [b]) => a.localeCompare(b, 'en')).map(([key, child]) => [key, canonical(child)])) : item;
+  return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+}
+
+export function toolsContractHash(tools: Tool[]): string {
+  return contractHash([...tools].sort((a, b) => a.name.localeCompare(b.name, 'en')));
+}
 
 export const WINCODE_TOOLS: Tool[] = [
   {
@@ -50,11 +63,14 @@ export const WINCODE_TOOLS: Tool[] = [
     description: 'Heartbeat plus layered adapter status and lightweight runtime health (uptime, cache bytes, managed child processes, Node memory, last adapter error). Reports whether Serena command exists, handshake succeeded, project is active, and semantic query is usable. available/fallback does not mean Serena is connected.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         greeting: {
           type: 'string',
+          maxLength: 1024,
           description: 'Optional custom greeting message to echo back.',
         },
+        toolName: { type: 'string', minLength: 1, maxLength: 128, description: 'Return the input schema registered in this running instance for one exact tool name. Compare with this connection tools/list; source or dist changes do not update an existing process.' },
       },
     },
   },
@@ -77,6 +93,7 @@ export const WINCODE_TOOLS: Tool[] = [
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         task: {
           type: 'string',

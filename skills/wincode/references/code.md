@@ -11,10 +11,10 @@
 | 变更影响 | wincode_analyze_change_impact({target: "Service"}) |
 | 重构步骤 | wincode_plan_refactoring({target: "Service", goal: "拆分保存逻辑"}) |
 
-按目标选工具，不顺序执行整张表。已知文件时优先提供候选：
+按目标选工具，不顺序执行整张表。已知文件范围时直接限定：
 
 ```json
-{"task":"查明保存失败原因","candidateFiles":["src/Service.cs"],"includeFullText":false,"maxTokens":2000}
+{"task":"查明保存失败原因","scopeFiles":["src/Service.cs"],"includeFullText":false,"maxTokens":2000}
 ```
 
 上例用于 wincode_prepare_context。默认 compact 仅返回一个 JSON 文本块；旧客户端需要 JSON 加 Markdown 时显式传 responseFormat:"legacy"。maxTokens 为 512–65536 的整数，约束所有返回文本的字符数÷4，包括 JSON 转义、元数据和旧格式的两个文本块；这是估算，不是真实模型 Token 硬上限。
@@ -28,6 +28,10 @@ candidateFiles 最多 20 个，仅表示优先，仍可能追加符号检索结�
 ```
 
 lineRanges 为闭区间、1 起始行号，最多 8 个文件，每文件一个范围、最多 500 行；越界报告缺口，预算不足仍可能截断。它跳过符号搜索，仅返回指定范围；不能与 symbol 或 includeFullText=true 同用。
+
+取证路由与停止条件：已知行号直接 lineRanges；已知文件和声明名用 scopeFiles+symbol；仅知道文件用 scopeFiles；需要发现其他文件时才用 candidateFiles/关键词检索。先检查片段是否覆盖问题所需代码，覆盖则继续分析，不例行再拉全文或重复相同范围。重名/缺失时收窄文件或转向已知行号；语义完整性不足需要相应语义工具，重复同一正则请求不能补足。文件修改、工作区切换、截断或新问题需要不同代码时重新取证；本工具没有跨调用证据有效期保证，不能把旧片段当成当前文件。
+
+维护者可运行 npm run benchmark:agent -- 1 做单轮检查，或 -- 3 做三轮对照；报告在 test-tmp/agent-efficiency。它比较十类固定脚本场景（含既有 C# 夹具）的调用、返回字符、重复显示行和证据断言，使用真实 MCP handler 与本地回退，关闭外部后端。数据不代表真实用户任务频率、模型完成率或缓存收益，不据此宣称通用提速。Schema v2 校验当前文件、行号、正文和状态，异常保留为失败记录；复用只依赖受控夹具的可信无变化事件，修改后必须重取，不能作为生产环境的新鲜度判断。
 
 仅知道文件时用 scopeFiles:["src/Service.cs"] 排他限定最多 20 个文件；它跳过全仓库符号搜索，不能与 focusAreas 同用，candidateFiles/lineRanges 必须在其内。需要声明附近片段可加 symbol:"Save"：大小写精确匹配，必须提供 scopeFiles，目前复用 C#/TS/JS/Python 本地声明模式，并非语义解析，queryComplete=false。重名、未找到或不支持语言会返回 fileIssues，不用文件开头冒充命中；可用已知行号进一步消歧。
 

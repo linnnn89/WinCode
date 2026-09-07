@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Project structure, running windows, and source evidence for coding agents.</strong><br>
-  让 Coding Agent 同时看到项目结构、运行中的窗口与源码证据。
+  让 Coding Agent 同时掌握 .NET 项目结构、运行中的桌面窗口与 XAML 源码证据。
 </p>
 
 <p align="center">
@@ -14,17 +14,17 @@
 
 ## English
 
-WinCode is a local MCP server for Windows and .NET development. It combines project analysis with runtime UI inspection so coding agents can investigate problems using source files, control properties, and screenshots together.
+WinCode is a local MCP server built for Windows and .NET engineering. It bridges project architecture analysis with non-invasive desktop UI inspection, enabling coding agents to debug desktop applications across source declarations, runtime control hierarchies, and annotated screenshots in a unified workflow.
 
-- **Understand the project:** inspect declared project references, locate symbols, and prepare task context within an output budget.
-- **Inspect the running app:** discover windows, query a control or subtree, and request a numbered screenshot without activating the target.
-- **Review with evidence:** retrieve XAML declaration candidates with paths, lines, and hashes; distinguish ambiguity, truncation, and degraded analysis.
+- **Understand the project:** Parse declared `.sln`/`.csproj` references, search code symbols, and prepare code context within a character-based output budget (an estimate, not a model-token limit).
+- **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
+- **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.9.0**. UI tools are read-only; the separate trash tool moves files. See [CHANGELOG](CHANGELOG.md) for version history.
+Current source version: **0.9.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
-Requirements: Git and Node.js 18 or newer (local validation used Node.js 24). UI inspection requires Windows x64. Building the UI helper requires the .NET 10 SDK; the framework-dependent helper requires the corresponding .NET runtime where it runs.
+**Requirements:** Git, Node.js `>= 18.0.0` (validated up to Node.js 24), and Windows x64. Building the UI helper requires the .NET 10 SDK; running it requires the corresponding .NET runtime installed on the machine.
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git
@@ -32,11 +32,11 @@ cd WinCode
 npm ci
 npm run build
 
-# Build the Windows UI helper
+# Build the native Windows UI helper
 dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-x64 --no-self-contained
 ```
 
-Add a stdio MCP server to your client. For clients accepting `mcpServers` JSON:
+Add WinCode as a stdio MCP server in your agent client configuration:
 
 ```json
 {
@@ -49,28 +49,30 @@ Add a stdio MCP server to your client. For clients accepting `mcpServers` JSON:
 }
 ```
 
-> **Paths:** `~` is a placeholder for your installation location in these examples. Replace `~/WinCode` with the absolute path to your WinCode installation, such as `I:/WinCode`, and `~/target-project` with your target project's absolute path. Do not copy `~` literally; MCP clients may not expand it automatically.
+> **Path Note:** `~` is a placeholder. Replace `~/WinCode` with your absolute installation path (e.g., `I:/WinCode`), and `~/target-project` with your target repository's absolute path. Do not copy `~` literally if your client does not expand shell tildes.
 
-For a settings form, use:
+For graphical configuration interfaces:
 
 | Field | Value |
 | --- | --- |
-| Name / type | `wincode` / `stdio` |
+| Name / Type | `wincode` / `stdio` |
 | Command | `node` |
 | Argument 1 | `~/WinCode/dist/index.js` |
 | Argument 2 | `--workspace` |
 | Argument 3 | `~/target-project` |
 
-Replace the paths before saving. Add each argument separately; a CLI registration command does not belong in the command field. Ensure the client can find `node`, or supply its absolute executable path.
+Add each argument as a separate entry. Ensure `node` is available in PATH, or specify its absolute executable path.
 
-The optional [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md) explains installation and task-specific manuals. A Skill provides usage instructions; it does not replace the MCP server connection.
+For prompt engineering and token-efficient skill routing, refer to the optional [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md).
 
-### Try a focused UI inspection
+### Practical walkthrough: Targeted control inspection
 
-Ask your agent: **“Find my app's window, inspect its Save button without changing focus, and check the declaration in `Views/MainWindow.xaml`.”**
+Query specific controls directly rather than dumping an entire window's visual tree (which can easily span thousands of nodes and exhaust context limits):
 
-1. Call `wincode_ui_list_windows` with a process or title filter.
-2. Use the returned PID and HWND in `wincode_ui_inspect`:
+> **Prompt:** *"Find my application's window, inspect its Save button in the background, and verify its declaration in `Views/MainWindow.xaml`."*
+
+1. Call `wincode_ui_list_windows` with a process name or title substring filter to obtain the target `pid` and `hwnd`.
+2. Inspect the targeted control using `wincode_ui_inspect`:
 
 ```json
 {
@@ -85,97 +87,114 @@ Ask your agent: **“Find my app's window, inspect its Save button without chang
 }
 ```
 
-3. Request `capture: "annotated"` when an image helps. Use `wincode_ui_review` with `candidateFiles: ["Views/MainWindow.xaml"]` to add source candidates.
+3. Enable `capture: "annotated"` when visual layout verification is needed. To correlate the widget with source code, switch to `wincode_ui_review` and supply `candidateFiles: ["Views/MainWindow.xaml"]`.
 
-Replace the example PID, HWND, control ID, and XAML path with values from your app. Query filters are exact, case-sensitive AND conditions. Only a complete, unique search expands the matching subtree; ambiguous or incomplete searches return candidates. Node IDs belong to one response. Screenshots still cover the target window, with badges on the returned subtree.
+**Key Behaviors:**
+- **Zero Image Overhead:** `capture: "none"` returns clean structural JSON without wasting vision tokens. When screenshots are captured, images travel as independent MCP `image` blocks—never Base64-inlined into text.
+- **Accurate State Semantics:** `readStates` checks toggle, selection, and expand/collapse patterns without executing actions. If a control lacks support for a given pattern, it is explicitly reported as unsupported rather than returning `false`, preventing misleading negative states (e.g., mistaking an unsupported toggle for an unchecked checkbox).
+- **Background Integrity:** `backgroundOnly: true` uses dedicated `PrintWindow` capture without window activation, restoration, or focus-stealing, preventing foreground windows or games from contaminating the capture.
 
-`capture: "none"` avoids image input, but JSON still consumes context tokens. Images are separate MCP image blocks, not Base64 embedded in text. `readStates` reads toggle, selection, and expand/collapse states; it does not read input values or execute actions. Unsupported or unreadable states are not reported as false.
-
-### Tools
+### Tool reference
 
 | Tool | Purpose |
 | --- | --- |
-| `workspace_open` | Open or switch the analyzed workspace. |
-| `wincode_analyze_workspace` | Summarize structure and declared .NET project references. |
-| `wincode_prepare_context` | Prepare task-related code context within a requested budget. |
-| `wincode_find_code_symbol` | Locate symbols with evidence and completeness metadata. |
-| `wincode_find_references` | Find references, including warnings about incomplete coverage. |
-| `analyze_change_impact` | Assess change impact; retain UNKNOWN when evidence is insufficient. |
-| `wincode_plan_refactoring` | Prepare a refactoring checklist based on impact analysis. |
-| `wincode_safe_move_to_trash` | Move workspace files into `trash/` with metadata and path checks. |
-| `wincode_ui_list_windows` | Discover visible top-level windows with bounded filters. |
-| `wincode_ui_inspect` | Return a control tree, optional states, and an optional screenshot. |
-| `wincode_ui_review` | Combine runtime inspection with explicit XAML source candidates. |
-| `wincode_hello_world` | Report gateway, cache, and adapter health. |
-| `wincode_diagnose_project` | Check project tooling and environment availability. |
+| `workspace_open` | Open or switch active workspace session and isolate cache namespaces. |
+| `wincode_analyze_workspace` | Parse solution structure and declared `.sln`/`.csproj` project references. |
+| `wincode_prepare_context` | Prepare scoped code evidence and actual line ranges within a character-based output budget. |
+| `wincode_find_code_symbol` | Search codebase symbols with transparent source and completeness metadata. |
+| `wincode_find_references` | Trace symbol references and call sites across files without false negatives. |
+| `analyze_change_impact` | Assess refactor blast radius; explicitly mark confidence as `UNKNOWN` if ambiguous. |
+| `wincode_plan_refactoring` | Generate impact-driven verification checklists prior to making code edits. |
+| `wincode_safe_move_to_trash` | Safely quarantine obsolete files to `trash/` with metadata; rejects path traversal. |
+| `wincode_ui_list_windows` | Enumerate visible top-level windows with title/process filters and count limits. |
+| `wincode_ui_inspect` | Inspect UI control subtrees, interactive states, and optional numbered screenshots. |
+| `wincode_ui_review` | Correlate runtime UI snapshots with explicit XAML declaration lines and hashes. |
+| `wincode_hello_world` | Probe gateway status, active cache volume, and adapter connection layers. |
+| `wincode_diagnose_project` | Check local SDKs, Git, and Windows environment health non-invasively. |
 
-`wincode_analyze_change_impact` is an alias of `analyze_change_impact`. Parameter details and workflows: [code](skills/wincode/references/code.md), [UI](skills/wincode/references/ui.md), [diagnostics](skills/wincode/references/diagnostics.md).
+`wincode_analyze_change_impact` is an alias of `analyze_change_impact`. Detailed workflows: [code intelligence](skills/wincode/references/code.md), [UI inspection](skills/wincode/references/ui.md), [diagnostics](skills/wincode/references/diagnostics.md).
 
 ### Architecture and resource control
 
 ```text
 Coding agent ── stdio MCP ── WinCode
-                              ├─ Code adapters: Serena / Repomix / local fallbacks
+                              ├─ Code adapters: Serena / Repomix / Built-in text fallbacks
                               ├─ Workspace analysis, context, and impact tools
                               └─ FlaUiAdapter ── stdin/stdout JSON ── .NET UIA helper
                                                                        └─ Window tree + screenshot
 ```
 
-UI inspection and health probes share a serial lock. Cancellation propagates through request admission and the adapter; cleanup targets the owned helper process tree, not the inspected application's PID. Workspace switching waits for active requests and rejects a switch if draining times out. These controls reduce lifecycle races; they do not guarantee that arbitrary target applications cannot fail.
-
-Code caches use workspace namespaces, estimated serialized memory size, and disk pruning including referenced overflow files. Defaults are 32 MiB for memory accounting and 128 MiB for disk pruning. Watch events are debounced (150 ms by default), and fingerprints are memoized for about 2.5 seconds; invalidation is not instantaneous. There is no persistent UI snapshot cache.
+- **Target PID Absolute Immunity:** UI inspection executes out-of-process via an isolated helper (`tools/WinCode.UIA.Host`). All process cleanups target only the owned helper process tree via Windows `taskkill /T`; the inspected target application is never terminated or injected.
+- **Concurrency Protection:** UI inspection and health checks share a serial execution mutex to prevent native UIA message pump deadlocks. Workspace switches safely drain in-flight calls before changing cache namespaces.
+- **Byte-Bounded Cache:** Memory and disk caches enforce strict byte caps (default 32 MiB serialized memory, 128 MiB disk quota including disk-spilled overflow snapshots). Debounced file watching (150 ms) and index probing invalidate the ~2.5s fingerprint memo upon disk changes.
 
 | UI budget | Limit / behavior |
 | --- | --- |
-| Query search | 1,000 nodes by default, at most 5,000; 10 candidates by default, at most 20. |
-| Search traversal | 2-second and 50-level soft limits; the helper deadline covers blocking native calls. |
-| Tree text | 128 KiB, with truncation metadata. |
-| PNG | 2 MiB; bounded downscaling, then omission if still too large. |
-| Helper transport | 6 MiB, counted as bytes. |
-| Screenshot allocation | At most 16,777,216 pixels and 16,384 pixels on either side. |
+| Targeted query | Scans up to 1,000 nodes by default (max 5,000); returns up to 10 candidates (max 20). |
+| Traversal bounds | Soft limits of 2 seconds and 50 levels; blocking native Win32 calls are terminated by the helper process timeout. |
+| Tree text | Capped at 128 KiB with explicit truncation reasons. |
+| PNG image | 2 MiB ceiling; dynamically downscaled or safely omitted if still oversized. |
+| Transport pipe | Capped at 6 MiB raw stream bytes. |
+| Screenshot allocation | Hard check: at most 16,777,216 total pixels and 16,384 pixels per dimension before bitmap allocation. |
 
-These are scoped budgets, not a total process memory or token cap. `helperPeakWorkingSetBytes` reports the OS peak working set through response preparation, excluding subsequent final serialization. `treeComplete` describes structural/output coverage; `propertyIssues` separately identifies unavailable or clipped fields. Query and state features require helper `inspectionVersion: 2`; rebuild the helper if an older version is rejected.
+`helperPeakWorkingSetBytes` reports peak operating system working set through response preparation. `treeComplete` reflects structural coverage, while `propertyIssues` tracks clipped or unavailable properties.
 
 ### Boundaries and visibility
 
-- **Background capture:** `backgroundOnly: true` requires both PID and HWND and uses PrintWindow without activating or restoring the target or falling back to the visible screen. Some renderers may return blank or stale images; minimized windows are rejected. Normal capture may use screen-based fallbacks.
-- **UI coverage:** results depend on the app's UIA provider and access permissions. WPF has an isolated test fixture; this does not establish equal coverage for every WinUI, WinForms, or custom-rendered app. DPI-aware capture is implemented, but comprehensive multi-DPI and 4K validation remains outstanding.
-- **Source evidence:** XAML matching uses literal declarations in supplied files. It does not evaluate bindings, templates, or resources, and returns `runtimeSourceVerified: false`. Candidates support investigation; they are not a proven runtime-to-source mapping.
-- **Project analysis:** project references are extracted from file declarations, not evaluated by MSBuild. Conditions, imports, and unsupported declaration layouts may be missed. Serena and Repomix are optional; local fallbacks report their reduced coverage.
-- **Visible notice:** the built-in helper displays a semi-transparent `REC / WinCoding` indicator during UI access. Other overlays or exclusive fullscreen can obscure it; it is not an operating-system security boundary.
-- **Local audit:** metadata-only start/end records go to `%LOCALAPPDATA%/WinCode/logs/ui-audit`. At 1 MiB, results suggest cleanup; near 2 MiB, new access is blocked with space reserved for the end record. Nothing is automatically deleted. Logs are not tamper-proof; a start without an end leaves the outcome unknown. The [audit checker](scripts/check-ui-audit.ps1) supports explicit inspection and an optional desktop notice.
+- **Background capture:** `backgroundOnly: true` requires both PID and HWND. It uses `PrintWindow` without focus shifts or screen fallbacks. Minimized windows are rejected. Some hardware-accelerated renderers may require standard capture.
+- **UI coverage:** Inspection depends on the application's underlying UIA provider. Verified against WPF; WinUI, WinForms, and custom-rendered controls may expose differing levels of UIA detail.
+- **Source evidence:** Matches literal attribute declarations in supplied `.xaml` files (`runtimeSourceVerified: false`). Dynamic bindings, runtime templates, and resource dictionaries are not evaluated.
+- **Project analysis:** Extracted directly from project file XML without invoking MSBuild evaluations. Serena and Repomix are optional upstreams; local fallbacks explicitly label reduced semantic coverage.
+- **Visual indicator:** A non-activating, semi-transparent `REC / WinCoding` overlay is painted in the top-right corner of the primary display during UI inspection to ensure complete visibility.
+- **Local audit:** Lightweight start/end records are flushed to `%LOCALAPPDATA%/WinCode/logs/ui-audit` (1 MiB triggers cleanup reminders; 2 MiB blocks new access with reserved end-record space). The [audit checker script](scripts/check-ui-audit.ps1) enables manual inspections.
+
+### Code context and retrieval routing
+
+Use `wincode_prepare_context` with the location information already available:
+
+```json
+{"task":"Review the save logic","lineRanges":[{"file":"src/Service.cs","startLine":50,"endLine":80}],"maxTokens":2000}
+```
+
+Known lines: use `lineRanges`. Known file and declaration: use `scopeFiles` plus `symbol`. Known files only: use `scopeFiles`. Use `candidateFiles` when discovery beyond those candidates is intended; it remains a priority list, not an exclusive scope. Scoped symbol matching currently uses local C#/TS/JS/Python declaration patterns and reports incomplete semantic coverage; ambiguous or missing targets remain explicit issues.
+
+The default `compact` response contains one JSON text block; `responseFormat: "legacy"` returns JSON plus Markdown. `maxTokens` accepts 512–65536 and budgets all returned text as UTF-16 characters divided by four, including metadata. Actual model tokens differ. Check actual ranges, `queryComplete`, truncation and `bodyStatus` before treating evidence as sufficient. Once the required evidence is available, continue analysis; refresh after edits or workspace changes. WinCode does not guarantee cross-request evidence freshness or provide the benchmark's reuse policy as a production cache. Parameter combinations and limits are in the [code manual](skills/wincode/references/code.md).
 
 ### Development and validation
 
 ```powershell
 npm run build
 npm run typecheck
-npm test                  # Noninteractive regression
+npm test                  # Non-interactive test suites
+npm run test:benchmark    # Benchmark correctness and fault-injection tests
+npm run benchmark:agent -- 1  # Small pilot; use -- 3 for three repetitions
 
-# Publish the isolated WPF fixture before live UI tests
+# Build isolated WPF test fixture for live UI testing
 dotnet publish tests/fixtures/wpf-ui-review/wpf-ui-review.csproj -c Release -r win-x64 --no-self-contained
-npm run test:ui           # Existing interactive UI suites
-npm run test:ui-query     # Separate local-query acceptance with a disposable fixture
-npm run test:all          # npm test + test:ui; does not include test:ui-query
+npm run test:ui           # Interactive UI suites
+npm run test:ui-query     # Targeted local query acceptance suite
+npm run test:all          # Comprehensive test run
 ```
 
-Live UI tests require an interactive Windows session and may display test windows. In the isolated 222-node fixture, focused output fell from 62,025 to about 1,600 text bytes, while calls remained around 0.78 seconds. This is an output-size observation, not a general speed or token-saving benchmark. Test evidence and unverified cases are recorded in the [work log](docs/codex_worklog.md).
+Live UI suites require an interactive Windows desktop session. In a 222-node test fixture, targeted queries reduced response text from 62 KB to ~1.6 KB while completing in ~0.78 seconds. Detailed test records are maintained in the [work log](docs/codex_worklog.md).
+
+The agent benchmark covers ten scripted scenarios, including existing `dotnet-mini` C# fixtures and four levels of initial location knowledge. It validates returned files, ranges, bodies and status against current fixture contents. Tool/transport/response/cleanup failures remain in the JSON report under `test-tmp/agent-efficiency`; failed cases produce a nonzero exit code. Unchanged-evidence reuse is tested only under trusted, controlled fixture writes; edits require a new request. Reports measure MCP calls, output characters, repeated displayed lines and call time using local fallback with upstreams and GUI disabled. They do not establish real-agent completion rates, model-token savings or production cache benefits. Schema v2 results should not be compared directly with the earlier six-scenario report.
 
 ---
 
 ## 简体中文
 
-WinCode 是面向 Windows 与 .NET 开发的本地 MCP 服务。它将项目分析与运行时 UI 取证放在同一套工具中，让 Coding Agent 结合源码、控件属性和截图调查问题。
+WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项目依赖拓扑分析与非侵入式桌面 UI 取证深度整合，让 Coding Agent 能够在同一套工作流中，结合源码声明、运行时控件层级与标注截图协同排查问题。
 
-- **理解项目：**读取项目引用声明、定位符号，在输出预算内准备任务上下文。
-- **观察实际界面：**发现窗口、查询控件或局部子树，按需获取数字标注截图，无需激活目标窗口。
-- **用证据辅助审查：**返回带路径、行号、哈希的 XAML 声明候选，明确报告歧义、截断与降级。
+- **理解项目架构：**解析 `.sln`/`.csproj` 声明的项目引用拓扑，跨文件检索符号，并在基于字符数估算的输出预算内准备任务上下文；该预算不是真实模型 Token 硬上限。
+- **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
+- **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.9.0**。UI 工具只读；独立的回收站工具会移动文件。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.9.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
-需要 Git、Node.js 18 或更新版本（本地验证使用 Node.js 24）；UI 取证需要 Windows x64。编译 UI Helper 需要 .NET 10 SDK。以下发布方式不自带运行时，运行机器需要对应的 .NET Runtime。
+**环境要求：**Git、Node.js `>= 18.0.0`（本地验证覆盖至 Node.js 24），以及 Windows x64 系统。编译 UI Helper 需安装 .NET 10 SDK；运行依赖宿主机对应的 .NET 运行时。
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git
@@ -183,11 +202,11 @@ cd WinCode
 npm ci
 npm run build
 
-# 编译 Windows UI Helper
+# 编译 C# 原生 UI 取证宿主
 dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-x64 --no-self-contained
 ```
 
-在客户端添加 stdio MCP 服务。支持 `mcpServers` JSON 的客户端可以参考：
+在 Agent 客户端配置文件中添加 stdio MCP 服务（以支持 `mcpServers` 的客户端为例）：
 
 ```json
 {
@@ -200,28 +219,30 @@ dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-
 }
 ```
 
-> **路径说明：**这里的 `~` 仅作为安装位置的占位符。请将 `~/WinCode` 替换为你实际安装 WinCode 的绝对路径，例如 `I:/WinCode`；将 `~/target-project` 替换为待分析项目的绝对路径。不要直接照抄 `~`，MCP 客户端不一定会自动展开它。
+> **路径说明：**配置中的 `~` 仅为路径占位符。请将 `~/WinCode` 替换为你本地安装 WinCode 的绝对路径（如 `I:/WinCode`），将 `~/target-project` 替换为待分析项目的绝对路径。若客户端不支持自动展开波浪号，请勿直接照抄 `~`。
 
-如果通过设置界面添加：
+若通过图形界面添加：
 
-| 字段 | 填写内容 |
+| 配置字段 | 填写内容 |
 | --- | --- |
-| 名称 / 类型 | `wincode` / `stdio` |
+| 服务名称 / 类型 | `wincode` / `stdio` |
 | 启动命令 | `node` |
 | 参数 1 | `~/WinCode/dist/index.js` |
 | 参数 2 | `--workspace` |
 | 参数 3 | `~/target-project` |
 
-保存前替换路径，每个参数独立添加；不要把 CLI 注册命令填进“启动命令”。客户端需要能够找到 `node`，否则填写它的可执行文件绝对路径。
+注意每个参数独立添加为一行。确保系统环境变量 PATH 中包含 `node`，或直接填写 node.exe 的绝对路径。
 
-可选的 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md) 介绍安装与分功能手册。Skill 提供使用说明，MCP 连接提供实际执行能力，两者需要分别配置。
+如需配合 Agent Skill 获得低 Token 开销的精准任务路由，请参阅可选的 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。
 
-### 试一次局部 UI 取证
+### 实战示例：精准定位并分析目标控件
 
-可以直接告诉 Agent：**“找到我的应用窗口，不切换前台，查看保存按钮，并核对 `Views/MainWindow.xaml` 中的声明。”**
+大型桌面应用的完整控件树动辄包含成百上千个视觉节点。若直接全量导出，不仅耗尽 Agent 上下文，还会增加定位干扰。WinCode 支持按条件精准定位目标控件子树：
 
-1. 调用 `wincode_ui_list_windows`，按进程或窗口标题筛选。
-2. 将返回的 PID、HWND 填入 `wincode_ui_inspect`：
+> **提示词示例：** *“找到我的应用窗口，在后台查看保存按钮的状态，并核对 `Views/MainWindow.xaml` 中的源码声明。”*
+
+1. 调用 `wincode_ui_list_windows`，通过进程名或标题关键字筛选获得目标 `pid` 与 `hwnd`。
+2. 使用 `wincode_ui_inspect` 进行定向检索：
 
 ```json
 {
@@ -236,89 +257,112 @@ dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-
 }
 ```
 
-3. 需要图片时改用 `capture: "annotated"`；需要源码证据时调用 `wincode_ui_review`，追加 `candidateFiles: ["Views/MainWindow.xaml"]`。
+3. 若需要视觉排查，启用 `capture: "annotated"` 获取带编号的高对比度标注截图；若需关联源码，改用 `wincode_ui_review` 并传入 `candidateFiles: ["Views/MainWindow.xaml"]`。
 
-示例 PID、HWND、控件 ID 和 XAML 路径都需要替换为实际值。query 条件是区分大小写的精确 AND 匹配；完整且唯一命中才展开子树，歧义或搜索未完成时返回候选。节点 ID 仅属于当前响应。截图仍覆盖整个目标窗口，数字标注对应返回的局部子树。
-
-`capture: "none"` 避免图片输入，但 JSON 仍占用上下文 Token。图片通过独立 MCP image 块传递，不将 Base64 塞进文本块。`readStates` 仅读取勾选、选中与展开/折叠状态，不读取输入框值、不执行操作；不支持或读取失败不会被当成 false。
+**关键机制说明：**
+- **零图片 Token 开销：**若仅需排查结构与属性，使用 `capture: "none"` 仅返回纯净的结构化 JSON；需要截图时，图片走独立 MCP `image` 内容块传输，绝不将庞大的 Base64 塞入文本段。
+- **准确的状态语义：**`readStates: true` 会安全读取控件的勾选、选中与展开折叠状态。若控件本身未实现某种模式，接口明确标记为不支持，绝不误报为 `false`，杜绝大模型产生误判。
+- **纯后台无感取证：**`backgroundOnly: true` 仅使用定向 `PrintWindow` 捕获，不抢前台焦点、不还原窗口，有效防止用户当前操作或全屏游戏污染截图画面。
 
 ### 工具一览
 
-| 工具 | 用途 |
+| 工具名称 | 功能描述 |
 | --- | --- |
-| `workspace_open` | 打开或切换待分析工作区。 |
-| `wincode_analyze_workspace` | 汇总工程结构与 .NET 项目引用声明。 |
-| `wincode_prepare_context` | 在指定预算内准备任务相关代码上下文。 |
-| `wincode_find_code_symbol` | 定位符号，附带证据来源与完整性信息。 |
-| `wincode_find_references` | 查找引用并提示覆盖不足。 |
-| `analyze_change_impact` | 评估改动影响，证据不足时保留 UNKNOWN。 |
-| `wincode_plan_refactoring` | 根据影响分析准备重构检查清单。 |
-| `wincode_safe_move_to_trash` | 校验路径后将工作区文件移入带元数据的 trash/。 |
-| `wincode_ui_list_windows` | 有界枚举并筛选可见顶层窗口。 |
-| `wincode_ui_inspect` | 返回控件树、可选状态与可选截图。 |
-| `wincode_ui_review` | 组合运行时取证与指定 XAML 文件的声明候选。 |
-| `wincode_hello_world` | 查看网关、缓存与适配器健康状态。 |
-| `wincode_diagnose_project` | 检查项目工具链及环境可用性。 |
+| `workspace_open` | 打开或切换目标工作区，按项目隔离缓存命名空间。 |
+| `wincode_analyze_workspace` | 解析工程依赖拓扑，提取 `.sln`/`.csproj` 项目引用关系。 |
+| `wincode_prepare_context` | 在基于字符数估算的输出预算内，按文件、符号或行号范围提供代码证据。 |
+| `wincode_find_code_symbol` | 检索代码符号，透明附带数据源置信度与完整性标识。 |
+| `wincode_find_references` | 跨文件查找引用点与调用方，杜绝静默漏报。 |
+| `analyze_change_impact` | 评估代码改动爆炸半径与重构风险；若存在歧义或查询受限，置信度如实返回 `UNKNOWN`。 |
+| `wincode_plan_refactoring` | 基于影响面分析生成改动前置检查清单与验证步骤。 |
+| `wincode_safe_move_to_trash` | 安全回收站：校验相对路径后将文件移入 `trash/` 归档并记录元数据，杜绝物理硬删除。 |
+| `wincode_ui_list_windows` | 列出系统可见顶层窗口，支持按标题/进程名筛选与数量硬截断。 |
+| `wincode_ui_inspect` | 定向抓取控件子树、交互状态与可选的高对比度数字标注截图。 |
+| `wincode_ui_review` | 将运行时的控件状态与工作区 XAML 源码声明（行号、代码片段、哈希）精准关联。 |
+| `wincode_hello_world` | 网关状态心跳，检查缓存体积与适配器分层连接状态。 |
+| `wincode_diagnose_project` | 无侵入检查本地 .NET SDK、Git 与运行环境健康度。 |
 
-`wincode_analyze_change_impact` 是 `analyze_change_impact` 的别名。参数与工作流程见分功能手册：[代码分析](skills/wincode/references/code.md)、[UI 取证](skills/wincode/references/ui.md)、[诊断](skills/wincode/references/diagnostics.md)。
+`wincode_analyze_change_impact` 是 `analyze_change_impact` 的别名。详细参数与工作流请参考对应手册：[代码分析](skills/wincode/references/code.md)、[UI 取证](skills/wincode/references/ui.md)、[系统诊断](skills/wincode/references/diagnostics.md)。
 
-### 架构与资源控制
+### 架构设计与资源管控
 
 ```text
 Coding Agent ── stdio MCP ── WinCode
-                               ├─ 代码适配器：Serena / Repomix / 本地降级
-                               ├─ 工作区分析、上下文与影响分析工具
+                               ├─ 代码适配器：Serena / Repomix / 内置文本降级引擎
+                               ├─ 工作区分析、上下文提取与影响面分析工具
                                └─ FlaUiAdapter ── stdin/stdout JSON ── .NET UIA Helper
-                                                                        └─ 控件树 + 截图
+                                                                        └─ 控件树遍历 + 截图渲染
 ```
 
-UI 取证与健康探测共用串行锁；取消信号贯穿请求准入和适配器。清理只针对自身持有的 Helper 进程树，不以目标应用 PID 为清理对象。切换工作区前等待在途请求，排空超时则拒绝切换。这些措施用于降低生命周期竞态，不代表任意目标应用绝不会异常。
+- **目标进程绝对免疫：**UI 取证由独立的 C# 辅助进程（`tools/WinCode.UIA.Host`）在进程外执行。所有清理操作严格仅终止自身派生的 Helper 辅助进程树（通过 Windows `taskkill /T`），**被测目标应用进程受绝对免疫保护，绝不被终止或注入**。
+- **防死锁与并发保护：**UI 自动化访问与健康检查共用串行互斥锁，杜绝底层 Win32/UIA 消息泵死锁。切换工作区前会先等待排空在途请求，超时则拒绝切换，保证会话隔离安全。
+- **按字节硬封顶缓存：**代码缓存按工作区物理隔离，采用序列化内存估算与字节上限清理策略（默认内存预算 32 MiB、磁盘配额 128 MiB，包含超大快照落盘文件）。结合 150 ms 去抖监听与 Git 索引探测，文件变更时指纹缓存及时失效。
 
-代码缓存按工作区区分命名空间，按序列化大小估算内存，磁盘清理同时计算被引用的 overflow 文件。默认内存计量预算 32 MiB、磁盘清理预算 128 MiB。文件监听默认去抖 150 ms，指纹约缓存 2.5 秒，并非即时失效。UI 快照不跨请求缓存。
-
-| UI 预算 | 限制与行为 |
+| 取证预算指标 | 限制值与行为策略 |
 | --- | --- |
-| 局部搜索 | 默认扫描 1,000 节点、最多 5,000；默认 10 个候选、最多 20。 |
-| 搜索遍历 | 2 秒、50 层软限制；阻塞原生调用由整个 Helper 截止时间兜底。 |
-| 控件树文本 | 128 KiB，附带截断信息。 |
-| PNG | 2 MiB；有限缩小后仍超限则省略图片。 |
-| Helper 传输 | 6 MiB，按真实字节计量。 |
-| 截图分配 | 总像素最多 16,777,216，任一边最多 16,384 像素。 |
+| 定向搜索范围 | 默认最多扫描 1,000 个节点（上限 5,000）；候选匹配默认最多 10 个（上限 20）。 |
+| 遍历层级约束 | 软限制 2 秒、50 层深度；若底层 Win32 调用发生阻塞，由 Helper 进程全局硬超时机制强制中断。 |
+| 控件树文本 | 上限 128 KiB，超出时透明附带截断原因。 |
+| PNG 图像 | 上限 2 MiB；优先动态缩小尺寸，仍超限则安全省略图片并保留控件树。 |
+| 进程管道传输 | 严格限制为 6 MiB 原始字节流。 |
+| 截图内存防护 | 硬性前置校验：总像素不超过 16,777,216，单边不超过 16,384 像素，超限在分配位图前即拦截。 |
 
-这些是具体环节的预算，不是整个进程的内存或 Token 硬上限。`helperPeakWorkingSetBytes` 记录响应准备阶段的系统峰值工作集，不包含随后最终序列化。`treeComplete` 描述结构与输出覆盖，`propertyIssues` 单独说明属性不可用或被裁剪。查询与状态功能要求 Helper `inspectionVersion: 2`，旧版被拒绝时需重新编译 Helper。
+`helperPeakWorkingSetBytes` 记录响应准备阶段的系统峰值工作集。`treeComplete` 表征控件树结构的完整性，`propertyIssues` 单独记录不可用或被裁剪的属性。
 
-### 能力边界与可见提示
+### 能力边界与可见性
 
-- **后台截图：**`backgroundOnly: true` 要求同时指定 PID 与 HWND，只使用 PrintWindow，不激活、不恢复窗口，也不回退到屏幕截图。部分渲染器可能返回空白或旧画面；最小化窗口会被拒绝。普通截图模式可能回退到屏幕采集。
-- **UI 覆盖：**结果取决于应用的 UIA Provider 与访问权限。已有独立 WPF 夹具，不代表所有 WinUI、WinForms 或自绘应用都具有相同覆盖。已实现 DPI 感知，但完整的多 DPI、4K 验证仍待补充。
-- **源码证据：**在指定 XAML 文件中匹配字面量声明，不求值 Binding、模板或资源，并返回 `runtimeSourceVerified: false`。候选用于辅助核对，不等于已证明运行时控件对应某行源码。
-- **工程分析：**从项目文件声明提取引用，不执行 MSBuild 求值；条件、导入和未支持的声明排列可能漏识别。Serena、Repomix 为可选上游，本地降级会报告覆盖不足。
-- **可见提示：**内置 Helper 在 UI 访问期间显示半透明 `REC / WinCoding` 标志。更高层浮窗或独占全屏可能遮挡它；它不是操作系统级安全边界。
-- **本地审计：**仅记录启动/结束元数据，目录为 `%LOCALAPPDATA%/WinCode/logs/ui-audit`。1 MiB 时在结果中建议清理；接近 2 MiB 时预留结束记录空间并停止新访问。不自动删除日志，也不防同权限篡改；仅有启动记录时，结果视为未知。[检测脚本](scripts/check-ui-audit.ps1) 支持显式检查与可选桌面提醒。
+- **后台截图适用性：**`backgroundOnly: true` 仅支持非最小化窗口且需同时指定 PID 与 HWND。部分采用自研渲染管线的应用后台可能返回空白画面，此时建议切换为标准截图。
+- **UI 自动化覆盖度：**取证效果取决于目标应用本身的 UIA Provider 完备性。项目针对 WPF 提供了隔离测试夹具；对于 WinUI、WinForms 或自绘渲染程序，UIA 支持度视其实现而定。
+- **源码证据边界：**仅匹配指定 `.xaml` 文件内的字面量属性声明（`runtimeSourceVerified: false`），不求值动态 Binding、模板或全局资源字典。
+- **项目分析边界：**直接解析 `.sln` 与 `.csproj` 文件结构，不执行 MSBuild 动态属性计算。Serena 与 Repomix 均为可选上游，降级运行时会在结果中明确声明。
+- **视觉指示器：**在 UI 取证期间，主屏幕右上角会强制浮现半透明置顶标志（`REC / WinCoding`），保障操作对用户完全透明可见。
+- **本地审计记录：**仅记录时间、PID、耗时等结构化元数据至 `%LOCALAPPDATA%/WinCode/logs/ui-audit`。达到 1 MiB 提示清理，达到 2 MiB 拦截新访问以预留结束记录空间。日志不自动删除，支持通过 [检测脚本](scripts/check-ui-audit.ps1) 手动审查。
 
-### 开发与验证
+### 代码上下文与取证路由
+
+调用 `wincode_prepare_context` 时，直接使用已经掌握的位置：
+
+```json
+{"task":"核对保存逻辑","lineRanges":[{"file":"src/Service.cs","startLine":50,"endLine":80}],"maxTokens":2000}
+```
+
+已知行号用 `lineRanges`；已知文件和声明名用 `scopeFiles` 加 `symbol`；仅知道文件用 `scopeFiles`。需要发现候选之外的文件时再用 `candidateFiles`，它仍然是优先列表，不是排他范围。限定范围的符号定位目前使用 C#/TS/JS/Python 本地声明模式，会明确保留语义不完整、重名和缺失提示。
+
+默认 `compact` 返回一个 JSON 文本块；`responseFormat: "legacy"` 返回 JSON 加 Markdown。`maxTokens` 接受 512–65536，以全部返回文本的 UTF-16 字符数除以四估算，包含元数据，不等于真实模型 Token 数。结合实际行号、`queryComplete`、截断信息和 `bodyStatus` 判断证据是否够用；满足后继续分析，文件修改或工作区切换后重新取证。WinCode 没有跨调用证据有效期保证，基准中的复用策略也不是生产缓存。参数组合与限制见[代码手册](skills/wincode/references/code.md)。
+
+### 本地开发与测试验证
 
 ```powershell
 npm run build
 npm run typecheck
-npm test                  # 非交互回归
+npm test                  # 运行非交互单元与契约测试
+npm run test:benchmark    # 基准正确性与故障注入测试
+npm run benchmark:agent -- 1  # 单轮小样本；三轮对照使用 -- 3
 
-# 实机 UI 测试前发布隔离 WPF 夹具
+# 实机 UI 测试前发布隔离 WPF 测试夹具
 dotnet publish tests/fixtures/wpf-ui-review/wpf-ui-review.csproj -c Release -r win-x64 --no-self-contained
-npm run test:ui           # 既有交互 UI 套件
-npm run test:ui-query     # 单独运行局部查询验收，使用一次性夹具
-npm run test:all          # npm test + test:ui，不包含 test:ui-query
+npm run test:ui           # 交互式 UI 自动化测试
+npm run test:ui-query     # 运行定向控件查询验收测试
+npm run test:all          # 全套回归验证
 ```
 
-实机 UI 测试需要交互式 Windows 会话，可能显示测试窗口。222 节点隔离夹具中，局部查询文本由 62,025 字节降至约 1,600 字节，调用仍约 0.78 秒；这只说明该样本的输出缩减，不代表普遍提速或精确 Token 节省。测试证据与未验证项见[工作记录](docs/codex_worklog.md)。
+实机 UI 测试需要交互式 Windows 桌面会话。实测在包含 222 个节点的测试夹具中，定向查询将返回文本由 62 KB 降至约 1.6 KB，单次耗时稳定在 0.78 秒左右。详尽的测试记录参见 [工作日志](docs/codex_worklog.md)。
+
+Agent 基准包含 10 类脚本场景，复用现有 `dotnet-mini` C# 夹具，并按四种初始位置信息分层。返回的文件、行号、正文及状态均与当前夹具核对；工具错误、传输异常、响应损坏和清理失败会保留在 `test-tmp/agent-efficiency` 下的 JSON 报告中，失败返回非零退出码。无变化复用只在夹具写入受控、变化事件可信的条件下测试，修改后必须重新请求。测量使用本地回退，关闭上游与 GUI，记录 MCP 调用、返回字符、重复显示行和调用耗时，不代表真实 Agent 完成率、模型 Token 节省或生产缓存收益。Schema v2 场景与旧版六场景报告不同，不能直接比较两版总量。
 
 ---
 
 ## Acknowledgements / 致谢
 
-- [FlaUI](https://github.com/FlaUI/FlaUI) — Windows UI Automation library / Windows UI 自动化基础库。
-- [Serena](https://github.com/oraios/serena) — Optional semantic code navigation / 可选的语义代码导航。
-- [Repomix](https://github.com/yamadashy/repomix) — Optional repository context packing / 可选的代码库上下文打包。
+This project is inspired by and builds upon the foundational work of:
+- **[FlaUI](https://github.com/FlaUI/FlaUI)** — Providing a robust, modern UI Automation (UIA2/UIA3) library for Windows desktop applications.
+- **[Serena](https://github.com/oraios/serena)** — Pioneering semantic code intelligence, symbol-level navigation, and structured interactions for AI coding agents.
+- **[Repomix](https://github.com/yamadashy/repomix)** — Setting the benchmark for token-efficient repository context packing.
+
+本项目在立项与演进过程中深受上述优秀开源项目的启发：
+- **FlaUI**：为 Windows 平台提供了坚固现代的 UI Automation (UIA2/UIA3) 封装底座。
+- **Serena**：展示了代码语义理解、符号级代码导航以及智能化代码交互对 Coding Agent 的关键价值。
+- **Repomix**：展示了高效的代码库上下文打包方案，使大型项目在面对 AI Agent 时更加高效且节约 Token。
 
 ## License / 许可
 

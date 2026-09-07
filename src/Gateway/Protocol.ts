@@ -184,11 +184,11 @@ export const WINCODE_TOOLS: Tool[] = [
       properties: {
         symbolName: {
           type: 'string',
-          description: 'Exact name of the symbol to trace.',
+          description: 'Exact symbol name, or the full upstream namePath including containers and overload indices such as Service/Save[0]. Pair a full namePath with its defining relativePath. Simple names require a complete unique semantic resolution; ambiguity does not select the first result.',
         },
         relativePath: {
           type: 'string',
-          description: 'Optional relative path to the file containing the symbol definition. If omitted, it will be automatically resolved.',
+          description: 'Defining file relative to the workspace. Pair it with the full namePath for precise references; omitted paths are resolved only from a complete unique semantic candidate.',
         },
       },
       required: ['symbolName'],

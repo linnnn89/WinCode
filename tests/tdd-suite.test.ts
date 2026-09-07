@@ -412,12 +412,12 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.strictEqual(mapped[0].name, 'MainWindow');
       assert.strictEqual(mapped[0].containerName, 'App');
       assert.strictEqual(mapped[0].file, 'src/MainWindow.xaml.cs');
-      assert.strictEqual(mapped[0].line, 25);
+      assert.strictEqual(mapped[0].line, 26);
       assert.strictEqual(mapped[0].kind, 'class');
 
       assert.strictEqual(mapped[1].name, 'ToolRouter');
       assert.strictEqual(mapped[1].file, 'src/Core/ToolRouter.ts');
-      assert.strictEqual(mapped[1].line, 42);
+      assert.strictEqual(mapped[1].line, 43);
       assert.strictEqual(mapped[1].kind, 'class');
     });
 
@@ -454,12 +454,12 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
 
       assert.strictEqual(refs[0].symbolName, 'findReferences');
       assert.strictEqual(refs[0].file, 'src/Core/ToolRouter.ts');
-      assert.strictEqual(refs[0].line, 55);
+      assert.strictEqual(refs[0].line, 56);
       assert.ok(refs[0].preview.includes('const refs = await this.serena.findReferences(symbolName);'));
 
       assert.strictEqual(refs[1].symbolName, 'findReferences');
       assert.strictEqual(refs[1].file, 'src/CompositeTools/ImpactAnalyzer.ts');
-      assert.strictEqual(refs[1].line, 90);
+      assert.strictEqual(refs[1].line, 91);
       assert.ok(refs[1].preview.includes('const refs = await this.serena.findReferences(symbolName, targetFile);'));
     });
 

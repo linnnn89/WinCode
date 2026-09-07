@@ -87,6 +87,8 @@ export class ImpactAnalyzer {
     }
 
     let symbols: CodeSymbol[] = [];
+    const matchesTarget = (symbol: CodeSymbol): boolean => symbol.name === symbolName ||
+      (symbol.namePath !== undefined && symbol.namePath.replace(/^\//, '') === symbolName.replace(/^\//, ''));
     const assessment: QueryAssessment = {
       source: 'unknown',
       queryComplete: true,
@@ -147,7 +149,7 @@ export class ImpactAnalyzer {
             assessment.unique = true;
             assessment.typeMatchCount = 1;
           } else {
-            const exact = inFile.filter((s) => s.name.toLowerCase() === symbolName.toLowerCase());
+            const exact = inFile.filter(matchesTarget);
             if (exact.length === 1) {
               assessment.unique = true;
               assessment.typeMatchCount = 1;
@@ -163,7 +165,7 @@ export class ImpactAnalyzer {
         assessment.typeMatchCount = 0;
       }
     } else if (!assessment.unique) {
-      const exact = symbols.filter((s) => s.name.toLowerCase() === symbolName.toLowerCase());
+      const exact = symbols.filter(matchesTarget);
       if (assessment.typeMatchCount === 0 && exact.length === 1) {
         assessment.unique = true;
       }
@@ -174,10 +176,10 @@ export class ImpactAnalyzer {
       matchedSymbol =
         symbols.find(
           (s) =>
-            s.name.toLowerCase() === symbolName.toLowerCase() &&
+            matchesTarget(s) &&
             ['class', 'interface', 'struct', 'enum'].includes((s.kind || '').toLowerCase())
         ) ||
-        symbols.find((s) => s.name.toLowerCase() === symbolName.toLowerCase()) ||
+        symbols.find(matchesTarget) ||
         symbols[0];
     }
 
@@ -202,9 +204,10 @@ export class ImpactAnalyzer {
     }
 
     let refs: SymbolReference[] = [];
-    if (typeof (this.serena as any).findReferencesDetailed === 'function') {
+    if (assessment.unique && assessment.queryComplete && !assessment.truncated &&
+        typeof (this.serena as any).findReferencesDetailed === 'function') {
       const refRes: FindReferencesResult = await (this.serena as any).findReferencesDetailed(
-        symbolName,
+        matchedSymbol?.namePath ?? symbolName,
         matchedSymbol?.file
       );
       refs = refRes.references || [];
@@ -220,7 +223,7 @@ export class ImpactAnalyzer {
       if (refRes.limitations) {
         assessment.limitations.push(...refRes.limitations);
       }
-    } else {
+    } else if (assessment.unique && assessment.queryComplete && !assessment.truncated) {
       refs = await this.serena.findReferences(symbolName);
     }
 

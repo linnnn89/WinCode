@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+- Migrate server/client, stdio, in-memory tests and scripts to MCP SDK v2.0.0; minimum Node.js is now 20 (runtime verification on Node 24.19.0).
+- Replace schema-based handler registration and v1 callTool options with v2 APIs; retain existing tool definitions and legacy protocol negotiation behavior.
+- Remove unused direct Zod/v1 SDK dependencies; use the v2 packages' Zod dependency. No new protocol revision or public tool redesign is enabled.
+
 ## 0.9.4
 
 - Preserve Serena full name paths and overload identity; reject ambiguous or incomplete automatic reference targets. Limit returned ambiguity candidates while retaining the count.

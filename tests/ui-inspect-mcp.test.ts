@@ -4,8 +4,8 @@ import { spawn, ChildProcess } from 'node:child_process';
 import fsPromises from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport } from '@modelcontextprotocol/client';
 import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 import { getDefaultConfig } from '../src/Core/Config.js';
@@ -342,7 +342,6 @@ describe('WinCode MCP UI Inspect Protocol & End-to-End Suite', () => {
           name: 'wincode_ui_inspect',
           arguments: { pid: wpfPid, capture: 'annotated', maxDepth: 6 },
         },
-        undefined,
         { signal: ac.signal }
       );
     } catch (err: any) {

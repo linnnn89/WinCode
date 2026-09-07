@@ -327,3 +327,12 @@
 - 反证修补：同一文件内两个容器/重载按身份计数，不能按文件去重为唯一；歧义候选上限 20，保留 candidateCount/candidatesTruncated，41 个候选也不选择首项。源码片段包含摘要字样不误判为上游摘要。
 - 验证：新增专项 27 项（子智能体 26 项加主智能体候选上限测试）；typecheck/build、默认完整回归 214 项（213 pass、1 skip、0 fail）通过；生产新 stdio 契约/正文与 TavernDesk 8 场景再次通过。报告 test-tmp/r4/；未安装/启动真实 Serena LSP，受控响应/现有 mock 握手不能替代真实语言服务器验收。
 - 用户新增要求：另开 gpt-6-astra/xhigh 专用只读子代理诊断旧版本连接。初步对照：该新代理实际 Codex MCP hello 已为 0.9.4 且 build.status=verified，主代理同时仍为 0.9.0、旧启动时间不变；配置/进程根因继续核对。新代理连接成功不代表父连接已重启。
+- 合并：PR #17 CodeQL 全部成功，锁定 8276992 合并并确认 MERGED，main=95446c3e06628561501eb31a70bc6da6bea1ccd7。
+
+## 2026-09-08（北京时间）— R5 SDK v2 / Node 20，0.10.0
+
+- 用户已明确接受 Node 20 最低版本。核对官方迁移文档和 npm，server/client/core 均有稳定 2.0.0，SDK engines>=20；沿用当前 Node 24.19.0 执行，不下载/切换系统 Node，不宣称单独在 Node 20 跑过。
+- 迁移：生产 Gateway/Serena 客户端、stdio/in-memory、测试与脚本全范围更换公开 import；handler 改方法字符串与 ctx.mcpReq.signal，callTool 取消/超时改为 v2 第二参数。直接依赖仅 server/client 2.0.0，移除旧 SDK 和未直接使用的 Zod3，v2 传递依赖统一 Zod4.5.4；没有安装 codemod/Inspector，没有启用新协议默认行为或改变工具参数。schemaHash 与 R4 同为 b640821440bfe6f961683ce22ce6266a3ca6c74f363ceb54d3442bdbca12f191。
+- 安装失败与修复：首次并存安装被旧 SDK 依赖链 body-parser@2.3.0 请求未发布 iconv-lite@^0.8.0 阻止；只读 npm 日志及公共 registry 核对后，移除已计划退出的 v1 声明和未用直接 Zod 声明再安装成功，未加不满足上游范围的 override。首次 typecheck 查出三处旧 callTool 三参用法，按 v2 API 修正，保留信号/超时断言。
+- 验证：typecheck/build、独立 stdio initialize/list/schema/目标正文、TavernDesk 8 场景通过；完整非交互回归 214 项（213 pass、1 skip）；真实隔离 WPF 的 UI/协议回归 34/34，含图片独立 block、真实客户端取消传递、helper 退出、工作区切换和重复窗口筛选。日志 test-tmp/r5/；GUI测试为专用夹具，不证明 TavernDesk 的后台空白截图已修复。
+- 旧连接诊断结论：专用 GPT-6 xHigh 子代理核对同配置同绝对启动路径，旧主连接与新子连接返回不同版本/启动时间；旧进程持续运行是直接解释，不是新版磁盘无法被 Codex 加载。新实例0.9.4与当时manifest一致。官方 config/mcpServer/reload 存在但当前工具未暴露且无单服务器无扰动保证，未调用。详见根路线图第13节；该取证在R5依赖迁移前完成。

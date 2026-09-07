@@ -4,8 +4,8 @@ import { FlaUiAdapter } from '../src/Adapters/FlaUiAdapter.js';
 import { getDefaultConfig } from '../src/Core/Config.js';
 import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport } from '@modelcontextprotocol/client';
 
 it('helper pipe preserves Chinese characters split across UTF-8 chunks', async () => {
   const adapter = new FlaUiAdapter(getDefaultConfig(process.cwd()));

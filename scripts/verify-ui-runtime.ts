@@ -2,8 +2,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 const options = JSON.parse(await fs.readFile(process.argv[2], 'utf8')) as {
   pid: number; workspace: string; candidateFiles: string[]; output: string; iterations?: number;
@@ -22,7 +22,7 @@ let gatewayPid: number | null = null;
 let failure: string | null = null;
 const alive = (pid: number | null) => { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
 const call = async (name: string, args: Record<string, unknown> = {}) => {
-  const response = await client.callTool({ name, arguments: args }, undefined, { timeout: 30_000 });
+  const response = await client.callTool({ name, arguments: args }, { timeout: 30_000 });
   assert.equal(response.isError ?? false, false, JSON.stringify(response.content).slice(0, 500));
   const data = JSON.parse((response.content as Array<{ text: string }>)[0].text);
   return { response, data };
@@ -43,7 +43,7 @@ try {
       const timer = setTimeout(() => abort.abort(), 20);
       try {
         await client.callTool({ name: 'wincode_ui_inspect', arguments: { pid: options.pid, capture: 'annotated' } },
-          undefined, { signal: abort.signal, timeout: 30_000 });
+          { signal: abort.signal, timeout: 30_000 });
       } catch (error) {
         if (!abort.signal.aborted) throw error;
         cancelled = true;

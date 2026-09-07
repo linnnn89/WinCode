@@ -239,6 +239,17 @@ Repomix 的个别有用做法可独立参考；当前显式候选打包会走内
 | 0.9.1 / R1 | [PR #14](https://github.com/linnnn89/WinCode/pull/14) 已合并，main 7ce737f | 非交互回归 169 pass、1 skip；最终入口筛选修正后专项 9/9。真实 TavernDesk 独立 MCP 响应 3705 字符，保留 solution、应用项目入口；CodeQL 通过 |
 | 0.9.2 / R2 | [PR #15](https://github.com/linnnn89/WinCode/pull/15) 已合并，main 2cbf443 | 专项 8/8，非交互回归 177 pass、1 skip，独立 stdio 契约与实际正文核对通过；CodeQL 通过 |
 | 0.9.3 / R3 | [PR #16](https://github.com/linnnn89/WinCode/pull/16) 已合并，main 0351111；主连接新版验收待办 | 专项 34/34；非交互回归 186 pass、1 skip；CodeQL 通过。真实 TavernDesk 新 stdio 8 场景通过 |
-| 0.9.4 / R4 | 符号身份/解析正确性已实现并复测，准备 PR | 新增 27 项；完整回归 213 pass、1 skip；stdio/TavernDesk 复测通过，真实 Serena LSP 未验收 |
-| R5–R6 | 按序推进，R6 在仓库外独立 worktree 准备 | 未完成版本不得据此宣称已验证 |
+| 0.9.4 / R4 | [PR #17](https://github.com/linnnn89/WinCode/pull/17) 已合并，main 95446c3 | 新增 27 项；完整回归 213 pass、1 skip；CodeQL、stdio/TavernDesk 复测通过，真实 Serena LSP 未验收 |
+| 0.10.0 / R5 | SDK v2 迁移已实现并复测，准备 PR | typecheck/build、stdio/TavernDesk、非交互回归 213 pass、1 skip；GUI/协议 34/34；工具 schemaHash 与 R4 相同 |
+| R6 | 独立 worktree 实现已准备，待整合验收 | 未完成版本不得据此宣称已验证 |
 | R7–R9 | 条件阶段，尚未进入 | 依据真实阻塞决定是否实施 |
+
+## 13. Codex 旧版本连接诊断（2026-09-08）
+
+用户要求专用 GPT-6 xHigh 子代理只读分析。07:32–07:34 北京时间的对照显示：主任务 hello 仍为 0.9.0，启动于 06:31:39；新子代理 hello 为 0.9.4、build 校验通过，启动于 07:32:07。两者的 WinCode 配置均指向 `node I:/WinCode/dist/index.js --workspace I:/WinCode`，新连接的 buildId 与当时磁盘 manifest 一致。
+
+结论是旧连接仍持有构建前启动的进程，重编译磁盘不会替换存活实例；没有证据支持这组对照由错误安装路径或旧磁盘产物导致。仅 schema 缓存也不能解释旧 hello 的版本和启动时间。相关 Node 进程来自同一 Codex 后端；旧 PID 与任务仅按启动时间关联，未直接锁定，不能据此批量终止进程。
+
+无需结束主任务即可由构建后新建的代理连接验证新版；必须注明它是新连接，父连接仍旧。官方 App Server 提供 `config/mcpServer/reload`，本机应用代码也有调用点，但当前工具未暴露，且未核实单服务器、无扰动刷新保证，因此本次未调用；本机 CLI 的 `mcp --help` 无 restart/reconnect 子命令。[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server)
+
+后续可在独立小改动中考虑 hello 暴露自身 PID，让关联直接可证；这不会自动修复既有旧进程，本轮不混入 SDK 迁移或 UI 源码导航。

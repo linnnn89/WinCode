@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Tiny stdio MCP stand-in for Serena handshake tests.
- * Speaks newline-delimited JSON-RPC like @modelcontextprotocol/sdk.
+ * Speaks newline-delimited JSON-RPC using the legacy initialize handshake.
  * Does not implement real C# semantics.
  */
 const hang = process.env.MOCK_SERENA_HANG === '1' || process.argv.includes('--hang');

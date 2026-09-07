@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const WINCODE_VERSION = '0.9.4';
+export const WINCODE_VERSION = '0.10.0';
 
 /**
  * Bounded waits for every external process/RPC. None of these may be Infinity.

@@ -11,6 +11,7 @@ import { WINCODE_VERSION } from '../Core/Config.js';
 import { AbortError } from '../Core/ResourceManager.js';
 import { UI_INSPECT_DEFAULTS, validateUiQuery, UiQuery, validateWindowQuery, UiListWindowsRequest } from '../Core/UiContracts.js';
 import { validateCandidateFiles } from '../Core/UiSourceMapper.js';
+import { validateCandidateCodeFiles } from '../Core/UiCodeMapper.js';
 import { validateTextQueries } from '../Core/UiTextSearch.js';
 import { UiReviewResult } from '../CompositeTools/UiReview.js';
 import { validateContextOptions } from '../Core/Context.js';
@@ -337,7 +338,7 @@ export class WinCodeMcpServer {
                 errorCode: 'INVALID_ARGUMENT', errorMessage: 'backgroundOnly requires explicit pid and hwnd.' }) }], isError: true };
             }
             if (name === 'wincode_ui_review') {
-              try { validateCandidateFiles(args.candidateFiles); validateTextQueries(args.textQueries); }
+              try { validateCandidateFiles(args.candidateFiles); validateTextQueries(args.textQueries); validateCandidateCodeFiles(args.candidateCodeFiles); }
               catch (error) {
                 return { content: [{ type: 'text', text: JSON.stringify({ success: false,
                   errorCode: 'INVALID_ARGUMENT', errorMessage: (error as Error).message }) }], isError: true };
@@ -502,7 +503,7 @@ export class WinCodeMcpServer {
 
             const inspect = name === 'wincode_ui_review'
               ? (input: Parameters<ToolRouter['inspectUi']>[0], abort?: AbortSignal) =>
-                this.router.reviewUi(input, args.candidateFiles as string[], abort, args.textQueries as string[] | undefined)
+                this.router.reviewUi(input, args.candidateFiles as string[], abort, args.textQueries as string[] | undefined, args.candidateCodeFiles as string[] | undefined)
               : this.router.inspectUi.bind(this.router);
             const result: UiReviewResult = await inspect(
               {
@@ -531,6 +532,16 @@ export class WinCodeMcpServer {
               hasScreenshot: Boolean(imageBase64),
             };
             let text = JSON.stringify(textPayload);
+            // Optional C# navigation must not displace the snapshot or existing XAML evidence.
+            if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES && textPayload.codeEvidence) {
+              delete textPayload.codeEvidence;
+              textPayload.codeEvidenceOmitted = 'Code candidates exceed remaining text budget.';
+              text = JSON.stringify(textPayload);
+            }
+            if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES && textPayload.codeEvidenceOmitted) {
+              delete textPayload.codeEvidenceOmitted;
+              text = JSON.stringify(textPayload);
+            }
             // Optional keyword hits spend only spare budget; keep existing ID evidence and UI first.
             while (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES &&
               textPayload.sourceEvidence?.textSearch?.matches.length) {

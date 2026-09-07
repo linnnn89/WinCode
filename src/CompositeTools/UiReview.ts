@@ -1,23 +1,36 @@
 import { UiInspectRequest, UiInspectResult } from '../Core/UiContracts.js';
 import { mapUiSources, UiSourceEvidence, validateCandidateFiles } from '../Core/UiSourceMapper.js';
 import { validateTextQueries } from '../Core/UiTextSearch.js';
+import { mapUiCodeCandidates, UiCodeEvidence, validateCandidateCodeFiles } from '../Core/UiCodeMapper.js';
 
 export type UiReviewResult = UiInspectResult & {
   sourceEvidence?: UiSourceEvidence;
   sourceEvidenceOmitted?: string;
+  codeEvidence?: UiCodeEvidence;
+  codeEvidenceOmitted?: string;
 };
 
 /** Reuse one snapshot so source node IDs and image badges belong to the same observation. */
 export async function reviewUi(
   inspect: (request: UiInspectRequest, signal?: AbortSignal) => Promise<UiInspectResult>,
-  workspaceRoot: string, request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[]
+  workspaceRoot: string, request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[], candidateCodeFiles?: string[]
 ): Promise<UiReviewResult> {
   validateCandidateFiles(candidateFiles);
   validateTextQueries(textQueries);
+  validateCandidateCodeFiles(candidateCodeFiles);
   const snapshot = await inspect(request, signal);
   if (!snapshot.success || !snapshot.tree) return snapshot;
   try {
     const sourceEvidence = await mapUiSources(workspaceRoot, candidateFiles, snapshot.tree, signal, textQueries);
+    if (candidateCodeFiles) {
+      try {
+        const codeEvidence = await mapUiCodeCandidates(workspaceRoot, candidateCodeFiles, sourceEvidence, signal);
+        return { ...snapshot, sourceEvidence, codeEvidence };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return { ...snapshot, sourceEvidence, codeEvidenceOmitted: 'Code candidate lookup unavailable.' };
+      }
+    }
     return { ...snapshot, sourceEvidence };
   } catch (error) {
     if (signal?.aborted) throw error;

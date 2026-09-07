@@ -150,6 +150,8 @@ it('MCP review validates scope before inspection and fits candidates around the 
     assert.equal(invalid.isError, true); assert.equal(calls, 0);
     const invalidQuery = await client.callTool({ name: 'wincode_ui_review', arguments: { pid: 1, candidateFiles: ['view.xaml'], textQueries: [' '] } });
     assert.equal(invalidQuery.isError, true); assert.equal(calls, 0);
+    const invalidCode = await client.callTool({ name: 'wincode_ui_review', arguments: { pid: 1, candidateFiles: ['view.xaml'], candidateCodeFiles: ['../Secret.cs'] } });
+    assert.equal(invalidCode.isError, true); assert.equal(calls, 0);
     const result = await client.callTool({ name: 'wincode_ui_review', arguments: { pid: 1, candidateFiles: ['view.xaml'], textQueries: ['保存'] } });
     assert.equal(result.isError, false); assert.equal(calls, 1);
     const content = result.content as Array<{ type: string; text: string }>;
@@ -181,5 +183,24 @@ it('MCP review validates scope before inspection and fits candidates around the 
     assert.equal(bounded.sourceEvidence.coverage.evaluatedNodes, 100);
     assert.equal(bounded.sourceEvidence.coverage.returnedNodes, bounded.sourceEvidence.nodes.length);
     assert.equal(blocks[1].type, 'image');
+    await fs.writeFile(path.join(root, 'view.xaml'), '<Button AutomationProperties.AutomationId="Save" Command="{Binding SaveCommand}"/>');
+    await fs.writeFile(path.join(root, 'Model.cs'), 'public ICommand SaveCommand { get; }');
+    const withCode = await client.callTool({ name: 'wincode_ui_review', arguments: {
+      pid: 1, candidateFiles: ['view.xaml'], candidateCodeFiles: ['Model.cs'],
+    } });
+    const codeBlocks = withCode.content as Array<{ type: string; text: string }>;
+    const clipped = JSON.parse(codeBlocks[0].text);
+    assert.equal(withCode.isError, false);
+    assert.equal(clipped.tree.children.length, 99);
+    assert.equal(clipped.codeEvidence, undefined, 'C# metadata is omitted before existing UI/XAML evidence');
+    assert.ok(Buffer.byteLength(codeBlocks[0].text, 'utf8') <= 128 * 1024);
+    assert.equal(codeBlocks[1].type, 'image');
+    router.inspectUi = async () => ({ schemaVersion: '1.0', protocolVersion: '1.0', requestId: 'small', success: true, tree: node(1, 'Save') });
+    const small = await client.callTool({ name: 'wincode_ui_review', arguments: {
+      pid: 1, candidateFiles: ['view.xaml'], candidateCodeFiles: ['Model.cs'],
+    } });
+    const mapped = JSON.parse((small.content as Array<{ text: string }>)[0].text);
+    assert.equal(mapped.codeEvidence.clues[0].candidates[0].identifier, 'SaveCommand');
+    assert.equal(mapped.codeEvidence.runtimeSourceVerified, false);
   } finally { await client.close(); await server.stop(); }
 }));

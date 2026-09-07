@@ -174,7 +174,7 @@ export class CacheManager {
         await fs.unlink(filePath).catch(() => {});
         const p = (entry.data as any)?.overflowPath;
         if (typeof p === 'string') {
-          await fs.unlink(path.resolve(p)).catch(() => {});
+          await this.removeOverflow(p);
         }
         return null;
       }
@@ -292,6 +292,30 @@ export class CacheManager {
     }
   }
 
+  private async removeOverflow(file: string): Promise<void> {
+    const target = path.resolve(file);
+    const overflowDir = path.resolve(this.cacheDir, 'overflow');
+    if (path.dirname(target) !== overflowDir) return;
+
+    // Invalidate readers before deleting their backing snapshot.
+    for (const [key, entry] of this.memoryCache) {
+      const ref = (entry.data as { overflowPath?: unknown } | null)?.overflowPath;
+      if (typeof ref === 'string' && path.resolve(ref) === target) this.deleteMemory(key);
+    }
+    try {
+      const dirStat = await fs.lstat(overflowDir);
+      if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return;
+      const realCache = await fs.realpath(this.cacheDir);
+      const realOverflow = await fs.realpath(overflowDir);
+      if (path.relative(realCache, realOverflow) !== 'overflow') return;
+      const stat = await fs.lstat(target);
+      if (!stat.isFile() || stat.isSymbolicLink()) return;
+      await fs.unlink(target);
+    } catch {
+      // Missing or inaccessible snapshots are safe to leave for a later prune.
+    }
+  }
+
   async pruneDiskCache(options?: { orphanGraceMs?: number }): Promise<void> {
     try {
       const files = await fs.readdir(this.cacheDir);
@@ -337,7 +361,7 @@ export class CacheManager {
           if (entry.ttlMs && now - entry.timestamp > entry.ttlMs) {
             await fs.unlink(jsonPath).catch(() => {});
             if (overflowPath) {
-              await fs.unlink(overflowPath).catch(() => {});
+              await this.removeOverflow(overflowPath);
             }
             continue;
           }
@@ -346,7 +370,7 @@ export class CacheManager {
           if (stat.size > this.maxEntryBytes) {
             await fs.unlink(jsonPath).catch(() => {});
             if (overflowPath) {
-              await fs.unlink(overflowPath).catch(() => {});
+              await this.removeOverflow(overflowPath);
             }
             continue;
           }
@@ -389,7 +413,7 @@ export class CacheManager {
         const victim = validEntries[survivingIndex];
         await fs.unlink(victim.jsonPath).catch(() => {});
         if (victim.overflowPath) {
-          await fs.unlink(victim.overflowPath).catch(() => {});
+          await this.removeOverflow(victim.overflowPath);
         }
         totalDiskBytes -= victim.totalBytes;
         survivingIndex++;
@@ -425,7 +449,7 @@ export class CacheManager {
           if (of.includes('.tmp.')) {
             const s = await fs.stat(fullPath).catch(() => null);
             if (s && now - s.mtimeMs > 30_000) {
-              await fs.unlink(fullPath).catch(() => {});
+              await this.removeOverflow(fullPath);
             }
             continue;
           }
@@ -437,7 +461,7 @@ export class CacheManager {
           // Orphan candidate: check grace period
           const s = await fs.stat(fullPath).catch(() => null);
           if (s && (orphanGraceMs <= 0 || Date.now() - s.mtimeMs >= orphanGraceMs)) {
-            await fs.unlink(fullPath).catch(() => {});
+            await this.removeOverflow(fullPath);
           }
         }
       } catch {}
@@ -707,7 +731,7 @@ export class CacheManager {
       const overflowDir = path.join(this.cacheDir, 'overflow');
       const overflowFiles = await fs.readdir(overflowDir).catch(() => []);
       for (const of of overflowFiles) {
-        await fs.unlink(path.join(overflowDir, of)).catch(() => {});
+        await this.removeOverflow(path.join(overflowDir, of));
       }
     } catch {
       // Ignore

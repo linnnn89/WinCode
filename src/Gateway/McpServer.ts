@@ -65,10 +65,12 @@ export class WinCodeMcpServer {
       }
 
       const isSwitchOp = name === 'workspace_open' || name === 'wincode_workspace_open';
-      if (!isSwitchOp) {
-        await this.router.acquireRequestSlot();
-      }
+      let acquired = false;
       try {
+        if (!isSwitchOp) {
+          await this.router.acquireRequestSlot();
+          acquired = true;
+        }
         switch (name) {
           case 'workspace_open':
           case 'wincode_workspace_open': {
@@ -313,7 +315,7 @@ export class WinCodeMcpServer {
           isError: true,
         };
       } finally {
-        if (!isSwitchOp) {
+        if (acquired) {
           this.router.endRequest();
         }
       }

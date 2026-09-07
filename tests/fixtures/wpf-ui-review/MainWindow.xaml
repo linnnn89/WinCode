@@ -1,0 +1,99 @@
+<Window x:Class="wpf_ui_review.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        AutomationProperties.AutomationId="WinCodeWpfFixtureRoot"
+        Title="WinCode UI Review Fixture" Height="500" Width="700"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header Controls: Normal and Disabled Buttons -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+            <Button x:Name="btnNormal"
+                    AutomationProperties.AutomationId="btnNormalAction"
+                    Content="Normal Action"
+                    Width="120" Height="32" Margin="0,0,8,0"/>
+            <Button x:Name="btnDisabled"
+                    AutomationProperties.AutomationId="btnDisabledAction"
+                    Content="Disabled Action"
+                    IsEnabled="False"
+                    Width="120" Height="32" Margin="0,0,8,0"/>
+            <Button x:Name="btnSpawnDialog"
+                    AutomationProperties.AutomationId="btnSpawnDialog"
+                    Content="Open SubWindow"
+                    Width="130" Height="32" Margin="0,0,8,0"
+                    Click="BtnSpawnDialog_Click"/>
+        </StackPanel>
+
+        <!-- Input controls -->
+        <StackPanel Grid.Row="1" Margin="0,0,0,12">
+            <Label Content="Username:" Target="{Binding ElementName=txtUsername}"/>
+            <TextBox x:Name="txtUsername"
+                     AutomationProperties.AutomationId="txtUsername"
+                     Text="SampleUser"
+                     Height="28" Margin="0,0,0,8"/>
+
+            <Label Content="Password:" Target="{Binding ElementName=txtPassword}"/>
+            <PasswordBox x:Name="txtPassword"
+                         AutomationProperties.AutomationId="txtPassword"
+                         Password="SecretPassword123"
+                         Height="28"/>
+        </StackPanel>
+
+        <!-- Duplicate Identifiers for disambiguation verification -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,12">
+            <TextBlock x:Name="dupItem1"
+                       AutomationProperties.AutomationId="duplicateItem"
+                       Text="Duplicate Identifier Item 1"
+                       Margin="0,0,16,0"/>
+            <TextBlock x:Name="dupItem2"
+                       AutomationProperties.AutomationId="duplicateItem"
+                       Text="Duplicate Identifier Item 2"/>
+        </StackPanel>
+
+        <!-- Deeply nested tree for testing maxDepth & maxNodes truncation -->
+        <Border Grid.Row="3" BorderBrush="Gray" BorderThickness="1" Padding="8">
+            <ScrollViewer AutomationProperties.AutomationId="treeScrollViewer">
+                <StackPanel AutomationProperties.AutomationId="level1Stack">
+                    <TextBlock Text="Level 1 Node" AutomationProperties.AutomationId="nodeL1"/>
+                    <Border Margin="10,4,0,0" AutomationProperties.AutomationId="level2Border">
+                        <StackPanel AutomationProperties.AutomationId="level2Stack">
+                            <TextBlock Text="Level 2 Node" AutomationProperties.AutomationId="nodeL2"/>
+                            <Border Margin="10,4,0,0" AutomationProperties.AutomationId="level3Border">
+                                <StackPanel AutomationProperties.AutomationId="level3Stack">
+                                    <TextBlock Text="Level 3 Node" AutomationProperties.AutomationId="nodeL3"/>
+                                    <Border Margin="10,4,0,0" AutomationProperties.AutomationId="level4Border">
+                                        <StackPanel AutomationProperties.AutomationId="level4Stack">
+                                            <TextBlock Text="Level 4 Node" AutomationProperties.AutomationId="nodeL4"/>
+                                            <Border Margin="10,4,0,0" AutomationProperties.AutomationId="level5Border">
+                                                <StackPanel AutomationProperties.AutomationId="level5Stack">
+                                                    <TextBlock Text="Level 5 Node" AutomationProperties.AutomationId="nodeL5"/>
+                                                    <Border Margin="10,4,0,0" AutomationProperties.AutomationId="level6Border">
+                                                        <StackPanel AutomationProperties.AutomationId="level6Stack">
+                                                            <TextBlock Text="Level 6 Node (Truncation Depth Test)" AutomationProperties.AutomationId="nodeL6"/>
+                                                            <Border Margin="10,4,0,0" AutomationProperties.AutomationId="level7Border">
+                                                                <TextBlock Text="Level 7 Node (Deep Leaf)" AutomationProperties.AutomationId="nodeL7"/>
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </StackPanel>
+                                            </Border>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>

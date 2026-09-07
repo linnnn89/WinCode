@@ -20,7 +20,7 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.9.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.9.1**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
@@ -98,7 +98,8 @@ Query specific controls directly rather than dumping an entire window's visual t
 
 | Tool | Purpose |
 | --- | --- |
-| `workspace_open` | Open or switch active workspace session and isolate cache namespaces. |
+| `workspace_open` | Open or switch workspace, isolate caches and return a bounded project summary. |
+| `wincode_list_directory` | Browse a specific workspace directory with entry, depth and output limits. |
 | `wincode_analyze_workspace` | Parse solution structure and declared `.sln`/`.csproj` project references. |
 | `wincode_prepare_context` | Prepare scoped code evidence and actual line ranges within a character-based output budget. |
 | `wincode_find_code_symbol` | Search codebase symbols with transparent source and completeness metadata. |
@@ -148,6 +149,12 @@ Coding agent ── stdio MCP ── WinCode
 - **Visual indicator:** A non-activating, semi-transparent `REC / WinCoding` overlay is painted in the top-right corner of the primary display during UI inspection to ensure complete visibility.
 - **Local audit:** Lightweight start/end records are flushed to `%LOCALAPPDATA%/WinCode/logs/ui-audit` (1 MiB triggers cleanup reminders; 2 MiB blocks new access with reserved end-record space). The [audit checker script](scripts/check-ui-audit.ps1) enables manual inspections.
 
+### Opening and browsing a workspace
+
+`workspace_open({"path":"~/target-project"})` returns a compact summary with at most 8 entry paths and no directory tree by default. `maxOutputChars` defaults to 8000 (2048–32768) and budgets the entire JSON text, including metadata and escaping; it is not a model-token count. Replace the placeholder with an absolute path. Discovery is bounded: check `projectScanComplete` and the reported gaps; unmeasured file/size totals are `null`.
+
+Use `wincode_list_directory({"path":"src","maxDepth":1,"maxEntries":100})` to browse only the next useful directory. It reports actual visited/returned counts, omissions and truncation. `includeIgnored:true` explicitly exposes generated directories within the workspace; outside-workspace links remain rejected. Narrow the path after truncation. Existing callers needing a tree can request `workspace_open({"path":"~/target-project","includeTree":true})`, which returns a bounded compatibility tree, not the former unrestricted inventory.
+
 ### Code context and retrieval routing
 
 Use `wincode_prepare_context` with the location information already available:
@@ -190,7 +197,7 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.9.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.9.1**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
@@ -268,7 +275,8 @@ dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-
 
 | 工具名称 | 功能描述 |
 | --- | --- |
-| `workspace_open` | 打开或切换目标工作区，按项目隔离缓存命名空间。 |
+| `workspace_open` | 打开或切换工作区、隔离缓存，并返回有界项目摘要。 |
+| `wincode_list_directory` | 按指定目录浏览，限制条目、深度与整份输出。 |
 | `wincode_analyze_workspace` | 解析工程依赖拓扑，提取 `.sln`/`.csproj` 项目引用关系。 |
 | `wincode_prepare_context` | 在基于字符数估算的输出预算内，按文件、符号或行号范围提供代码证据。 |
 | `wincode_find_code_symbol` | 检索代码符号，透明附带数据源置信度与完整性标识。 |
@@ -317,6 +325,12 @@ Coding Agent ── stdio MCP ── WinCode
 - **项目分析边界：**直接解析 `.sln` 与 `.csproj` 文件结构，不执行 MSBuild 动态属性计算。Serena 与 Repomix 均为可选上游，降级运行时会在结果中明确声明。
 - **视觉指示器：**在 UI 取证期间，主屏幕右上角会强制浮现半透明置顶标志（`REC / WinCoding`），保障操作对用户完全透明可见。
 - **本地审计记录：**仅记录时间、PID、耗时等结构化元数据至 `%LOCALAPPDATA%/WinCode/logs/ui-audit`。达到 1 MiB 提示清理，达到 2 MiB 拦截新访问以预留结束记录空间。日志不自动删除，支持通过 [检测脚本](scripts/check-ui-audit.ps1) 手动审查。
+
+### 打开与浏览工作区
+
+`workspace_open({"path":"~/target-project"})` 默认返回紧凑摘要及最多 8 个入口路径，不附带目录树。`maxOutputChars` 默认 8000（范围 2048–32768），约束包含元数据及转义的整份 JSON 文本，不是模型 token 数；示例占位路径须替换为实际绝对路径。项目发现有界，需检查 `projectScanComplete` 和缺口；未统计的文件数量及总大小为 `null`。
+
+接下来用 `wincode_list_directory({"path":"src","maxDepth":1,"maxEntries":100})` 只读取需要的目录，核对实际检查/返回条目数、省略和截断。`includeIgnored:true` 可显式访问工作区内通常隐藏的生成目录，工作区外链接仍被拒绝；截断后应缩小目录路径。旧调用方需要树时可传 `workspace_open({"path":"~/target-project","includeTree":true})`，得到有界兼容树，不能恢复原先无总量限制的清单。
 
 ### 代码上下文与取证路由
 

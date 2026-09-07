@@ -104,19 +104,33 @@ export class WinCodeMcpServer {
         switch (name) {
           case 'workspace_open':
           case 'wincode_workspace_open': {
-            const targetPath = String(args.path || '');
-            if (!targetPath) {
+            const targetPath = args.path;
+            if (typeof targetPath !== 'string' || !targetPath.trim() || targetPath.length > 4096) {
               throw new Error('Parameter "path" is required for workspace_open.');
             }
-            const result = await this.router.openWorkspace(targetPath);
+            if (Object.keys(args).some(key => !['path', 'includeTree', 'maxOutputChars'].includes(key))) {
+              throw new Error('Unsupported workspace_open parameter. Check the connected tools/list schema.');
+            }
+            const result = await this.router.openWorkspace(targetPath, {
+              includeTree: args.includeTree as boolean | undefined,
+              maxOutputChars: args.maxOutputChars as number | undefined,
+            });
             return {
               content: [
                 {
                   type: 'text',
-                  text: JSON.stringify(result, null, 2),
+                  text: JSON.stringify(result),
                 },
               ],
             };
+          }
+
+          case 'wincode_list_directory': {
+            if (Object.keys(args).some(key => !['path', 'maxDepth', 'maxEntries', 'maxOutputChars', 'includeIgnored'].includes(key))) {
+              throw new Error('Unsupported wincode_list_directory parameter. Check the connected tools/list schema.');
+            }
+            const result = await this.router.workspace.listDirectory(args);
+            return { content: [{ type: 'text', text: JSON.stringify(result) }] };
           }
 
           case 'wincode_hello_world': {
@@ -161,6 +175,7 @@ export class WinCodeMcpServer {
                         },
                       },
                       capabilities: [
+                        'wincode_list_directory',
                         'wincode_hello_world',
                         'wincode_analyze_workspace',
                         'wincode_prepare_context',

@@ -39,28 +39,71 @@ export interface WorkspaceGitStatus {
 }
 
 export interface WorkspaceMetadata {
-  totalFiles: number;
-  totalDirectories: number;
-  totalSizeBytes: number;
+  totalFiles: number | null;
+  totalDirectories: number | null;
+  totalSizeBytes: number | null;
   targetFramework?: string;
   frameworks: string[];
   packageManagers: string[];
   solutions: string[];
   projectList: string[];
-  scanScope: 'filtered-depth-limited';
+  scanScope: 'filtered-depth-limited' | 'project-discovery-only';
   maxScanDepth: number;
   omittedDirectories: Array<{ path: string; reason: string }>;
   omittedDirectoryCount: number;
+  projectDiscovery?: {
+    visitedEntries: number;
+    descriptorBytesRead: number;
+    maxEntries: number;
+    maxDepth: number;
+    maxDescriptorBytes: number;
+    ignoredDirectoryCount: number;
+    omissions: Array<{ path: string; reason: string }>;
+    omittedCount: number;
+  };
+}
+
+export interface WorkspaceOpenOptions {
+  includeTree?: boolean;
+  maxOutputChars?: number;
+}
+
+export interface WorkspaceDirectoryOptions {
+  path?: string;
+  maxDepth?: number;
+  maxEntries?: number;
+  maxOutputChars?: number;
+  includeIgnored?: boolean;
+}
+
+export interface WorkspaceDirectoryResult {
+  workspace: string;
+  path: string;
+  entries: Array<{ path: string; type: 'file' | 'directory' }>;
+  omissions: Array<{ path: string; reason: string }>;
+  omittedCount: number;
+  visitedEntries: number;
+  returnedEntries: number;
+  scanComplete: boolean;
+  truncated: boolean;
+  limits: { maxDepth: number; maxEntries: number; maxOutputChars: number; includeIgnored: boolean };
+  outputOmissions: string[];
 }
 
 export interface WorkspaceOpenResult {
+  workspace: string;
   type: 'dotnet' | 'node' | 'python' | 'rust' | 'go' | 'general';
   solution: string | null;
   projects: number;
   language: string;
   git: WorkspaceGitStatus;
   metadata: WorkspaceMetadata;
-  fileTree: WorkspaceTreeItem;
+  fileTree?: WorkspaceTreeItem;
+  entryPoints: string[];
+  projectScanComplete: boolean;
+  truncated: boolean;
+  limits: { maxOutputChars: number; includeTree: boolean };
+  outputOmissions: string[];
 }
 
 export class WorkspaceManager {
@@ -519,10 +562,283 @@ export class WorkspaceManager {
     };
   }
 
+  private boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number, name: string): number {
+    if (value === undefined) return fallback;
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum || value > maximum) {
+      throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+    }
+    return value;
+  }
+
+  /** Extra preview filters do not affect symbol discovery, cache keys, or explicit legacy scans. */
+  private async previewOmission(dir: string): Promise<string | null> {
+    const existing = await this.directoryOmission(dir);
+    if (existing) return existing;
+    const name = path.basename(dir).toLowerCase();
+    return /^(?:\.publish(?:[-.].*)?|publish|artifacts|work)$/.test(name)
+      ? 'generated-or-work-directory' : null;
+  }
+
+  /** Bounded discovery intentionally does not build a tree or stat individual output binaries. */
+  private async discoverProject(): Promise<{
+    identity: ProjectIdentity; complete: boolean; entryPoints: string[];
+    discovery: NonNullable<WorkspaceMetadata['projectDiscovery']>;
+  }> {
+    const discovery: NonNullable<WorkspaceMetadata['projectDiscovery']> = {
+      visitedEntries: 0, descriptorBytesRead: 0, maxEntries: 2000, maxDepth: 3,
+      maxDescriptorBytes: 262144, ignoredDirectoryCount: 0, omissions: [], omittedCount: 0,
+    };
+    let complete = true;
+    const omit = (relative: string, reason: string, incomplete = true) => {
+      if (incomplete) complete = false;
+      discovery.omittedCount++;
+      if (['default-ignore', 'local-dotnet-sdk', 'generated-or-work-directory'].includes(reason)) discovery.ignoredDirectoryCount++;
+      if (discovery.omissions.length < 24) discovery.omissions.push({ path: relative, reason });
+    };
+    const realRoot = await fs.realpath(this.root);
+    const solutions = new Set<string>();
+    const projects = new Set<string>();
+    const manifests = new Set<string>();
+    const entryPoints = new Set<string>();
+    const frameworks = new Set<string>();
+    const packageManagers = new Set<string>();
+    let targetFramework: string | undefined;
+    let descriptorReads = 0;
+    const relative = (full: string) => path.relative(this.root, full).replace(/\\/g, '/') || '.';
+    const acceptProject = (project: string) => {
+      const portable = project.replace(/\\/g, '/');
+      if (path.isAbsolute(portable) || /^[a-z]:/i.test(portable) || !this.isPathInside(this.root, path.resolve(this.root, portable))) {
+        omit('.', 'project-path-outside-workspace');
+        return;
+      }
+      const normalized = relative(path.resolve(this.root, portable));
+      if (projects.size < 256) projects.add(normalized);
+      else if (!projects.has(normalized)) omit('.', 'project-list-limit');
+    };
+    const readDescriptor = async (rel: string): Promise<string | null> => {
+      if (descriptorReads >= 16 || discovery.descriptorBytesRead >= discovery.maxDescriptorBytes) {
+        omit(rel, 'descriptor-budget'); return null;
+      }
+      const full = path.resolve(this.root, rel);
+      let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+      try {
+        const real = await fs.realpath(full);
+        if (!this.isPathInside(realRoot, real)) { omit(rel, 'external-link'); return null; }
+        handle = await fs.open(real, 'r');
+        const stat = await handle.stat();
+        if (!stat.isFile()) { omit(rel, 'not-a-file'); return null; }
+        descriptorReads++;
+        const capacity = Math.min(65536, discovery.maxDescriptorBytes - discovery.descriptorBytesRead);
+        const buffer = Buffer.alloc(capacity);
+        const { bytesRead } = await handle.read(buffer, 0, capacity, 0);
+        discovery.descriptorBytesRead += bytesRead;
+        if (stat.size > bytesRead) omit(rel, 'descriptor-truncated');
+        return buffer.subarray(0, bytesRead).toString('utf8');
+      } catch {
+        omit(rel, 'descriptor-unreadable'); return null;
+      } finally { await handle?.close(); }
+    };
+    // Fixed probes preserve common root identities even if a wide root exhausts enumeration.
+    for (const name of ['package.json', 'requirements.txt', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Directory.Build.props']) {
+      const stat = await fs.lstat(path.join(this.root, name)).catch(() => null);
+      if (stat?.isFile()) manifests.add(name);
+    }
+    const queue = [{ full: this.root, depth: 0 }];
+    while (queue.length && discovery.visitedEntries < discovery.maxEntries) {
+      const current = queue.shift()!;
+      try {
+        const real = await fs.realpath(current.full);
+        if (!this.isPathInsideOrEqual(realRoot, real)) { omit(relative(current.full), 'external-link'); continue; }
+        const directory = await fs.opendir(real);
+        try { while (discovery.visitedEntries < discovery.maxEntries) {
+          const entry = await directory.read();
+          if (!entry) break;
+          discovery.visitedEntries++;
+          const full = path.join(current.full, entry.name);
+          const rel = relative(full);
+          if (entry.isSymbolicLink()) { omit(rel, 'link-not-followed'); continue; }
+          if (entry.isDirectory()) {
+            const reason = await this.previewOmission(full);
+            if (reason) { omit(rel, reason, false); continue; }
+            if (current.depth >= discovery.maxDepth) { omit(rel, 'depth-limit'); continue; }
+            queue.push({ full, depth: current.depth + 1 });
+          } else if (entry.isFile()) {
+            const lower = entry.name.toLowerCase();
+            if (lower.endsWith('.csproj')) acceptProject(rel);
+            if (/^(?:src\/)?(?:index\.[cm]?[jt]s|main\.[cm]?[jt]s|main\.py|Program\.cs|App\.xaml)$/i.test(rel) && entryPoints.size < 8) entryPoints.add(rel);
+            if (current.depth === 0) {
+              if (lower.endsWith('.sln') || lower.endsWith('.slnx')) {
+                if (solutions.size < 64) solutions.add(rel); else omit('.', 'solution-list-limit');
+              }
+              if (/^(readme(?:\.(?:md|txt))?|agents\.md)$/i.test(entry.name) && entryPoints.size < 8) entryPoints.add(rel);
+            }
+          }
+        } } finally { await directory.close(); }
+        if (discovery.visitedEntries >= discovery.maxEntries) omit(relative(current.full), 'entry-budget');
+      } catch {
+        if (current.depth === 0) throw new Error('Workspace root could not be read during project discovery.');
+        omit(relative(current.full), 'directory-unreadable');
+      }
+    }
+    if (queue.length) omit('.', 'entry-budget');
+    const decodeXmlPath = (value: string): string | null => {
+      const named: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+      let valid = true;
+      const decoded = value.replace(/&([^;]*);|&/g, (_match, entity: string | undefined) => {
+        if (entity && Object.hasOwn(named, entity)) return named[entity];
+        if (entity && /^(?:#[0-9]+|#x[0-9a-fA-F]+)$/.test(entity)) {
+          const code = entity.startsWith('#x') ? Number.parseInt(entity.slice(2), 16) : Number.parseInt(entity.slice(1), 10);
+          // XML 1.0 permits these characters; reject NUL, surrogate halves and invalid code points.
+          if (Number.isSafeInteger(code) && (code === 9 || code === 10 || code === 13 ||
+            (code >= 0x20 && code <= 0xd7ff) || (code >= 0xe000 && code <= 0xfffd) ||
+            (code >= 0x10000 && code <= 0x10ffff))) return String.fromCodePoint(code);
+        }
+        valid = false;
+        return '';
+      });
+      return valid ? decoded : null;
+    };
+    for (const solution of solutions) {
+      const content = await readDescriptor(solution);
+      if (!content) continue;
+      const isXml = solution.toLowerCase().endsWith('.slnx');
+      const regex = isXml
+        ? /<Project\b[^>]*\bPath\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
+        : /Project\("\{[A-Za-z0-9-]+\}"\)\s*=\s*"[^"]+",\s*"([^"]+\.csproj)"/g;
+      let match;
+      while ((match = regex.exec(content)) !== null) {
+        const project = isXml ? decodeXmlPath(match[1] ?? match[2]) : match[1];
+        if (project === null) omit(solution, 'invalid-project-path-entity');
+        else if (!isXml || project.toLowerCase().endsWith('.csproj')) acceptProject(project);
+      }
+    }
+    for (const project of Array.from(projects).slice(0, 5)) {
+      const content = await readDescriptor(project);
+      if (!content) continue;
+      targetFramework ??= content.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i)?.[1].trim();
+      if (/<UseWPF>\s*true\s*<\/UseWPF>/i.test(content)) frameworks.add('WPF');
+      if (/<UseWinUI>\s*true\s*<\/UseWinUI>/i.test(content)) frameworks.add('WinUI');
+      if (/<UseWindowsForms>\s*true\s*<\/UseWindowsForms>/i.test(content)) frameworks.add('WinForms');
+    }
+    if (!targetFramework && manifests.has('Directory.Build.props')) {
+      targetFramework = (await readDescriptor('Directory.Build.props'))?.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i)?.[1].trim();
+    }
+    if (manifests.has('package.json')) { packageManagers.add('npm/node'); frameworks.add('Node.js / TypeScript'); }
+    if (manifests.has('requirements.txt') || manifests.has('pyproject.toml')) { packageManagers.add('pip/python'); frameworks.add('Python'); }
+    if (manifests.has('Cargo.toml')) frameworks.add('Rust');
+    if (manifests.has('go.mod')) frameworks.add('Go');
+    const isDotNet = solutions.size > 0 || projects.size > 0;
+    let type: ProjectIdentity['type'] = 'general';
+    let language = 'Unknown';
+    if (isDotNet) {
+      type = 'dotnet'; language = 'C#'; packageManagers.add('NuGet');
+      if (solutions.size) frameworks.add('.NET Solution');
+      if (projects.size) frameworks.add('C# / .NET');
+      if (targetFramework) frameworks.add(targetFramework);
+    } else if (packageManagers.has('npm/node')) { type = 'node'; language = 'TypeScript'; }
+    else if (packageManagers.has('pip/python')) { type = 'python'; language = 'Python'; }
+    else if (frameworks.has('Rust')) { type = 'rust'; language = 'Rust'; }
+    else if (frameworks.has('Go')) { type = 'go'; language = 'Go'; }
+    const identity: ProjectIdentity = {
+      name: path.basename(this.root), type, language, primarySolution: solutions.values().next().value ?? null,
+      frameworks: Array.from(frameworks), isDotNet, solutionFiles: Array.from(solutions),
+      projectFiles: Array.from(projects), hasGit: await fs.lstat(path.join(this.root, '.git')).then(() => true).catch(() => false),
+      packageManagers: Array.from(packageManagers), targetFramework,
+    };
+    return {
+      identity, complete, discovery,
+      entryPoints: Array.from(new Set([...Array.from(solutions).slice(0, 1), ...manifests, ...entryPoints, ...projects])).slice(0, 8),
+    };
+  }
+
+  /** Directory browsing is stateless and bounds enumeration as well as final serialization. */
+  async listDirectory(options: WorkspaceDirectoryOptions = {}): Promise<WorkspaceDirectoryResult> {
+    const maxDepth = this.boundedInteger(options.maxDepth, 1, 1, 5, 'maxDepth');
+    const maxEntries = this.boundedInteger(options.maxEntries, 100, 1, 500, 'maxEntries');
+    const maxOutputChars = this.boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
+    if (options.includeIgnored !== undefined && typeof options.includeIgnored !== 'boolean') throw new Error('includeIgnored must be a boolean.');
+    const requested = options.path ?? '.';
+    if (typeof requested !== 'string' || !requested.trim() || requested.length > 4096 || requested.includes('\0') ||
+      requested.split(/[\\/]/).includes('..') || path.isAbsolute(requested) || /^[a-z]:/i.test(requested) || /^(\/\/|\\\\)/.test(requested)) {
+      throw new Error('Directory path must be a non-empty relative path inside the workspace.');
+    }
+    const full = path.resolve(this.root, requested);
+    if (!this.isPathInsideOrEqual(this.root, full)) throw new Error('Directory path is outside the workspace.');
+    const realRoot = await fs.realpath(this.root);
+    const realTarget = await fs.realpath(full);
+    if (!this.isPathInsideOrEqual(realRoot, realTarget)) throw new Error('Directory path resolves outside the workspace.');
+    if (!(await fs.stat(realTarget)).isDirectory()) throw new Error('Directory path is not a directory.');
+    const relative = (value: string) => path.relative(this.root, value).replace(/\\/g, '/') || '.';
+    const result: WorkspaceDirectoryResult = {
+      workspace: this.root, path: relative(full), entries: [], omissions: [], omittedCount: 0,
+      visitedEntries: 0, returnedEntries: 0, scanComplete: true, truncated: false,
+      limits: { maxDepth, maxEntries, maxOutputChars, includeIgnored: options.includeIgnored ?? false }, outputOmissions: [],
+    };
+    const omit = (rel: string, reason: string, incomplete = true) => {
+      result.omittedCount++;
+      if (result.omissions.length < 24) result.omissions.push({ path: rel, reason });
+      if (incomplete) { result.scanComplete = false; result.truncated = true; }
+    };
+    // An explicit path is a browsing request, including a source subtree inside work/.
+    // includeIgnored controls filtering of child directories, not access to that path.
+    const queue = [{ full, depth: 0 }];
+    while (queue.length && result.visitedEntries < maxEntries) {
+      const current = queue.shift()!;
+      try {
+        const real = await fs.realpath(current.full);
+        if (!this.isPathInsideOrEqual(realRoot, real)) { omit(relative(current.full), 'external-link'); continue; }
+        const directory = await fs.opendir(real);
+        try { while (result.visitedEntries < maxEntries) {
+          const entry = await directory.read();
+          if (!entry) break;
+          result.visitedEntries++;
+          const entryFull = path.join(current.full, entry.name);
+          const rel = relative(entryFull);
+          if (entry.isSymbolicLink()) { omit(rel, 'link-not-followed'); continue; }
+          if (!entry.isDirectory() && !entry.isFile()) { omit(rel, 'unsupported-entry'); continue; }
+          if (entry.isDirectory() && !result.limits.includeIgnored) {
+            const reason = await this.previewOmission(entryFull);
+            if (reason) { omit(rel, reason, false); continue; }
+          }
+          result.entries.push({ path: rel, type: entry.isDirectory() ? 'directory' : 'file' });
+          if (entry.isDirectory()) {
+            if (current.depth + 1 >= maxDepth) omit(rel, 'depth-limit');
+            else queue.push({ full: entryFull, depth: current.depth + 1 });
+          }
+        } } finally { await directory.close(); }
+        if (result.visitedEntries >= maxEntries) omit(relative(current.full), 'entry-budget');
+      } catch {
+        if (current.depth === 0) throw new Error('Requested directory could not be read.');
+        omit(relative(current.full), 'directory-unreadable');
+      }
+    }
+    if (queue.length) omit(result.path, 'entry-budget');
+    return this.fitDirectory(result);
+  }
+
+  private fitDirectory(result: WorkspaceDirectoryResult): WorkspaceDirectoryResult {
+    const fits = () => JSON.stringify(result).length <= result.limits.maxOutputChars;
+    result.returnedEntries = result.entries.length;
+    if (result.omittedCount > result.omissions.length) result.outputOmissions.push('omission-details-limit');
+    if (!fits()) {
+      result.truncated = true;
+      result.outputOmissions.push('response-budget');
+      while (!fits() && result.omissions.length) result.omissions.pop();
+      while (!fits() && result.entries.length) {
+        result.entries.pop();
+        result.returnedEntries = result.entries.length;
+      }
+    }
+    if (!fits()) throw new Error('maxOutputChars cannot contain the workspace and directory identity.');
+    return result;
+  }
+
   /**
    * Phase 2: Opens and analyzes any target workspace directory.
    */
-  async openWorkspace(targetPath: string): Promise<WorkspaceOpenResult> {
+  async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}): Promise<WorkspaceOpenResult> {
+    const maxOutputChars = this.boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
+    if (options.includeTree !== undefined && typeof options.includeTree !== 'boolean') throw new Error('includeTree must be a boolean.');
     const resolvedPath = path.resolve(targetPath);
 
     const stat = await fs.stat(resolvedPath).catch(() => null);
@@ -536,20 +852,77 @@ export class WorkspaceManager {
     // Restore both mutable paths on failure so callers never observe a rejected root.
     this.setRoot(resolvedPath);
     try {
-      const identity = await this.identifyProject();
+      const { identity, complete, discovery, entryPoints } = await this.discoverProject();
       const git = await this.getGitStatus();
-      const metadata = await this.getMetadata(identity);
-      const fileTree = await this.getDirectoryTree(2);
-
-      return {
+      const metadata: WorkspaceMetadata = {
+        totalFiles: null, totalDirectories: null, totalSizeBytes: null,
+        scanScope: 'project-discovery-only', maxScanDepth: discovery.maxDepth,
+        omittedDirectories: discovery.omissions.filter(item => ['default-ignore', 'local-dotnet-sdk', 'generated-or-work-directory'].includes(item.reason)),
+        omittedDirectoryCount: discovery.ignoredDirectoryCount,
+        targetFramework: identity.targetFramework, frameworks: identity.frameworks,
+        packageManagers: identity.packageManagers, solutions: identity.solutionFiles, projectList: identity.projectFiles,
+        projectDiscovery: discovery,
+      };
+      const result: WorkspaceOpenResult = {
+        workspace: this.root,
         type: identity.type,
         solution: identity.primarySolution,
         projects: identity.projectFiles.length,
         language: identity.language,
         git,
         metadata,
-        fileTree,
+        entryPoints, projectScanComplete: complete, truncated: !complete,
+        limits: { maxOutputChars, includeTree: options.includeTree ?? false }, outputOmissions: [],
       };
+      if (discovery.omittedCount > discovery.omissions.length) {
+        result.outputOmissions.push('omission-details-limit'); result.truncated = true;
+      }
+      if (options.includeTree) {
+        const listing = await this.listDirectory({ maxDepth: 2, maxEntries: 100, maxOutputChars });
+        const fileTree: WorkspaceTreeItem = {
+          name: path.basename(this.root), path: this.root, relativePath: '.', type: 'directory', children: [],
+        };
+        const nodes = new Map<string, WorkspaceTreeItem>([['.', fileTree]]);
+        for (const entry of listing.entries) {
+          const node: WorkspaceTreeItem = {
+            name: path.posix.basename(entry.path), path: path.join(this.root, entry.path), relativePath: entry.path,
+            type: entry.type, ...(entry.type === 'directory' ? { children: [] } : {}),
+          };
+          nodes.get(path.posix.dirname(entry.path))?.children?.push(node);
+          nodes.set(entry.path, node);
+        }
+        fileTree.omittedDirectories = listing.omissions;
+        result.fileTree = fileTree;
+        if (listing.truncated) { result.truncated = true; result.outputOmissions.push('fileTree-bounded'); }
+      }
+      const fits = () => JSON.stringify(result).length <= maxOutputChars;
+      if (!fits()) {
+        result.truncated = true;
+        result.outputOmissions.push('response-budget');
+        const trim = (items: unknown[], field: string) => {
+          if (!fits() && items.length) {
+            result.outputOmissions.push(field);
+            while (!fits() && items.length) items.pop();
+          }
+        };
+        trim(result.fileTree?.omittedDirectories ?? [], 'fileTree.omittedDirectories');
+        trim(result.fileTree?.children ?? [], 'fileTree.children');
+        trim(discovery.omissions, 'metadata.projectDiscovery.omissions');
+        trim(metadata.omittedDirectories, 'metadata.omittedDirectories');
+        trim(metadata.projectList, 'metadata.projectList');
+        trim(metadata.solutions, 'metadata.solutions');
+        trim(metadata.frameworks, 'metadata.frameworks');
+        trim(metadata.packageManagers, 'metadata.packageManagers');
+        if (!fits() && metadata.targetFramework !== undefined) {
+          delete metadata.targetFramework; result.outputOmissions.push('metadata.targetFramework');
+        }
+        for (const key of ['remoteUrl', 'branch', 'headCommit'] as const) {
+          if (!fits() && git[key] !== undefined) { delete git[key]; result.outputOmissions.push(`git.${key}`); }
+        }
+        trim(result.entryPoints, 'entryPoints');
+      }
+      if (!fits()) throw new Error('maxOutputChars cannot contain the workspace identity and required summary.');
+      return result;
     } catch (error) {
       this.config.workspaceRoot = previousRoot;
       this.config.trashDir = previousTrash;

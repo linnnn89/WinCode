@@ -281,3 +281,20 @@
 - 报告：[Schema v2 三轮 JSON](../test-tmp/agent-efficiency/1788794274918-25708/report.json)。仍按既有 test-tmp 忽略规则保存；不覆盖旧报告。场景结果新增 knowledge、errors、actions、reusedEvidence 等字段，保留原始请求和逐调用状态。没有收集个人应用内容。
 - README：同步中英文代码上下文路由、compact/legacy、字符预算估计、生产新鲜度限制、基准命令、10 类场景与失败报告说明；明确旧/新版总量不可直接比较，修正本轮涉及的“严格模型 Token 预算”表述。仓库 Skill 与 CHANGELOG 同步；本机安装 Skill 未更新。
 - 文档验证：README 6 个 JSON 示例可解析，8 个不同本地链接均存在，git diff --check 通过（仅 Windows 行尾提示）。未运行 GUI 测试。后续如需生产跨调用复用，仍需单独设计可验证的内容变化、工作区隔离、容量与失效规则；本轮没有实现这些接口。
+
+## 2026-09-08（北京时间）— 汇总后续迭代路线图
+
+- 授权与资料：用户要求结合「WinCode迭代路线图」及「优化 Agent 使用效率」的 TavernDesk 实测，新增根目录 Markdown；随后明确要求一个 GPT-6 High 子智能体检索 GitHub 经验。已读取两段对话，按要求使用 gpt-6-astra/high 独立只读研究，综合官方仓库/文档，无额外委派或依赖安装。
+- 基线：分支 codex/agent-efficiency-round1，HEAD 6fba44a7404960257e5c749210892477ad26845c，源码版本 0.9.0，SDK 锁文件 1.30.0；不把旧对话 main@b492491 当作本地基线。开始时工作区干净。
+- 当前核查：workspace_open 仍默认附带深度 2、宽度及整响应未设预算的目录树；hello 返回 0.9.0 和工具名，缺少构建/schema 身份。当前会话已经暴露 scopeFiles/symbol/lineRanges，本次限定 483–705 行实际只返回 483–576、truncated=true；不能用 queryComplete=true/evidenceInsufficient=false 代替任务覆盖。历史约 5 万 token 为用户提供的实测概括，本次未重测 TavernDesk 或复算原始响应。
+- 路线决定：按用户指定将工作区摘要、运行实例/能力核对、精准取证实机验收排在前三；随后 Serena 身份/解析正确性、MCP SDK v2、UI→XAML→C#，MSBuild/WPF 深检/Repo Map 按真实需求进入。应用导航可访问性、computer use 错归窗口与测试环境初始化分别归因，不算成 WinCode 三类新增缺陷。固定测试目录的既有完成状态引用原工作记录，不冒称本轮验证。
+- 交付：[WinCode-迭代路线图.md](../WinCode-迭代路线图.md)。包含 R1–R9 目标、最小范围、代码落点、验收反例、GitHub 五项经验、暂缓项和后续 USER_DECISION_REQUIRED。补充同会话诊断与真实宿主验收区别、最终正文范围覆盖、Node 20+ 迁移门槛；不为 Inspector 额外安装或升级环境。
+- 文档验证：UTF-8、13 个不同本地链接、占位/冲突标记与围栏检查通过；初次空白检查发现 Markdown 换行末空格，已改为段落分隔。最终复核仅新增路线图并增订本日志。未修改生产代码、配置或锁文件，未运行代码回归、GUI/Serena 实机验收，未提交、推送或更新发布包。
+
+## 2026-09-08（北京时间）— R1 工作区摘要 0.9.1
+
+- 授权：用户要求按路线图逐版本复测、Debug、推送 PR 并合并；随后接受 R5 最低 Node 20。实施前 fetch 核对 origin/main=bae4a87（PR #13 已合并），从该提交新建 codex/r1-workspace-summary，带入本任务路线图和日志；不回退其他任务工作。
+- 改动：workspace_open 默认仅工作区身份、项目摘要和最多 8 个入口，完整 JSON 默认 8000 UTF-16 字符（可设 2048–32768）；不再计算全仓文件数/字节数或构造目录树。项目发现限制 2000 项、深度 3、描述文件总读取 256 KiB；未知统计为 null，缺口明确记录。includeTree 为有界兼容选项；新增无状态 wincode_list_directory，遍历与序列化分别限额，不改变源码搜索/缓存过滤。
+- Debug 与反例：检查链接逃逸、非法目录参数、宽目录、长 Unicode 项目列表、超大 solution；修正 .slnx 命名/数字实体路径及非法实体处理。真实 TavernDesk 入口曾被多语言 README 挤占，缩减通用 README 入口选择后保留 TavernDesk.App/Core/Infrastructure 等项目。workspace 切换异常仍恢复原根和 trash。
+- 验证：typecheck/build 通过；完整非交互回归 170 项，169 pass、1 skip、0 fail；最后 README 入口筛选修正后 build 与专项 9/9 再次通过。报告保存在 test-tmp/r1/（既有忽略目录）。未安装依赖或运行 GUI；版本同步为 0.9.1，README/Skill/CHANGELOG 更新真实契约。
+- 真实目录复测：新编译生产 Gateway + SDK InMemoryTransport 的独立 MCP 会话打开 I:/WinCode 和 I:/New-tarven，断言响应预算、无默认树、入口上限及 TavernDesk.sln/项目身份。WinCode 3554 字符；TavernDesk 最终实测见 test-tmp/r1/real-workspaces.json。深度缺口明确为 partial，不把它当全仓盘点。该会话关闭 Serena/FlaUI/Repomix CLI，不代表当前 Codex MCP 连接或真实应用 GUI 已更新。

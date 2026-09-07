@@ -14,16 +14,35 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'workspace_open',
-    description: 'Opens and analyzes a project workspace directory. Identifies project type (dotnet, node, python, etc.), solution file, project count, primary language, git status, metadata, and file tree.',
+    description: 'Opens a workspace and returns a compact project summary and at most 8 entry paths. Default output is bounded to 8000 UTF-16 characters; counts describe bounded discovery, not a complete inventory. Directory tree is opt-in and bounded; use wincode_list_directory for focused browsing.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         path: {
           type: 'string',
+          minLength: 1, maxLength: 4096,
           description: 'Path to the workspace project directory to open.',
         },
+        includeTree: { type: 'boolean', default: false, description: 'Include a bounded compatibility directory tree. Never an unbounded inventory.' },
+        maxOutputChars: { type: 'integer', minimum: 2048, maximum: 32768, default: 8000, description: 'Budget for the entire compact JSON text including escaping and metadata; not model tokens.' },
       },
       required: ['path'],
+    },
+  },
+  {
+    name: 'wincode_list_directory',
+    description: 'Lists a bounded directory within the active workspace on demand. Returns relative paths, traversal gaps and actual visited/returned counts. Does not change symbol-search or cache-fingerprint rules. Use a narrower path after truncation; no snapshot or cursor is retained.',
+    annotations: { readOnlyHint: true, destructiveHint: false },
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        path: { type: 'string', minLength: 1, maxLength: 4096, default: '.', description: 'Relative in-workspace directory. Parent traversal and outside-workspace links are rejected.' },
+        maxDepth: { type: 'integer', minimum: 1, maximum: 5, default: 1 },
+        maxEntries: { type: 'integer', minimum: 1, maximum: 500, default: 100, description: 'Maximum directory entries examined, including omitted entries.' },
+        maxOutputChars: { type: 'integer', minimum: 2048, maximum: 32768, default: 8000 },
+        includeIgnored: { type: 'boolean', default: false, description: 'Explicitly include normally hidden generated directories within the workspace.' },
+      },
     },
   },
   {

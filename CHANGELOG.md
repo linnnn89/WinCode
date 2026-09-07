@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+- Added bounded exact UI queries, local subtree selection and opt-in toggle/selection/expand-collapse state.
+- Exposed traversal/property gaps, helper peak RSS and old-helper feature mismatch; retained cancellation and audit boundaries.
+- Split noninteractive/default regression from explicit GUI acceptance; updated bilingual README and on-demand skill manuals.
+
 ## 0.8.0 (unreleased, stage 1)
 
 - Add mandatory metadata-only UI audit, 1 MiB warning/2 MiB admission limit, bounded reminder cooldown and explicit desktop reminder/checker.

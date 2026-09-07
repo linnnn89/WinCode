@@ -1,6 +1,5 @@
 /**
- * Contracts for Windows UI Runtime Inspection (v0.6)
- * Follows WinCode v0.6运行时UI取证实施方案.md and Grok review guidelines.
+ * Bounded Windows UI inspection contracts. Optional query/state fields require inspectionVersion 2.
  */
 
 export interface UiRect {
@@ -21,6 +20,8 @@ export interface UiNode {
   relativeBounds?: UiRect;
   isEnabled?: boolean;
   isOffscreen?: boolean;
+  propertyIssues?: string[];
+  states?: { toggle: string; selection: string; expandCollapse: string };
   children: UiNode[];
 }
 
@@ -35,7 +36,32 @@ export interface UiCandidateWindow {
 
 export type UiCaptureMode = 'none' | 'original' | 'annotated';
 
+export interface UiQuery {
+  automationId?: string; name?: string; controlType?: string;
+  maxSearchNodes?: number; maxMatches?: number;
+}
+
+/** Shared MCP/adapter boundary; rejected scopes must never launch the native helper. */
+export function validateUiQuery(query: unknown, readStates: unknown): void {
+  if (readStates !== undefined && typeof readStates !== "boolean") throw new Error("readStates must be boolean.");
+  if (query === undefined) return;
+  if (!query || typeof query !== "object" || Array.isArray(query)) throw new Error("query must be an object.");
+  const q = query as Record<string, unknown>;
+  if (Object.keys(q).some(k => !["automationId", "name", "controlType", "maxSearchNodes", "maxMatches"].includes(k)) ||
+      ![q.automationId, q.name, q.controlType].some(v => v !== undefined)) throw new Error("query requires an exact-match condition and no unknown fields.");
+  for (const key of ["automationId", "name", "controlType"]) {
+    const v = q[key];
+    if (v !== undefined && (typeof v !== "string" || !v.trim() || v.length > 256 || /[\x00-\x1f]/.test(v))) throw new Error("Invalid query condition.");
+  }
+  for (const [key, limit] of [["maxSearchNodes", 5000], ["maxMatches", 20]] as const) {
+    const v = q[key];
+    if (v !== undefined && (!Number.isInteger(v) || (v as number) < 1 || (v as number) > limit)) throw new Error(`Invalid ${key}.`);
+  }
+}
+
 export interface UiInspectRequest {
+  query?: UiQuery;
+  readStates?: boolean;
   schemaVersion?: string;
   requestId?: string;
   action?: 'inspect' | 'health' | 'ping' | 'listWindows';
@@ -54,6 +80,12 @@ export interface UiInspectRequest {
 export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout' | 'budgetLimit' | 'maxWindows' | 'enumerationFailed';
 
 export interface UiInspectResult {
+  inspectionVersion?: number;
+  helperPeakWorkingSetBytes?: number;
+  treeComplete?: boolean;
+  traversalErrors?: number;
+  propertyIssueCount?: number;
+  queryResult?: { status: "unique" | "ambiguous" | "not-found" | "incomplete"; searchComplete: boolean; visitedNodes: number; reason?: string; matches: UiNode[] };
   auditNotice?: { directory: string; totalBytes: number; warningBytes: number; stopBytes: number;
     blocked: boolean; message?: string };
   windows?: Array<UiCandidateWindow & { pid: number; processName?: string; processNameStatus: 'available' | 'unavailable' }>;

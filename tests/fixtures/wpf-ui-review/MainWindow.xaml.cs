@@ -55,6 +55,21 @@ public partial class MainWindow : Window
             }
             Content = panel;
         }
+        if (Environment.GetCommandLineArgs().Contains("--query-fixture")) {
+            var panel = new StackPanel();
+            void Add(FrameworkElement control, string id) {
+                System.Windows.Automation.AutomationProperties.SetAutomationId(control, id);
+                panel.Children.Add(control);
+            }
+            Add(new Button { Content = "Normal Action", IsEnabled = false }, "btnNormalAction");
+            Add(new Button { Content = "Duplicate" }, "duplicateItem");
+            Add(new Button { Content = "Duplicate" }, "duplicateItem");
+            Add(new CheckBox { Content = "Checked", IsChecked = true }, "queryToggle");
+            Add(new ListBox { Items = { new ListBoxItem { Content = "Selected", IsSelected = true } } }, "queryList");
+            Add(new Expander { Header = "Expanded", IsExpanded = true, Content = new TextBlock { Text = "Child" } }, "queryExpand");
+            for (int i = 0; i < 100; i++) Add(new Button { Content = "Unrelated " + i }, "unrelated" + i);
+            Content = panel;
+        }
         Loaded += MainWindow_Loaded;
     }
 

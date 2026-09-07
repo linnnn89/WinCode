@@ -143,6 +143,10 @@ public static class Program
                 return;
             }
 
+            if (!ValidQuery(request.Query)) {
+                WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "Invalid query filters or budgets.");
+                return;
+            }
             var timeoutMs = request.TimeoutMs is > 0 ? request.TimeoutMs.Value : 10000;
             currentAudit = UiAudit.Start(request.Pid, request.Hwnd, request.Capture, "inspect");
             using var cts = new CancellationTokenSource(timeoutMs);
@@ -287,16 +291,35 @@ public static class Program
             MaxDepth = maxDepth,
             MaxNodes = maxNodes,
             CaptureOrigin = captureOrigin,
-            CancellationToken = ct
+            CancellationToken = ct,
+            ReadStates = request.ReadStates
         };
 
         var walker = automation.TreeWalkerFactory.GetControlViewWalker();
-        var rootNode = TraverseElement(rootElement, walker, null, 1, context);
+        QueryResultDto? queryResult = null;
+        AutomationElement? selected = rootElement;
+        if (request.Query is { } query) {
+            var search = new BoundedUiSearch<AutomationElement>();
+            search.Run(rootElement, walker.GetFirstChild, walker.GetNextSibling,
+                element => MatchesQuery(element, query), query.MaxSearchNodes ?? 1000, query.MaxMatches ?? 10, ct);
+            queryResult = new QueryResultDto {
+                SearchComplete = search.Complete, VisitedNodes = search.Visited, Reason = search.Reason,
+                Status = search.Matches.Count > 1 ? "ambiguous" : !search.Complete ? "incomplete" : search.Matches.Count == 0 ? "not-found" : "unique"
+            };
+            int candidateId = 0;
+            foreach (var match in search.Matches)
+                queryResult.Matches.Add(ReadElementProperties(match, ++candidateId, null, captureOrigin, request.ReadStates));
+            // No guess from the first hit: uniqueness requires a complete bounded search.
+            selected = search.Complete && search.Matches.Count == 1 ? search.Matches[0] : null;
+        }
+        var rootNode = selected == null ? null : TraverseElement(selected, walker, null, 1, context);
 
+        ct.ThrowIfCancellationRequested();
         if (rootNode != null)
         {
             // Reserve room for the response envelope; annotate only retained nodes.
-            EnforceTreeJsonBudget(rootNode, MaxTextJsonBytes - 8 * 1024, context);
+            EnforceTreeJsonBudget(rootNode, MaxTextJsonBytes - 8 * 1024 -
+                (queryResult == null ? 0 : JsonSerializer.SerializeToUtf8Bytes(queryResult, JsonOptions).Length), context);
         }
 
         var captureMode = (request.Capture ?? "none").ToLowerInvariant();
@@ -349,6 +372,7 @@ public static class Program
             }
         }
 
+        ct.ThrowIfCancellationRequested();
         return new InspectResponse
         {
             SchemaVersion = "1.0",
@@ -365,6 +389,10 @@ public static class Program
             ImageScale = imageScale,
             ImageOmitted = imageOmitted,
             ImageOmittedReason = imageOmittedReason,
+            QueryResult = queryResult,
+            TreeComplete = rootNode != null ? !context.Truncated && context.TraversalErrors == 0 : null,
+            TraversalErrors = context.TraversalErrors,
+            PropertyIssueCount = context.CollectedNodes.Sum(n => n.PropertyIssues?.Count ?? 0),
             Tree = rootNode,
             TotalNodes = context.TotalCount,
             MaxDepthReached = context.MaxDepthReached,
@@ -398,19 +426,16 @@ public static class Program
             context.MaxDepthReached = currentDepth;
         }
 
-        var node = ReadElementProperties(element, nodeId, parentId, context.CaptureOrigin);
+        var node = ReadElementProperties(element, nodeId, parentId, context.CaptureOrigin, context.ReadStates);
         context.CollectedNodes.Add(node);
-
-        if (currentDepth >= context.MaxDepth)
-        {
-            context.Truncated = true;
-            context.TruncateReason ??= "maxDepth";
-            return node;
-        }
 
         try
         {
             var child = walker.GetFirstChild(element);
+            if (currentDepth >= context.MaxDepth) {
+                if (child != null) { context.Truncated = true; context.TruncateReason ??= "maxDepth"; }
+                return node;
+            }
             while (child != null && context.TotalCount < context.MaxNodes)
             {
                 var childNode = TraverseElement(child, walker, nodeId, currentDepth + 1, context);
@@ -427,82 +452,78 @@ public static class Program
                 context.TruncateReason ??= "maxNodes";
             }
         }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[WinCode.UIA.Host] Child traversal error on node {nodeId}: {ex.Message}");
+        catch (OperationCanceledException) { throw; }
+        catch {
+            context.TraversalErrors++;
+            context.Truncated = true;
+            context.TruncateReason ??= "enumerationFailed";
         }
 
         return node;
     }
 
-    private static UiNodeDto ReadElementProperties(
-        AutomationElement element,
-        int id,
-        int? parentId,
-        RectDto captureOrigin)
+    private static bool ValidQuery(UiQueryDto? query) {
+        if (query == null) return true;
+        var values = new[] { query.AutomationId, query.Name, query.ControlType };
+        return values.Any(v => v != null) && values.All(v => v == null ||
+            (!string.IsNullOrWhiteSpace(v) && v.Length <= 256 && !v.Any(c => c < 32))) &&
+            (query.MaxSearchNodes == null || query.MaxSearchNodes is >= 1 and <= 5000) &&
+            (query.MaxMatches == null || query.MaxMatches is >= 1 and <= 20);
+    }
+
+    private static bool? MatchesQuery(AutomationElement element, UiQueryDto query) {
+        bool unknown = false;
+        bool Test<T>(IAutomationProperty<T> property, string? expected) {
+            if (expected == null) return true;
+            try {
+                // FlaUI false means unsupported, not a failed read: no literal value can match.
+                if (!property.TryGetValue(out var value)) return false;
+                return string.Equals(value?.ToString(), expected, StringComparison.Ordinal);
+            } catch (OperationCanceledException) { throw; }
+            catch { unknown = true; return true; }
+        }
+        if (!Test(element.Properties.AutomationId, query.AutomationId) ||
+            !Test(element.Properties.Name, query.Name) || !Test(element.Properties.ControlType, query.ControlType)) return false;
+        return unknown ? null : true;
+    }
+
+    private static UiNodeDto ReadElementProperties(AutomationElement element, int id, int? parentId,
+        RectDto captureOrigin, bool readStates = false)
     {
-        var node = new UiNodeDto
-        {
-            Id = id,
-            ParentId = parentId
-        };
-
-        try
-        {
-            var rawName = element.Properties.Name.ValueOrDefault;
-            if (rawName != null && rawName.Length > 256)
-            {
-                rawName = rawName[..256] + "...";
+        var issues = new List<string>();
+        var node = new UiNodeDto { Id = id, ParentId = parentId };
+        // Unavailable values stay absent; a provider's default false is not evidence.
+        void Read<T>(string name, IAutomationProperty<T> property, Action<T> assign) =>
+            UiPropertyEvidence.Read(name, property, assign, issues);
+        string? Clip(string? value, string name) {
+            if (value?.Length > 256) { issues.Add(name + ":truncated"); return value[..256]; }
+            return value;
+        }
+        Read("name", element.Properties.Name, v => node.Name = Clip(v, "name"));
+        Read("automationId", element.Properties.AutomationId, v => node.AutomationId = Clip(v, "automationId"));
+        Read("className", element.Properties.ClassName, v => node.ClassName = Clip(v, "className"));
+        Read("controlType", element.Properties.ControlType, v => node.ControlType = v.ToString());
+        Read("isEnabled", element.Properties.IsEnabled, v => node.IsEnabled = v);
+        Read("isOffscreen", element.Properties.IsOffscreen, v => node.IsOffscreen = v);
+        Read("bounds", element.Properties.BoundingRectangle, rect => {
+            node.Bounds = new RectDto(rect.X, rect.Y, rect.Width, rect.Height);
+            node.RelativeBounds = new RectDto(rect.X - captureOrigin.X, rect.Y - captureOrigin.Y, rect.Width, rect.Height);
+        });
+        if (readStates) {
+            // Only read pattern state; never invoke actions or fetch input values.
+            string State(Func<string> read) {
+                try { return read(); }
+                catch (OperationCanceledException) { throw; }
+                catch { return "unknown"; }
             }
-            node.Name = rawName;
+            node.States = new UiStatesDto {
+                Toggle = State(() => element.Patterns.Toggle.PatternOrDefault?.ToggleState.Value.ToString() ?? "unsupported"),
+                Selection = State(() => element.Patterns.SelectionItem.PatternOrDefault is { } p ?
+                    (p.IsSelected.Value ? "selected" : "not-selected") : "unsupported"),
+                ExpandCollapse = State(() => element.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.Value.ToString() ?? "unsupported")
+            };
         }
-        catch { /* ignore property read failure */ }
-
-        try
-        {
-            node.AutomationId = element.Properties.AutomationId.ValueOrDefault;
-        }
-        catch { /* ignore */ }
-
-        try
-        {
-            node.ControlType = element.Properties.ControlType.ValueOrDefault.ToString();
-        }
-        catch { /* ignore */ }
-
-        try
-        {
-            node.ClassName = element.Properties.ClassName.ValueOrDefault;
-        }
-        catch { /* ignore */ }
-
-        try
-        {
-            node.IsEnabled = element.Properties.IsEnabled.ValueOrDefault;
-        }
-        catch { /* ignore */ }
-
-        try
-        {
-            node.IsOffscreen = element.Properties.IsOffscreen.ValueOrDefault;
-        }
-        catch { /* ignore */ }
-
-        try
-        {
-            var rect = element.Properties.BoundingRectangle.ValueOrDefault;
-            if (rect != System.Drawing.Rectangle.Empty)
-            {
-                node.Bounds = new RectDto((int)rect.X, (int)rect.Y, (int)rect.Width, (int)rect.Height);
-                node.RelativeBounds = new RectDto(
-                    (int)rect.X - captureOrigin.X,
-                    (int)rect.Y - captureOrigin.Y,
-                    (int)rect.Width,
-                    (int)rect.Height);
-            }
-        }
-        catch { /* ignore */ }
-
+        node.PropertyIssues = issues.Count == 0 ? null : issues;
         return node;
     }
 
@@ -893,6 +914,8 @@ public static class Program
             catch (AuditException error) { response.Success = false; response.ErrorCode = error.Code;
                 response.ErrorMessage = error.Message; response.AuditNotice = error.Notice; }
         }
+        // OS high-water RSS through response preparation, not a hard process memory limit.
+        using (var process = Process.GetCurrentProcess()) response.HelperPeakWorkingSetBytes = process.PeakWorkingSet64;
         var json = JsonSerializer.Serialize(response, JsonOptions);
         Console.WriteLine(json);
         Console.Out.Flush();
@@ -918,6 +941,8 @@ public static class Program
     {
         public int CurrentId { get; set; }
         public int TotalCount { get; set; }
+        public int TraversalErrors { get; set; }
+        public bool ReadStates { get; set; }
         public int MaxDepth { get; set; }
         public int MaxNodes { get; set; }
         public int MaxDepthReached { get; set; }
@@ -931,6 +956,8 @@ public static class Program
 
 public class InspectRequest
 {
+    public UiQueryDto? Query { get; set; }
+    public bool ReadStates { get; set; }
     public bool BackgroundOnly { get; set; }
     public string? ProcessName { get; set; }
     public string? TitleContains { get; set; }
@@ -948,6 +975,12 @@ public class InspectRequest
 
 public class InspectResponse
 {
+    public int InspectionVersion { get; set; } = 2;
+    public long? HelperPeakWorkingSetBytes { get; set; }
+    public QueryResultDto? QueryResult { get; set; }
+    public bool? TreeComplete { get; set; }
+    public int? TraversalErrors { get; set; }
+    public int? PropertyIssueCount { get; set; }
     public AuditNotice? AuditNotice { get; set; }
     public bool? BackgroundOnly { get; set; }
     public List<CandidateWindowDto>? Windows { get; set; }
@@ -982,6 +1015,8 @@ public class InspectResponse
 
 public class UiNodeDto
 {
+    public List<string>? PropertyIssues { get; set; }
+    public UiStatesDto? States { get; set; }
     public int Id { get; set; }
     public int? ParentId { get; set; }
     public string? AutomationId { get; set; }
@@ -1026,3 +1061,23 @@ public class CandidateWindowDto
     public bool IsIconic { get; set; }
 }
 
+
+public class UiQueryDto {
+    public string? AutomationId { get; set; }
+    public string? Name { get; set; }
+    public string? ControlType { get; set; }
+    public int? MaxSearchNodes { get; set; }
+    public int? MaxMatches { get; set; }
+}
+public class QueryResultDto {
+    public string Status { get; set; } = "incomplete";
+    public bool SearchComplete { get; set; }
+    public int VisitedNodes { get; set; }
+    public string? Reason { get; set; }
+    public List<UiNodeDto> Matches { get; set; } = new();
+}
+public class UiStatesDto {
+    public string Toggle { get; set; } = "unknown";
+    public string Selection { get; set; } = "unknown";
+    public string ExpandCollapse { get; set; } = "unknown";
+}

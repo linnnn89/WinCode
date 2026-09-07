@@ -222,6 +222,19 @@ export const WINCODE_TOOLS: Tool[] = [
           default: 'none',
           description: 'Screenshot capture mode: "none" (default), "original" (raw window image), or "annotated" (with numbered badges matching UiNode.id).',
         },
+        query: {
+          type: 'object', additionalProperties: false,
+          description: 'Exact case-sensitive AND filters. Search is bounded separately from returned subtree; only a complete unique match becomes the tree. IDs are snapshot-local.',
+          properties: {
+            automationId: {type:'string', minLength:1, maxLength:256},
+            name: {type:'string', minLength:1, maxLength:256},
+            controlType: {type:'string', minLength:1, maxLength:256},
+            maxSearchNodes: {type:'integer', minimum:1, maximum:5000, default:1000},
+            maxMatches: {type:'integer', minimum:1, maximum:20, default:10},
+          },
+          anyOf: [{required:['automationId']}, {required:['name']}, {required:['controlType']}],
+        },
+        readStates: {type:'boolean', default:false, description:'Read toggle, selection and expand/collapse states only; no actions or input values.'},
         backgroundOnly: {
           type: 'boolean', default: false,
           description: 'Require explicit PID+HWND; never use screen-pixel capture fallback. No activation or restore. Window capture may fail or produce unusable pixels; inspect captureMethod and imageOmitted.',

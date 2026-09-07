@@ -15,6 +15,7 @@ import {
 } from '../Core/ResourceManager.js';
 import {
   UiInspectRequest,
+  validateUiQuery,
   UiInspectResult,
   UiErrorCodes,
   UI_INSPECT_DEFAULTS,
@@ -249,6 +250,8 @@ export class FlaUiAdapter implements IAdapter {
     signal?: AbortSignal
   ): Promise<UiInspectResult> {
     const requestId = request.requestId || randomUUID();
+    try { validateUiQuery(request.query, request.readStates); }
+    catch (error) { return {schemaVersion: "1.0", protocolVersion: "1.0", requestId, success: false, errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message}; }
     const normRequest: UiInspectRequest & { requestId: string } = {
       ...request,
       requestId,
@@ -408,6 +411,8 @@ export class FlaUiAdapter implements IAdapter {
       schemaVersion: request.schemaVersion ?? '1.0',
       requestId: request.requestId,
       action: request.action ?? 'inspect',
+      query: request.query,
+      readStates: request.readStates,
       backgroundOnly: request.backgroundOnly,
       processName: request.processName,
       titleContains: request.titleContains,
@@ -555,6 +560,13 @@ export class FlaUiAdapter implements IAdapter {
                 errorCode: UiErrorCodes.VERSION_MISMATCH,
                 errorMessage: `Host returned unsupported protocol version: ${parsed.protocolVersion}`,
               });
+              return;
+            }
+            // Old/custom helpers must not silently ignore a scoped query and return a whole window.
+            if ((request.query || request.readStates) && parsed.success && parsed.inspectionVersion !== 2) {
+              resolve({ schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
+                success: false, errorCode: UiErrorCodes.VERSION_MISMATCH,
+                errorMessage: 'Query/state inspection requires a v0.9 helper (inspectionVersion 2).', auditNotice: parsed.auditNotice });
               return;
             }
             resolve(parsed);

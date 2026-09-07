@@ -103,9 +103,11 @@ export class ToolRouter {
   }
 
   async acquireRequestSlot(): Promise<void> {
+    if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
     while (this.switchingPromise) {
       await this.switchingPromise;
     }
+    if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
     this.beginRequest();
   }
 
@@ -300,22 +302,19 @@ export class ToolRouter {
 
   private async disposeOnce(): Promise<void> {
     this.shuttingDown = true;
-    if (this.resolveSwitching) {
-      const resolve = this.resolveSwitching;
-      this.switchingPromise = null;
-      this.resolveSwitching = null;
-      resolve();
-    }
-    const drainMs = Math.min(3_000, this.config.timeouts?.shutdownMs ?? 8_000);
-    await this.waitForIdle(drainMs);
-    if (this.pruneTimer) {
-      clearInterval(this.pruneTimer);
-      this.pruneTimer = null;
-    }
-    await this.repomix.dispose();
-    await this.serena.dispose();
-    await this.extensions.disposeAll();
-    this.session.close();
-    await this.resources.dispose();
+    // Let any active switch finish before disposing the resources it binds.
+    return this.workspaceLock.runExclusive(async () => {
+      const drainMs = Math.min(3_000, this.config.timeouts?.shutdownMs ?? 8_000);
+      await this.waitForIdle(drainMs);
+      if (this.pruneTimer) {
+        clearInterval(this.pruneTimer);
+        this.pruneTimer = null;
+      }
+      await this.repomix.dispose();
+      await this.serena.dispose();
+      await this.extensions.disposeAll();
+      this.session.close();
+      await this.resources.dispose();
+    });
   }
 }

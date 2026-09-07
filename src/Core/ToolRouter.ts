@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { WinCodeConfig, WINCODE_VERSION } from './Config.js';
 import { CacheManager, CacheStats } from './Cache.js';
-import { WorkspaceManager } from './Workspace.js';
+import { WorkspaceManager, WorkspaceOpenOptions } from './Workspace.js';
 import { ContextManager } from './Context.js';
 import { RepomixAdapter } from '../Adapters/RepomixAdapter.js';
 import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
@@ -187,7 +187,7 @@ export class ToolRouter {
    * Switch the active workspace. Serialized so two MCP calls cannot interleave
    * Serena dispose/connect and cache namespace changes.
    */
-  async openWorkspace(targetPath: string) {
+  async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}) {
     return this.workspaceLock.runExclusive(async () => {
       if (this.shuttingDown) {
         throw new Error('WinCode is shutting down; workspace_open rejected.');
@@ -215,7 +215,7 @@ export class ToolRouter {
           Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
 
         const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
-        const result = await this.workspace.openWorkspace(targetPath);
+        const result = await this.workspace.openWorkspace(targetPath, options);
 
         if (sameWorkspace) {
           const previousFp = this.session.current?.fingerprint ?? null;

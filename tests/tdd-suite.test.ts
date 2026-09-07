@@ -292,8 +292,9 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.strictEqual(result.language, 'C#');
       assert.strictEqual(result.projects, 3);
       assert.ok(result.metadata.frameworks.includes('WPF'));
-      assert.ok(result.metadata.totalFiles > 0);
-      assert.ok(result.fileTree.children && result.fileTree.children.length > 0);
+      assert.equal(result.metadata.totalFiles, null);
+      assert.equal(result.fileTree, undefined);
+      assert.ok(result.entryPoints.length <= 8);
 
       ws.setRoot(root);
     });
@@ -1098,8 +1099,9 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.strictEqual(data.solution, 'MiniDesk.sln');
       assert.strictEqual(data.projects, 3);
       assert.strictEqual(data.language, 'C#');
-      assert.ok(data.metadata.totalFiles > 0);
-      assert.ok(data.fileTree.children && data.fileTree.children.length > 0);
+      assert.equal(data.metadata.totalFiles, null);
+      assert.equal(data.fileTree, undefined);
+      assert.ok(data.entryPoints.length <= 8);
 
       await callMcp('tools/call', {
         name: 'workspace_open',

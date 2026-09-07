@@ -50,7 +50,7 @@ it('workspace metadata failure restores root and trash paths before rejecting', 
   const workspace = new WorkspaceManager(config);
   const next = path.join(root, 'next');
   await fs.mkdir(next);
-  workspace.identifyProject = async () => { throw new Error('simulated read failure'); };
+  (workspace as any).discoverProject = async () => { throw new Error('simulated read failure'); };
   await assert.rejects(workspace.openWorkspace(next), /simulated read failure/);
   assert.equal(config.workspaceRoot, root);
   assert.equal(config.trashDir, previousTrash);

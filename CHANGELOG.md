@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1
+
+- Default workspace opening to a compact project summary with at most eight entry paths and an 8,000-character whole-response budget. Skip recursive file-size inventory; retain bounded project-discovery gaps and report unmeasured totals as null.
+- Add on-demand `wincode_list_directory` with path, depth, examined-entry and output limits, explicit generated-directory access and real-path boundary checks. The opt-in `includeTree` compatibility response remains bounded.
+- Preserve workspace switching, rollback and cache isolation. Add isolated MCP regressions for wide publish folders, useful source recovery, truncation, invalid options and outside junctions.
+
 ## Unreleased — agent efficiency, round 1
 
 - Add an isolated ten-scenario agent-efficiency benchmark (`benchmark:agent`) comparing candidate-first and precise-first retrieval, with call counts, unchanged displayed-line overlap, output characters, latency and explicit evidence oracles. Document precise routing and when to stop or refresh evidence; no cross-request cache is introduced.

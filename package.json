@@ -1,6 +1,6 @@
 {
   "name": "wincode-mcp",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Windows-first MCP gateway: .NET project graph, evidence-bounded context, honest change-impact, long-running process hygiene",
   "main": "dist/index.js",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts tests/agent-efficiency-benchmark.test.ts",
+    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts tests/agent-efficiency-benchmark.test.ts tests/workspace-summary.test.ts",
     "test:verify": "tsx tests/verify.ts",
     "benchmark:agent": "tsx scripts/benchmark-agent-efficiency.ts",
     "test:benchmark": "tsx --test tests/agent-efficiency-benchmark.test.ts",

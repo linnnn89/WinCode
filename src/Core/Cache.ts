@@ -172,6 +172,10 @@ export class CacheManager {
 
       if (entry.ttlMs && now - entry.timestamp > entry.ttlMs) {
         await fs.unlink(filePath).catch(() => {});
+        const p = (entry.data as any)?.overflowPath;
+        if (typeof p === 'string') {
+          await fs.unlink(path.resolve(p)).catch(() => {});
+        }
         return null;
       }
 
@@ -212,17 +216,21 @@ export class CacheManager {
       return;
     }
 
+    const targetFilePath = this.getCacheFilePath(key);
     await this.enqueueWrite(async () => {
-      const filePath = this.getCacheFilePath(key);
+      const filePath = targetFilePath;
+      const tmpPath = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
       try {
         await fs.mkdir(this.cacheDir, { recursive: true });
-        await fs.writeFile(filePath, JSON.stringify(entry), 'utf-8');
+        await fs.writeFile(tmpPath, JSON.stringify(entry), 'utf-8');
+        await fs.rename(tmpPath, filePath);
         this.writeCount++;
         if (this.writeCount % 20 === 0) {
           await this.pruneDiskCache();
           this.pruneExpiredMemory();
         }
       } catch (err) {
+        await fs.unlink(tmpPath).catch(() => {});
         console.warn(`[CacheManager] Failed to write cache to ${filePath}:`, err);
       }
     });
@@ -284,55 +292,155 @@ export class CacheManager {
     }
   }
 
-  async pruneDiskCache(): Promise<void> {
+  async pruneDiskCache(options?: { orphanGraceMs?: number }): Promise<void> {
     try {
       const files = await fs.readdir(this.cacheDir);
       const jsonFiles = files.filter((f) => f.endsWith('.json'));
-      const stats = (
-        await Promise.all(
-          jsonFiles.map(async (f) => {
-            const fullPath = path.join(this.cacheDir, f);
-            try {
-              const s = await fs.stat(fullPath);
-              return { fullPath, mtimeMs: s.mtimeMs, size: s.size };
-            } catch {
-              return null;
+      const now = Date.now();
+
+      // 1. Clean up orphaned .tmp files older than 30s
+      const tmpFiles = files.filter((f) => f.includes('.tmp.'));
+      for (const tf of tmpFiles) {
+        try {
+          const s = await fs.stat(path.join(this.cacheDir, tf));
+          if (now - s.mtimeMs > 30_000) {
+            await fs.unlink(path.join(this.cacheDir, tf)).catch(() => {});
+          }
+        } catch {}
+      }
+
+      // 2. Read and parse JSON entries, inspect TTL & overflow references
+      interface DiskEntryMeta {
+        jsonPath: string;
+        overflowPath: string | null;
+        mtimeMs: number;
+        timestamp: number;
+        jsonSize: number;
+        totalBytes: number;
+      }
+
+      const validEntries: DiskEntryMeta[] = [];
+
+      for (const f of jsonFiles) {
+        const jsonPath = path.join(this.cacheDir, f);
+        try {
+          const stat = await fs.stat(jsonPath);
+          const content = await fs.readFile(jsonPath, 'utf-8');
+          const entry: CacheEntry<any> = JSON.parse(content);
+
+          const overflowPath =
+            typeof entry?.data?.overflowPath === 'string'
+              ? path.resolve(entry.data.overflowPath)
+              : null;
+
+          // Check TTL expiration
+          if (entry.ttlMs && now - entry.timestamp > entry.ttlMs) {
+            await fs.unlink(jsonPath).catch(() => {});
+            if (overflowPath) {
+              await fs.unlink(overflowPath).catch(() => {});
             }
-          })
-        )
-      ).filter((s): s is { fullPath: string; mtimeMs: number; size: number } => s !== null);
+            continue;
+          }
 
-      stats.sort((a, b) => a.mtimeMs - b.mtimeMs);
+          // Check oversized standalone JSON (exceeds maxEntryBytes)
+          if (stat.size > this.maxEntryBytes) {
+            await fs.unlink(jsonPath).catch(() => {});
+            if (overflowPath) {
+              await fs.unlink(overflowPath).catch(() => {});
+            }
+            continue;
+          }
 
-      for (const item of stats) {
-        if (item.size > this.maxEntryBytes) {
-          await fs.unlink(item.fullPath).catch(() => {});
+          // Account for overflow file size in entry disk footprint
+          let overflowSize = 0;
+          if (overflowPath) {
+            try {
+              const os = await fs.stat(overflowPath);
+              overflowSize = os.size;
+            } catch {
+              // overflow file missing or inaccessible
+            }
+          }
+
+          validEntries.push({
+            jsonPath,
+            overflowPath,
+            mtimeMs: stat.mtimeMs,
+            timestamp: entry.timestamp || stat.mtimeMs,
+            jsonSize: stat.size,
+            totalBytes: stat.size + overflowSize,
+          });
+        } catch {
+          // Corrupted or unreadable JSON file
+          await fs.unlink(jsonPath).catch(() => {});
         }
       }
 
-      const remaining = (
-        await Promise.all(
-          stats.map(async (item) => {
-            try {
-              const s = await fs.stat(item.fullPath);
-              return { ...item, size: s.size };
-            } catch {
-              return null;
-            }
-          })
-        )
-      ).filter((s): s is { fullPath: string; mtimeMs: number; size: number } => s !== null);
+      // 3. Sort entries by oldest first (mtimeMs) for LRU/FIFO eviction
+      validEntries.sort((a, b) => a.mtimeMs - b.mtimeMs);
 
-      remaining.sort((a, b) => a.mtimeMs - b.mtimeMs);
-      let totalBytes = remaining.reduce((sum, s) => sum + s.size, 0);
+      let totalDiskBytes = validEntries.reduce((sum, e) => sum + e.totalBytes, 0);
+      let survivingIndex = 0;
 
-      const overflowCount = Math.max(0, remaining.length - this.maxDiskEntries);
-      let i = 0;
-      while (i < remaining.length && (i < overflowCount || totalBytes > this.maxDiskBytes)) {
-        await fs.unlink(remaining[i].fullPath).catch(() => {});
-        totalBytes -= remaining[i].size;
-        i++;
+      while (
+        survivingIndex < validEntries.length &&
+        (validEntries.length - survivingIndex > this.maxDiskEntries || totalDiskBytes > this.maxDiskBytes)
+      ) {
+        const victim = validEntries[survivingIndex];
+        await fs.unlink(victim.jsonPath).catch(() => {});
+        if (victim.overflowPath) {
+          await fs.unlink(victim.overflowPath).catch(() => {});
+        }
+        totalDiskBytes -= victim.totalBytes;
+        survivingIndex++;
       }
+
+      const surviving = validEntries.slice(survivingIndex);
+
+      // 4. Collect all active referenced overflow files
+      const referencedOverflow = new Set<string>();
+
+      // (a) From surviving disk JSON entries
+      for (const item of surviving) {
+        if (item.overflowPath) {
+          referencedOverflow.add(item.overflowPath);
+        }
+      }
+
+      // (b) From memory cache (entries in memory whose JSON may still be in write queue or newly set)
+      for (const memEntry of this.memoryCache.values()) {
+        const p = (memEntry.data as any)?.overflowPath;
+        if (typeof p === 'string') {
+          referencedOverflow.add(path.resolve(p));
+        }
+      }
+
+      // 5. Reconcile overflow directory: remove orphaned files not referenced and older than grace period
+      const overflowDir = path.join(this.cacheDir, 'overflow');
+      const orphanGraceMs = options?.orphanGraceMs ?? 120_000; // 2 minutes grace period
+      try {
+        const overflowFiles = await fs.readdir(overflowDir);
+        for (const of of overflowFiles) {
+          const fullPath = path.resolve(overflowDir, of);
+          if (of.includes('.tmp.')) {
+            const s = await fs.stat(fullPath).catch(() => null);
+            if (s && now - s.mtimeMs > 30_000) {
+              await fs.unlink(fullPath).catch(() => {});
+            }
+            continue;
+          }
+
+          if (referencedOverflow.has(fullPath)) {
+            continue;
+          }
+
+          // Orphan candidate: check grace period
+          const s = await fs.stat(fullPath).catch(() => null);
+          if (s && (orphanGraceMs <= 0 || Date.now() - s.mtimeMs >= orphanGraceMs)) {
+            await fs.unlink(fullPath).catch(() => {});
+          }
+        }
+      } catch {}
     } catch {
       // Ignore disk pruning errors
     }
@@ -352,6 +460,15 @@ export class CacheManager {
         } catch {
           // skip
         }
+      }
+      const overflowDir = path.join(this.cacheDir, 'overflow');
+      const overflowFiles = await fs.readdir(overflowDir).catch(() => []);
+      for (const of of overflowFiles) {
+        diskEntries++;
+        try {
+          const s = await fs.stat(path.join(overflowDir, of));
+          estimatedDiskBytes += s.size;
+        } catch {}
       }
     } catch {
       // unreadable cache dir
@@ -457,7 +574,7 @@ export class CacheManager {
             execAsync('git rev-parse HEAD', { cwd: resolvedRoot, windowsHide: true, timeout: 3000 }).catch(
               () => ({ stdout: '' })
             ),
-            execAsync('git status --porcelain', { cwd: resolvedRoot, windowsHide: true, timeout: 5000 }),
+            execAsync('git status --porcelain=v1 -z', { cwd: resolvedRoot, windowsHide: true, timeout: 5000 }),
           ]);
           const headCommit = headRes.stdout.trim();
           const gitStatusRaw = statusRes.stdout;
@@ -472,28 +589,38 @@ export class CacheManager {
             }
           }
 
-          const lines = gitStatusRaw.split(/\r?\n/).filter((l) => l.length >= 4);
-          const linesToStat = lines.slice(0, 100);
+          const rawEntries = gitStatusRaw.split('\0');
+          const parsedItems: { statusType: string; relPath: string; origPath?: string }[] = [];
+          for (let i = 0; i < rawEntries.length; i++) {
+            const entry = rawEntries[i];
+            if (!entry || entry.length < 3) continue;
+            const statusType = entry.substring(0, 2);
+            const pathPart = entry.substring(3);
+            if (statusType.includes('R') || statusType.includes('C')) {
+              // In git status -z porcelain, R/C outputs: "XY NEW_PATH\0OLD_PATH\0"
+              const origPath = rawEntries[++i] || '';
+              parsedItems.push({ statusType, relPath: pathPart, origPath });
+            } else {
+              parsedItems.push({ statusType, relPath: pathPart });
+            }
+          }
+
+          const itemsToStat = parsedItems.slice(0, 100);
 
           const fileStats = await Promise.all(
-            linesToStat.map(async (line) => {
-              const statusType = line.substring(0, 2);
-              const rawPathPart = line.substring(3).trim();
-              const targetPath = rawPathPart.includes(' -> ')
-                ? rawPathPart.split(' -> ').pop()!.trim()
-                : rawPathPart;
-              const cleanPath = targetPath.replace(/^"|"$/g, '').replace(/\\"/g, '"');
-              const fullPath = path.resolve(resolvedRoot, cleanPath);
+            itemsToStat.map(async ({ statusType, relPath, origPath }) => {
+              const fullPath = path.resolve(resolvedRoot, relPath);
+              const pathKey = origPath ? `${relPath}<-${origPath}` : relPath;
               try {
                 const stat = await fs.stat(fullPath);
-                return `${statusType}:${cleanPath}:${stat.mtimeMs}:${stat.size}`;
+                return `${statusType}:${pathKey}:${stat.mtimeMs}:${stat.size}`;
               } catch {
-                return `${statusType}:${cleanPath}:deleted`;
+                return `${statusType}:${pathKey}:deleted`;
               }
             })
           );
 
-          const payload = [headCommit || branchRef || 'no-head', lines.length.toString(), ...fileStats].join('|');
+          const payload = [headCommit || branchRef || 'no-head', parsedItems.length.toString(), ...fileStats].join('|');
           return crypto.createHash('sha1').update(payload).digest('hex');
         } catch {
           try {
@@ -573,9 +700,14 @@ export class CacheManager {
     try {
       const files = await fs.readdir(this.cacheDir);
       for (const file of files) {
-        if (file.endsWith('.json')) {
+        if (file.endsWith('.json') || file.includes('.tmp.')) {
           await fs.unlink(path.join(this.cacheDir, file)).catch(() => {});
         }
+      }
+      const overflowDir = path.join(this.cacheDir, 'overflow');
+      const overflowFiles = await fs.readdir(overflowDir).catch(() => []);
+      for (const of of overflowFiles) {
+        await fs.unlink(path.join(overflowDir, of)).catch(() => {});
       }
     } catch {
       // Ignore

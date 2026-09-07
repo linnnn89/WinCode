@@ -4,8 +4,9 @@
  * Speaks newline-delimited JSON-RPC like @modelcontextprotocol/sdk.
  * Does not implement real C# semantics.
  */
-const hang = process.env.MOCK_SERENA_HANG === '1';
-const crashOnCall = process.env.MOCK_SERENA_CRASH === '1';
+const hang = process.env.MOCK_SERENA_HANG === '1' || process.argv.includes('--hang');
+const hangInit = process.env.MOCK_SERENA_HANG_INIT === '1' || process.argv.includes('--hang-init');
+const crashOnCall = process.env.MOCK_SERENA_CRASH === '1' || process.argv.includes('--crash');
 
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + '\n');
@@ -83,6 +84,7 @@ function handle(msg) {
   const id = msg.id;
 
   if (method === 'initialize') {
+    if (hangInit) return;
     const protocolVersion = msg.params?.protocolVersion || '2024-11-05';
     send({
       jsonrpc: '2.0',

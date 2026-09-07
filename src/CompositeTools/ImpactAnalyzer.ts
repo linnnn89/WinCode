@@ -116,15 +116,51 @@ export class ImpactAnalyzer {
     }
 
     if (explicitFileHint) {
-      const hintBase = path.basename(explicitFileHint).replace(/\\/g, '/').toLowerCase();
-      const inFile = symbols.filter((s) => path.basename(s.file || '').toLowerCase() === hintBase);
+      const normalizedHint = explicitFileHint.replace(/\\/g, '/').toLowerCase();
+      const hintBase = path.basename(explicitFileHint).toLowerCase();
+      const hasDir = explicitFileHint.includes('/') || explicitFileHint.includes('\\');
+      const resolvedHint = path.isAbsolute(explicitFileHint) ? path.resolve(explicitFileHint).toLowerCase() : null;
+
+      const inFile = symbols.filter((s) => {
+        const symFile = (s.file || '').replace(/\\/g, '/').toLowerCase();
+        if (hasDir) {
+          if (resolvedHint) {
+            return path.resolve(s.file).toLowerCase() === resolvedHint;
+          }
+          return symFile === normalizedHint || symFile.endsWith('/' + normalizedHint);
+        } else {
+          return path.basename(symFile) === hintBase;
+        }
+      });
+
       if (inFile.length > 0) {
         symbols = inFile;
-        const stats = computeTypeMatchStats(inFile, symbolName);
-        assessment.typeMatchCount = stats.typeMatchCount;
-        assessment.unique = stats.uniqueTypeMatch || inFile.some((s) => s.name.toLowerCase() === symbolName.toLowerCase());
+        const distinctFiles = new Set(inFile.map((s) => (s.file || '').replace(/\\/g, '/').toLowerCase()));
+        if (distinctFiles.size > 1) {
+          // Ambiguous: multiple files match the filename hint
+          assessment.unique = false;
+          assessment.typeMatchCount = distinctFiles.size;
+        } else {
+          // Exactly one file matched: check symbol uniqueness within this file
+          const stats = computeTypeMatchStats(inFile, symbolName);
+          if (stats.uniqueTypeMatch) {
+            assessment.unique = true;
+            assessment.typeMatchCount = 1;
+          } else {
+            const exact = inFile.filter((s) => s.name.toLowerCase() === symbolName.toLowerCase());
+            if (exact.length === 1) {
+              assessment.unique = true;
+              assessment.typeMatchCount = 1;
+            } else {
+              assessment.unique = false;
+              assessment.typeMatchCount = exact.length;
+            }
+          }
+        }
       } else {
-        assessment.unique = true;
+        symbols = [];
+        assessment.unique = false;
+        assessment.typeMatchCount = 0;
       }
     } else if (!assessment.unique) {
       const exact = symbols.filter((s) => s.name.toLowerCase() === symbolName.toLowerCase());
@@ -145,7 +181,7 @@ export class ImpactAnalyzer {
         symbols[0];
     }
 
-    const isSymbolDeclared = Boolean(matchedSymbol || explicitFileHint);
+    const isSymbolDeclared = Boolean(matchedSymbol);
     if (!isSymbolDeclared) {
       return this.unresolvedReport(rawTarget, symbolName, assessment, symbols);
     }

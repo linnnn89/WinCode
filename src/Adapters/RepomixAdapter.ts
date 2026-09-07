@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { IAdapter, AdapterHealth, AdapterLastError } from './IAdapter.js';
 import { WinCodeConfig, getDefaultTimeouts } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';
@@ -418,8 +419,16 @@ export class RepomixAdapter implements IAdapter {
 
     const overflowDir = path.join(this.config.cacheDir, 'overflow');
     await fs.mkdir(overflowDir, { recursive: true });
-    const overflowPath = path.join(overflowDir, `pack_${Date.now()}.txt`);
-    await fs.writeFile(overflowPath, result.content, 'utf-8');
+    const uniqueId = crypto.randomUUID().slice(0, 8);
+    const overflowPath = path.join(overflowDir, `pack_${Date.now()}_${uniqueId}.txt`);
+    const tmpPath = `${overflowPath}.tmp.${uniqueId}`;
+    try {
+      await fs.writeFile(tmpPath, result.content, 'utf-8');
+      await fs.rename(tmpPath, overflowPath);
+    } catch (err) {
+      await fs.unlink(tmpPath).catch(() => {});
+      throw err;
+    }
     const previewChars = Math.min(result.content.length, 2_000);
     return {
       ...result,

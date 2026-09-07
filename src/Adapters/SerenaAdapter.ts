@@ -108,9 +108,14 @@ export class SerenaAdapter implements IAdapter {
   private connectPromise: Promise<boolean> | null = null;
   private disposing = false;
   private serenaPid: number | null = null;
+  private lastHandshakeFailedPid: number | null = null;
   private processResourceId: string | null = null;
   private resolvedCommand: string | null = null;
   lastError: AdapterLastError | null = null;
+
+  getLastHandshakeFailedPid(): number | null {
+    return this.lastHandshakeFailedPid;
+  }
 
   constructor(config: WinCodeConfig, cache: CacheManager, resources?: ResourceManager) {
     this.config = config;
@@ -297,6 +302,12 @@ export class SerenaAdapter implements IAdapter {
       await withTimeout(
         (async () => {
           await client!.connect(transport!);
+          if (transport?.pid) {
+            this.serenaPid = transport.pid;
+            if (this.resources && this.serenaPid && !this.processResourceId) {
+              this.processResourceId = this.resources.register('process', 'serena', () => this.killSerenaProcess());
+            }
+          }
           const toolsList = await client!.listTools();
           this.serenaTools.clear();
           for (const t of toolsList.tools) {
@@ -310,14 +321,21 @@ export class SerenaAdapter implements IAdapter {
       this.serenaTransport = transport;
       this.serenaClient = client;
       this.isConnectedToSerena = true;
-      this.serenaPid = transport.pid;
-      if (this.resources && this.serenaPid) {
-        this.processResourceId = this.resources.register('process', 'serena', () => this.killSerenaProcess());
+      if (transport.pid) {
+        this.serenaPid = transport.pid;
+        if (this.resources && this.serenaPid && !this.processResourceId) {
+          this.processResourceId = this.resources.register('process', 'serena', () => this.killSerenaProcess());
+        }
       }
       console.error(`[SerenaAdapter] Connected to upstream Serena MCP server with ${this.serenaTools.size} tools.`);
       return true;
     } catch (err) {
       this.recordError(err instanceof TimeoutError ? 'timeout' : 'error', err, true);
+      const failPid = transport?.pid || this.serenaPid;
+      if (failPid) {
+        this.lastHandshakeFailedPid = failPid;
+        await killProcessTree({ pid: failPid }).catch(() => {});
+      }
       await this.closeClientAndTransport(client, transport);
       this.clearConnectionFields();
       return false;
@@ -1034,6 +1052,10 @@ export class SerenaAdapter implements IAdapter {
     client: Client | null,
     transport: StdioClientTransport | null
   ): Promise<void> {
+    const prePid = transport?.pid;
+    if (prePid) {
+      await killProcessTree({ pid: prePid }).catch(() => {});
+    }
     if (client) {
       try {
         await withTimeout(client.close(), 2000, 'serena-client-close');
@@ -1047,6 +1069,10 @@ export class SerenaAdapter implements IAdapter {
       } catch {
         // ignore
       }
+    }
+    const postPid = transport?.pid;
+    if (postPid && postPid !== prePid) {
+      await killProcessTree({ pid: postPid }).catch(() => {});
     }
   }
 

@@ -63,6 +63,8 @@ export class ToolRouter {
   private inFlight = 0;
   private disposePromise: Promise<void> | null = null;
   private readonly workspaceLock = new Mutex();
+  private switchingPromise: Promise<void> | null = null;
+  private resolveSwitching: (() => void) | null = null;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private readonly watch = new WorkspaceWatch();
   private watchRegistered = false;
@@ -94,6 +96,17 @@ export class ToolRouter {
 
   get inFlightRequests(): number {
     return this.inFlight;
+  }
+
+  get isSwitchingWorkspace(): boolean {
+    return this.switchingPromise !== null;
+  }
+
+  async acquireRequestSlot(): Promise<void> {
+    while (this.switchingPromise) {
+      await this.switchingPromise;
+    }
+    this.beginRequest();
   }
 
   beginRequest(): void {
@@ -145,41 +158,63 @@ export class ToolRouter {
         throw new Error('WinCode is shutting down; workspace_open rejected.');
       }
 
-      const resolved = path.resolve(targetPath);
-      const previousRoot = this.config.workspaceRoot;
-      const sameWorkspace =
-        Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
-
-      const result = await this.workspace.openWorkspace(targetPath);
-      const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
-
-      if (sameWorkspace) {
-        const previousFp = this.session.current?.fingerprint ?? null;
-        this.session.touch();
-        this.session.setFingerprint(fp);
-        if (previousFp && previousFp !== fp) {
-          this.cache.invalidateFingerprint(resolved);
-          this.cache.setNamespace(this.config.workspaceRoot);
-          this.serena.markProjectStale();
-        }
-        return result;
+      if (!this.switchingPromise) {
+        this.switchingPromise = new Promise<void>((resolve) => {
+          this.resolveSwitching = resolve;
+        });
       }
 
-      // Keep the process cache directory; isolate by namespace so we do not
-      // write `.cache/wincode` into every opened repo, and so project A
-      // symbols cannot be read as project B.
-      this.cache.invalidateFingerprint(previousRoot);
-      this.cache.setNamespace(this.config.workspaceRoot);
-      this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
-      this.session.setFingerprint(fp);
-      this.bindWatch(this.config.workspaceRoot);
+      try {
+        // Wait for existing in-flight queries on the old workspace to settle before re-binding
+        const drainTimeout = this.config.timeouts?.shutdownMs ?? 8_000;
+        const drained = await this.waitForIdle(drainTimeout);
+        if (!drained) {
+          throw new Error(
+            `Workspace switch rejected: in-flight queries failed to drain within ${drainTimeout}ms (in-flight: ${this.inFlight}).`
+          );
+        }
 
-      await this.repomix.dispose();
-      await this.serena.resetConnection();
-      await this.repomix.initialize();
-      await this.serena.initialize();
-      this.bindCompositeTools();
-      return result;
+        const resolved = path.resolve(targetPath);
+        const previousRoot = this.config.workspaceRoot;
+        const sameWorkspace =
+          Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
+
+        const result = await this.workspace.openWorkspace(targetPath);
+        const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
+
+        if (sameWorkspace) {
+          const previousFp = this.session.current?.fingerprint ?? null;
+          this.session.touch();
+          this.session.setFingerprint(fp);
+          if (previousFp && previousFp !== fp) {
+            this.cache.invalidateFingerprint(resolved);
+            this.cache.setNamespace(this.config.workspaceRoot);
+            this.serena.markProjectStale();
+          }
+          return result;
+        }
+
+        // Keep the process cache directory; isolate by namespace so we do not
+        // write `.cache/wincode` into every opened repo, and so project A
+        // symbols cannot be read as project B.
+        this.cache.invalidateFingerprint(previousRoot);
+        this.cache.setNamespace(this.config.workspaceRoot);
+        this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
+        this.session.setFingerprint(fp);
+        this.bindWatch(this.config.workspaceRoot);
+
+        await this.repomix.dispose();
+        await this.serena.resetConnection();
+        await this.repomix.initialize();
+        await this.serena.initialize();
+        this.bindCompositeTools();
+        return result;
+      } finally {
+        const resolve = this.resolveSwitching;
+        this.switchingPromise = null;
+        this.resolveSwitching = null;
+        resolve?.();
+      }
     });
   }
 
@@ -191,11 +226,15 @@ export class ToolRouter {
     this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.serena);
   }
 
-  async waitForIdle(timeoutMs: number): Promise<void> {
+  async waitForIdle(timeoutMs: number): Promise<boolean> {
     const start = Date.now();
-    while (this.inFlight > 0 && Date.now() - start < timeoutMs) {
+    while (this.inFlight > 0) {
+      if (Date.now() - start >= timeoutMs) {
+        return false;
+      }
       await new Promise((r) => setTimeout(r, 25));
     }
+    return true;
   }
 
   async getRuntimeHealth(): Promise<RuntimeHealth> {
@@ -261,6 +300,12 @@ export class ToolRouter {
 
   private async disposeOnce(): Promise<void> {
     this.shuttingDown = true;
+    if (this.resolveSwitching) {
+      const resolve = this.resolveSwitching;
+      this.switchingPromise = null;
+      this.resolveSwitching = null;
+      resolve();
+    }
     const drainMs = Math.min(3_000, this.config.timeouts?.shutdownMs ?? 8_000);
     await this.waitForIdle(drainMs);
     if (this.pruneTimer) {

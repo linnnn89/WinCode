@@ -133,7 +133,7 @@ public static class Program
 
     private static InspectResponse ExecuteInspect(InspectRequest request, CancellationToken ct)
     {
-        var targetHwnd = ResolveTargetWindow(request, out var candidateWindows, out var resolveError);
+        var targetHwnd = ResolveTargetWindow(request, out var resolvedPid, out var candidateWindows, out var resolveError);
         if (targetHwnd == IntPtr.Zero)
         {
             return new InspectResponse
@@ -168,7 +168,7 @@ public static class Program
                 RequestId = request.RequestId,
                 Success = false,
                 ErrorCode = "WINDOW_EMPTY_BOUNDS",
-                ErrorMessage = $"Target window has invalid physical bounds: {captureRect.Width}x{captureRect.Height}."
+                ErrorMessage = "Target window has empty or zero bounds."
             };
         }
 
@@ -233,7 +233,7 @@ public static class Program
             ProtocolVersion = "1.0",
             RequestId = request.RequestId,
             Success = true,
-            Pid = request.Pid,
+            Pid = resolvedPid > 0 ? resolvedPid : request.Pid,
             Hwnd = $"0x{targetHwnd.ToInt64():X}",
             CaptureOrigin = captureOrigin,
             CaptureMethod = captureMethod,
@@ -241,6 +241,7 @@ public static class Program
             TotalNodes = context.TotalCount,
             MaxDepthReached = context.MaxDepthReached,
             Truncated = context.Truncated,
+            TruncateReason = context.TruncateReason,
             ScreenshotPngBase64 = screenshotBase64,
             AnnotatedPngBase64 = annotatedBase64
         };
@@ -258,6 +259,7 @@ public static class Program
         if (context.TotalCount >= context.MaxNodes)
         {
             context.Truncated = true;
+            context.TruncateReason ??= "maxNodes";
             return null;
         }
 
@@ -274,6 +276,7 @@ public static class Program
         if (currentDepth >= context.MaxDepth)
         {
             context.Truncated = true;
+            context.TruncateReason ??= "maxDepth";
             return node;
         }
 
@@ -293,6 +296,7 @@ public static class Program
             if (child != null && context.TotalCount >= context.MaxNodes)
             {
                 context.Truncated = true;
+                context.TruncateReason ??= "maxNodes";
             }
         }
         catch (Exception ex)
@@ -534,11 +538,13 @@ public static class Program
 
     private static IntPtr ResolveTargetWindow(
         InspectRequest request,
+        out int resolvedPid,
         out List<CandidateWindowDto>? candidates,
         out string? errorCode)
     {
         candidates = null;
         errorCode = null;
+        resolvedPid = request.Pid;
 
         if (!string.IsNullOrWhiteSpace(request.Hwnd))
         {
@@ -560,8 +566,10 @@ public static class Program
                 if (request.Pid > 0 && windowPid != request.Pid)
                 {
                     errorCode = "HWND_PID_MISMATCH";
+                    resolvedPid = 0;
                     return IntPtr.Zero;
                 }
+                resolvedPid = (int)windowPid;
                 return handle;
             }
         }
@@ -664,6 +672,7 @@ public static class Program
         public int MaxNodes { get; set; }
         public int MaxDepthReached { get; set; }
         public bool Truncated { get; set; }
+        public string? TruncateReason { get; set; }
         public RectDto CaptureOrigin { get; set; } = null!;
         public CancellationToken CancellationToken { get; set; }
         public List<UiNodeDto> CollectedNodes { get; } = new();
@@ -701,6 +710,7 @@ public class InspectResponse
     public int? TotalNodes { get; set; }
     public int? MaxDepthReached { get; set; }
     public bool? Truncated { get; set; }
+    public string? TruncateReason { get; set; }
     public string? ScreenshotPngBase64 { get; set; }
     public string? AnnotatedPngBase64 { get; set; }
     public List<CandidateWindowDto>? CandidateWindows { get; set; }

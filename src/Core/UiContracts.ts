@@ -36,9 +36,9 @@ export type UiCaptureMode = 'none' | 'original' | 'annotated';
 
 export interface UiInspectRequest {
   schemaVersion?: string;
-  requestId: string;
+  requestId?: string;
   action?: 'inspect' | 'health' | 'ping';
-  pid: number;
+  pid?: number;
   hwnd?: string;
   capture?: UiCaptureMode;
   maxDepth?: number;

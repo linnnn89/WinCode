@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { IAdapter, AdapterHealth, AdapterLastError } from './IAdapter.js';
@@ -167,11 +168,17 @@ export class FlaUiAdapter implements IAdapter {
     request: UiInspectRequest,
     signal?: AbortSignal
   ): Promise<UiInspectResult> {
+    const requestId = request.requestId || randomUUID();
+    const normRequest: UiInspectRequest & { requestId: string } = {
+      ...request,
+      requestId,
+    };
+
     if (this.shuttingDown) {
       return {
         schemaVersion: '1.0',
         protocolVersion: '1.0',
-        requestId: request.requestId,
+        requestId,
         success: false,
         errorCode: UiErrorCodes.SHUTDOWN,
         errorMessage: 'WinCode is shutting down; UI inspection rejected.',
@@ -182,18 +189,18 @@ export class FlaUiAdapter implements IAdapter {
       return {
         schemaVersion: '1.0',
         protocolVersion: '1.0',
-        requestId: request.requestId,
+        requestId,
         success: false,
         errorCode: UiErrorCodes.PLATFORM_NOT_SUPPORTED,
         errorMessage: 'UI inspect is only supported on Windows.',
       };
     }
 
-    if (!request.pid && !request.hwnd) {
+    if (!normRequest.pid && !normRequest.hwnd) {
       return {
         schemaVersion: '1.0',
         protocolVersion: '1.0',
-        requestId: request.requestId,
+        requestId,
         success: false,
         errorCode: UiErrorCodes.INVALID_ARGUMENT,
         errorMessage: 'Either pid or hwnd must be provided for UI inspection.',
@@ -201,7 +208,7 @@ export class FlaUiAdapter implements IAdapter {
     }
 
     const effectiveTimeout =
-      request.timeoutMs ??
+      normRequest.timeoutMs ??
       this.config.adapters.flaui?.timeoutMs ??
       this.config.timeouts?.flauiInspectMs ??
       UI_INSPECT_DEFAULTS.TIMEOUT_MS;
@@ -211,7 +218,7 @@ export class FlaUiAdapter implements IAdapter {
         return {
           schemaVersion: '1.0',
           protocolVersion: '1.0',
-          requestId: request.requestId,
+          requestId,
           success: false,
           errorCode: UiErrorCodes.SHUTDOWN,
           errorMessage: 'WinCode is shutting down; UI inspection rejected.',
@@ -222,19 +229,19 @@ export class FlaUiAdapter implements IAdapter {
         return {
           schemaVersion: '1.0',
           protocolVersion: '1.0',
-          requestId: request.requestId,
+          requestId,
           success: false,
           errorCode: UiErrorCodes.CANCELLED,
           errorMessage: 'Inspection was cancelled before execution started.',
         };
       }
 
-      return this.executeHost(request, effectiveTimeout, signal);
+      return this.executeHost(normRequest, effectiveTimeout, signal);
     });
   }
 
   private async executeHost(
-    request: UiInspectRequest,
+    request: UiInspectRequest & { requestId: string },
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<UiInspectResult> {

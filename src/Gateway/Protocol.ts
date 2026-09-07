@@ -190,4 +190,46 @@ export const WINCODE_TOOLS: Tool[] = [
       required: ['filePath'],
     },
   },
+  {
+    name: 'wincode_ui_inspect',
+    description: 'Inspects a Windows desktop application window using UI Automation. Returns a bounded control tree (JSON) and optional annotated screenshot (MCP image content). Requires either pid or hwnd.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pid: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Process ID of the target Windows desktop application.',
+        },
+        hwnd: {
+          type: 'string',
+          description: 'Window handle of the target window (hex e.g. "0x00120ABC" or decimal string).',
+        },
+        capture: {
+          type: 'string',
+          enum: ['none', 'original', 'annotated'],
+          default: 'none',
+          description: 'Screenshot capture mode: "none" (default), "original" (raw window image), or "annotated" (with numbered badges matching UiNode.id).',
+        },
+        maxDepth: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 50,
+          default: 6,
+          description: 'Maximum depth of the control tree traversal (default: 6).',
+        },
+        maxNodes: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 5000,
+          default: 300,
+          description: 'Maximum total nodes to collect across the control tree (default: 300).',
+        },
+      },
+      anyOf: [
+        { required: ['pid'] },
+        { required: ['hwnd'] },
+      ],
+    },
+  },
 ];

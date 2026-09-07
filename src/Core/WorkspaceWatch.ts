@@ -27,6 +27,18 @@ export class WorkspaceWatch {
   private root: string | null = null;
   private debounceMs = 150;
   private onChange: (() => void) | null = null;
+  private lastError: { at: string; message: string } | null = null;
+
+  /** A passive snapshot: diagnosing a failed watcher must not restart it or enumerate files. */
+  getStatus() {
+    return { active: this.watcher !== null, root: this.root, lastError: this.lastError };
+  }
+
+  private recordFailure(error: unknown): void {
+    this.lastError = { at: new Date().toISOString(), message: (error instanceof Error ? error.message : String(error)).slice(0, 500) };
+    console.warn(`[WorkspaceWatch] Watch stopped: ${this.lastError.message}`);
+    this.stop();
+  }
 
   get activeRoot(): string | null {
     return this.root;
@@ -49,11 +61,9 @@ export class WorkspaceWatch {
         }, this.debounceMs);
         this.debounceTimer.unref?.();
       });
-      this.watcher.on('error', () => {
-        this.stop();
-      });
-    } catch {
-      this.watcher = null;
+      this.watcher.on('error', error => this.recordFailure(error));
+    } catch (error) {
+      this.recordFailure(error);
     }
   }
 

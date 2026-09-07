@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,6 +83,21 @@ export class FlaUiAdapter implements IAdapter {
   }
 
   async checkHealth(timeoutMs?: number): Promise<AdapterHealth> {
+    const health = await this.probeHealth(timeoutMs);
+    // Availability and recent operation failure are different facts. A successful/cached
+    // health probe must not erase a recent inspect timeout or cleanup failure.
+    const latest = [health.lastError, this.lastError].filter(Boolean)
+      .sort((a, b) => b!.at.localeCompare(a!.at))[0];
+    return { ...health, lastError: latest ?? undefined };
+  }
+
+  getRuntimeStatus() {
+    return { isRunning: this.activeProcess !== null, activePid: this.activeProcess?.pid ?? null,
+      shuttingDown: this.shuttingDown, lastError: this.lastError };
+  }
+
+  private async probeHealth(timeoutMs?: number): Promise<AdapterHealth> {
+    if (this.shuttingDown) return { available: false, source: 'unavailable', details: 'FlaUI is shutting down.' };
     if (this.healthCache && Date.now() - this.healthCache.at < 5_000) {
       return this.healthCache.value;
     }
@@ -205,6 +221,19 @@ export class FlaUiAdapter implements IAdapter {
   }
 
   async inspect(
+    request: UiInspectRequest, signal?: AbortSignal
+  ): Promise<UiInspectResult> {
+    const result = await this.inspectOnce(request, signal);
+    if (!result.success) this.lastError = {
+      at: new Date().toISOString(),
+      reason: result.errorCode === UiErrorCodes.TIMEOUT ? 'timeout' :
+        result.errorCode === UiErrorCodes.CANCELLED ? 'cancelled' : 'error',
+      message: `${result.errorCode}: ${result.errorMessage ?? 'Inspection failed.'}`.slice(0, 500), recoverable: true,
+    };
+    return result;
+  }
+
+  private async inspectOnce(
     request: UiInspectRequest,
     signal?: AbortSignal
   ): Promise<UiInspectResult> {
@@ -372,6 +401,8 @@ export class FlaUiAdapter implements IAdapter {
     });
 
     let stdoutData = '';
+    const stdoutDecoder = new StringDecoder('utf8');
+    let outputExceeded = false;
     let stderrData = '';
     let childProc: ChildProcess | null = null;
     let timer: NodeJS.Timeout | null = null;
@@ -441,17 +472,23 @@ export class FlaUiAdapter implements IAdapter {
         const maxBytes = UI_INSPECT_DEFAULTS.MAX_HOST_TRANSPORT_BYTES;
 
         childProc.stdout?.on('data', (chunk: Buffer) => {
+          if (outputExceeded) return;
           totalBytes += chunk.byteLength;
-          stdoutData += chunk.toString('utf8');
           if (totalBytes > maxBytes) {
+            // Stop retaining output immediately; process termination is asynchronous.
+            outputExceeded = true;
+            stdoutData = '';
             void killHelperOnly();
             reject(new Error(`Host stdout exceeded transport budget limit of ${maxBytes} bytes.`));
+            return;
           }
+          // A pipe chunk can split the UTF-8 bytes of one Chinese character.
+          stdoutData += stdoutDecoder.write(chunk);
         });
 
         childProc.stderr?.on('data', (chunk: Buffer) => {
           if (stderrData.length < 64 * 1024) {
-            stderrData += chunk.toString('utf8');
+            stderrData += chunk.toString('utf8').slice(0, 64 * 1024 - stderrData.length);
           }
         });
 
@@ -462,6 +499,8 @@ export class FlaUiAdapter implements IAdapter {
 
         childProc.on('close', (code) => {
           markExited();
+          if (outputExceeded) return;
+          stdoutData += stdoutDecoder.end();
           if (signal?.aborted) {
             resolve({
               schemaVersion: '1.0',
@@ -512,6 +551,7 @@ export class FlaUiAdapter implements IAdapter {
         });
 
         // Write request payload to stdin
+        childProc.stdin?.on('error', reject); // Early helper exit may otherwise raise an unhandled EPIPE.
         childProc.stdin?.write(payload, 'utf8');
         childProc.stdin?.end();
       } catch (spawnErr) {
@@ -576,6 +616,8 @@ export class FlaUiAdapter implements IAdapter {
   async dispose(): Promise<void> {
     this.shuttingDown = true;
     if (this.cleanupActive && !(await this.cleanupActive())) {
+      this.lastError = { at: new Date().toISOString(), reason: 'error', recoverable: true,
+        message: 'Helper cleanup timed out during shutdown; exit is not confirmed.' };
       throw new Error('Helper cleanup timed out during shutdown; exit is not confirmed.');
     }
   }

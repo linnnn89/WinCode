@@ -1,6 +1,6 @@
 {
   "name": "wincode-mcp",
-  "version": "0.6.0",
+  "version": "0.7.2",
   "description": "Windows-first MCP gateway: .NET project graph, evidence-bounded context, honest change-impact, long-running process hygiene",
   "main": "dist/index.js",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/flaui-adapter.test.ts tests/ui-inspect-mcp.test.ts tests/ui-hardening.test.ts",
+    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/flaui-adapter.test.ts tests/ui-inspect-mcp.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts",
     "test:verify": "tsx tests/verify.ts",
     "test:e2e": "tsx scripts/test-mcp-client.ts",
     "typecheck": "tsc -p tsconfig.test.json"

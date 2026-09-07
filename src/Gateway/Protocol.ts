@@ -233,3 +233,26 @@ export const WINCODE_TOOLS: Tool[] = [
     },
   },
 ];
+
+// Review accepts the same target/capture controls as inspect, plus a deliberately closed source scope.
+const uiInspectTool = WINCODE_TOOLS.find(tool => tool.name === 'wincode_ui_inspect')!;
+WINCODE_TOOLS.push({
+  name: 'wincode_ui_review',
+  description: 'Collects one UI snapshot and literal AutomationId candidates in supplied WPF XAML files. Returns source lines and ambiguity, not verified runtime/source identity or automatic defect diagnosis.',
+  inputSchema: {
+    ...uiInspectTool.inputSchema,
+    properties: {
+      ...uiInspectTool.inputSchema.properties,
+      textQueries: {
+        type: 'array', maxItems: 5, items: { type: 'string', minLength: 1, maxLength: 80 },
+        description: 'Optional explicit UI keywords/resource keys. Literal case-sensitive attribute search only; hits are not runtime node mappings.',
+      },
+      candidateFiles: {
+        type: 'array', minItems: 1, maxItems: 16,
+        items: { type: 'string', maxLength: 512 },
+        description: 'Explicit relative in-workspace .xaml files; no recursive repository scan.',
+      },
+    },
+    required: ['candidateFiles'],
+  },
+});

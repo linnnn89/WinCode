@@ -11,6 +11,7 @@ obj/
 
 # Local cache & data
 .cache/
+test-tmp/
 *.log
 
 # Trash folder (files to be deleted are moved here instead of hard delete)

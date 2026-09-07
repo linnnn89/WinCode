@@ -1,5 +1,45 @@
 # WinCode
 
+### v0.7.2 optional UI text evidence / 可选界面关键词检索
+
+在现有 wincode_ui_review 参数中增加 textQueries，例如 ["TavernDesk", "FirstRun.Language.Title"]。最多 5 个显式关键词，每个 80 字符，仅扫描 candidateFiles 指定的 XAML，复用既有文件、时间及 128 KiB 文本输出预算。
+
+sourceEvidence.textSearch 返回独立的文件、属性行号、片段和 SHA256；最多保留 40 项，totalMatches 是已扫描内容中的属性/关键词命中数。按原始属性值区分大小写做字面量子串检索，不解码 XML 实体、不展开资源字典、不检索元素正文。支持 Content/Text/Header/Title/ToolTip/AutomationProperties.Name/x:Key；资源引用和绑定表达式单独标注。文本命中不是运行时节点身份匹配；输出紧张时优先裁剪这些可选结果，truncated 标记不完整结果，整个可选对象也可能被省略。
+
+
+### v0.7.1 acceptance and diagnostics / 验收与诊断
+
+UI source results include per-node `reason`, `declarationCoverage` and `coverage` (evaluated/returned nodes, nodes with IDs and matched nodes). A syntax gap is reported as a limitation, never attributed to a particular runtime control without evidence. `fileScanComplete` only describes supplied-file reads, not full XAML semantics or complete UI coverage.
+
+`wincode_hello_world.health` adds `workspaceWatch` and `flaui.runtime`. These are passive snapshots; recent timeout/cancellation/cleanup errors have timestamps and remain visible after a successful health probe. A stopped file watcher is reported without an automatic retry loop.
+
+For opt-in testing, `npx tsx scripts/verify-ui-runtime.ts <options.json>` accepts `{ "pid": 12345, "workspace": "C:/source", "candidateFiles": ["MainWindow.xaml"], "output": "C:/isolated-results", "iterations": 20 }`. Start your target with its own fresh isolated-data mode first. The runner attaches only to that PID and does not start the application or send model requests. Reports and screenshots remain local; `test-tmp/` is ignored by Git. Twenty iterations are a short acceptance sample, not a long-term leak guarantee.
+
+### v0.7 working version: UI source candidates / UI 源码候选
+
+Workspace browsing omits `.dotnet` only when local SDK markers (the dotnet executable, `sdk`, and `host`) are present. Tree output includes omission reasons; metadata counts describe the filtered, depth-limited scan rather than total disk usage. `projectSummaries` reports project-file declarations independently of directory naming; imported/conditional MSBuild values are not evaluated.
+
+`wincode_ui_review` reuses one UI snapshot and searches explicit WPF XAML candidates. It returns literal declaration evidence, not verified runtime/source identity or an automatic defect diagnosis.
+
+`wincode_ui_review` 将同一次窗口取证与指定 WPF XAML 文件中的字面量声明候选组合返回。例如：
+
+```json
+{
+  "pid": 12345,
+  "capture": "annotated",
+  "candidateFiles": ["Views/MainWindow.xaml"],
+  "maxDepth": 6,
+  "maxNodes": 300
+}
+```
+
+- Open the intended source workspace first. `candidateFiles` requires 1–16 relative `.xaml` paths; it does not automatically verify that the running application was built from this workspace.
+- 先打开目标源码工作区。候选必须为工作区内相对 XAML 路径，不递归扫描；UTF-8、每文件 256 KiB、总读取 1 MiB，最多关联 100 个快照节点，每节点返回最多 5 个候选。
+- `sourceEvidence.nodes` 通过本次快照 `nodeId` 对应控件，包含真实起始标签行号、片段、文件 SHA-256 和原始属性声明。`single-candidate` 仅代表已扫描范围内一个候选；`ambiguous` 保留歧义，`not-found` 不是“不存在”，`unsupported` 包括缺失或可能被裁剪的 ID。
+- Only literal `AutomationProperties.AutomationId` attributes are matched. XML entities, property-element syntax, resources, namespace semantics, `x:Name` inference and runtime Binding/DataContext evaluation are not supported. `fileScanComplete` reports whether all supplied files were scanned; it does not mean semantic analysis was complete. File statuses and truncation describe incomplete coverage.
+- 截图独立放入 MCP image 块；源码结果使用剩余的 128 KiB 文本预算。查询失败或超预算时缩减/省略源码证据，保留 UI 快照。`runtimeSourceVerified` 始终为 `false`；源码哈希只标识读取内容，不证明运行时版本。
+- No additional dependencies, target instrumentation, automatic clicks or code edits. 当前未发布；4K/多 DPI 肉眼验收仍未覆盖。
+
 <p align="center">
   <strong>A Windows-first MCP gateway that gives coding agents a small set of high-level tools: workspace graph, evidence-bounded context, change-impact reports, and desktop UI inspection that stay honest when analysis is incomplete.</strong>
 </p>
@@ -196,7 +236,7 @@ npx tsx --test tests/ui-inspect-mcp.test.ts
 npm run test:verify
 ```
 
-`npm test` runs the standard test suites (`tdd-suite.test.ts`, `v05-stability.test.ts`, `stage1-cleanup.test.ts`, and `flaui-adapter.test.ts`). End-to-end MCP cases spawn `dist/index.js`, so build first.
+`npm test` runs the eight suites listed in `package.json`, including UI MCP, hardening, source-review and v0.7.1 acceptance tests. End-to-end MCP cases spawn `dist/index.js`, so build first.
 `tests/ui-inspect-mcp.test.ts` executes end-to-end MCP UI inspection tests against a live WPF fixture.
 
 Default tests use `tests/fixtures/dotnet-mini`. To optionally exercise a local live solution:
@@ -402,7 +442,7 @@ npx tsx --test tests/ui-inspect-mcp.test.ts
 npm run test:verify
 ```
 
-`npm test` 会跑标准回归测试套件（`tdd-suite.test.ts`、`v05-stability.test.ts`、`stage1-cleanup.test.ts` 以及 `flaui-adapter.test.ts`）。端到端 MCP 用例会拉起 `dist/index.js`，所以要先 build。
+`npm test` 会运行 `package.json` 中的八个套件，包括 UI MCP 端到端、加固、源码关联及 v0.7.1 验收测试。端到端 MCP 用例会拉起 `dist/index.js`，所以要先 build。
 `tests/ui-inspect-mcp.test.ts` 会拉起真实 WPF 测试夹具并执行 MCP UI 取证全链路端到端测试。
 
 默认测试使用 `tests/fixtures/dotnet-mini`。若要可选跑本地真实解决方案：

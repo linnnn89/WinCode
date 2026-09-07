@@ -98,7 +98,8 @@ export class AbortError extends Error {
 
 /**
  * Serializes a critical section. Callers queue; there is no OS thread pool.
- * Supports cancellation via optional AbortSignal during queue wait or execution.
+ * Cancels queue waiting. Once fn starts, it owns cooperative cancellation and cleanup;
+ * releasing this lock on abort before fn settles would permit concurrent owners.
  */
 export class Mutex {
   private tail: Promise<void> = Promise.resolve();
@@ -155,7 +156,7 @@ export class Mutex {
 
 function taskkillTree(pid: number): Promise<void> {
   return new Promise((resolve) => {
-    exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true }, () => resolve());
+    exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true, timeout: 2000 }, () => resolve());
   });
 }
 

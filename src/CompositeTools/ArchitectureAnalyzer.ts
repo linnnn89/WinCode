@@ -16,6 +16,7 @@ export interface ArchitectureReport {
   keyEntryPoints: string[];
   recommendedAgentFocus: string;
   projectGraph: DotNetProjectGraph | null;
+  projectSummaries: Array<{ file: string; kind: string; evidence: string[] }>;
 }
 
 /** Directory folder names are hints. For .NET, prefer projectGraph from sln/csproj files. */
@@ -99,6 +100,24 @@ export class ArchitectureAnalyzer {
     const graphEntryPoints = projectGraph
       ? projectGraph.projects.flatMap((p) => p.entryPoints)
       : [];
+    // Describe build declarations rather than infer architectural responsibility from folder names.
+    const projectSummaries = (projectGraph?.projects ?? []).map(project => {
+      const executable = ['exe', 'winexe'].includes(project.outputType?.toLowerCase() ?? '');
+      const ui = project.isWpf ? 'WPF' : project.isWinUi ? 'WinUI' : project.isWinForms ? 'WinForms' : null;
+      const kind = ui ? `${ui} ${executable ? 'executable' : 'project'}`
+        : project.isWeb ? 'Web SDK project'
+        : executable ? (project.outputType?.toLowerCase() === 'exe' ? 'Console executable' : 'Windows executable')
+        : project.outputType?.toLowerCase() === 'library' ? 'Class library'
+        : 'Project (output type not explicitly declared)';
+      return { file: project.relativePath, kind, evidence: [
+        ...(project.isWpf ? ['UseWPF=true'] : []),
+        ...(project.isWinUi ? ['UseWinUI=true'] : []),
+        ...(project.isWinForms ? ['UseWindowsForms=true'] : []),
+        ...(project.outputType ? [`OutputType=${project.outputType}`] : []),
+        ...(project.sdk ? [`Sdk=${project.sdk}`] : []),
+        ...project.projectReferences.map(reference => `ProjectReference=${reference}`),
+      ] };
+    });
     const keyEntryPoints = Array.from(new Set([...graphEntryPoints, ...directoryEntryPoints]));
 
     let recommendedAgentFocus: string;
@@ -125,6 +144,7 @@ export class ArchitectureAnalyzer {
       keyEntryPoints,
       recommendedAgentFocus,
       projectGraph,
+      projectSummaries,
     };
   }
 }

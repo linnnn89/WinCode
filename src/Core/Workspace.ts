@@ -27,6 +27,7 @@ export interface WorkspaceTreeItem {
   type: 'file' | 'directory';
   size?: number;
   children?: WorkspaceTreeItem[];
+  omittedDirectories?: Array<{ path: string; reason: string }>;
 }
 
 export interface WorkspaceGitStatus {
@@ -46,6 +47,10 @@ export interface WorkspaceMetadata {
   packageManagers: string[];
   solutions: string[];
   projectList: string[];
+  scanScope: 'filtered-depth-limited';
+  maxScanDepth: number;
+  omittedDirectories: Array<{ path: string; reason: string }>;
+  omittedDirectoryCount: number;
 }
 
 export interface WorkspaceOpenResult {
@@ -88,6 +93,19 @@ export class WorkspaceManager {
 
   get trashDir(): string {
     return this.config.trashDir;
+  }
+
+  /** Browsing policy only: do not silently change symbol searches or cache fingerprints. */
+  private async directoryOmission(dir: string): Promise<string | null> {
+    if (this.defaultIgnores.has(path.basename(dir))) return 'default-ignore';
+    if (path.basename(dir).toLowerCase() !== '.dotnet') return null;
+    // The name alone is insufficient: preserve ordinary source folders named .dotnet.
+    // Inspect marker metadata only; never execute the local SDK or follow marker links.
+    const markers = await Promise.all(['dotnet.exe', 'dotnet', 'sdk', 'host'].map(name =>
+      fs.lstat(path.join(dir, name)).catch(() => null)));
+    const [exe, unix, sdk, host] = markers;
+    return (exe?.isFile() || unix?.isFile()) && sdk?.isDirectory() && host?.isDirectory()
+      ? 'local-dotnet-sdk' : null;
   }
 
   /**
@@ -414,10 +432,15 @@ export class WorkspaceManager {
       try {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
         for (const entry of entries) {
-          if (this.defaultIgnores.has(entry.name)) continue;
           const fullPath = path.join(dirPath, entry.name);
+          if (!entry.isDirectory() && this.defaultIgnores.has(entry.name)) continue;
 
           if (entry.isDirectory()) {
+            const reason = await this.directoryOmission(fullPath);
+            if (reason) {
+              (item.omittedDirectories ??= []).push({ path: path.relative(this.root, fullPath).replace(/\\/g, '/'), reason });
+              continue;
+            }
             item.children?.push(await scan(fullPath, currentDepth + 1));
           } else if (entry.isFile()) {
             const stat = await fs.stat(fullPath).catch(() => null);
@@ -447,15 +470,26 @@ export class WorkspaceManager {
     let totalFiles = 0;
     let totalDirectories = 0;
     let totalSizeBytes = 0;
+    const omittedDirectories: Array<{ path: string; reason: string }> = [];
+    let omittedDirectoryCount = 0;
 
     const countWalk = async (dir: string, depth = 0) => {
       if (depth > 6) return;
       try {
         const entries = await fs.readdir(dir, { withFileTypes: true });
         for (const entry of entries) {
-          if (this.defaultIgnores.has(entry.name)) continue;
           const full = path.join(dir, entry.name);
+          if (!entry.isDirectory() && this.defaultIgnores.has(entry.name)) continue;
           if (entry.isDirectory()) {
+            const reason = await this.directoryOmission(full);
+            if (reason) {
+              omittedDirectoryCount++;
+              // Keep the explanation bounded in repositories with many generated directories.
+              if (omittedDirectories.length < 100) omittedDirectories.push({
+                path: path.relative(this.root, full).replace(/\\/g, '/'), reason,
+              });
+              continue;
+            }
             totalDirectories++;
             await countWalk(full, depth + 1);
           } else if (entry.isFile()) {
@@ -473,6 +507,10 @@ export class WorkspaceManager {
       totalFiles,
       totalDirectories,
       totalSizeBytes,
+      scanScope: 'filtered-depth-limited',
+      maxScanDepth: 6,
+      omittedDirectories,
+      omittedDirectoryCount,
       targetFramework: identity.targetFramework,
       frameworks: identity.frameworks,
       packageManagers: identity.packageManagers,
@@ -492,23 +530,31 @@ export class WorkspaceManager {
       throw new Error(`Invalid workspace path: "${targetPath}". Directory does not exist.`);
     }
 
-    // Switch current workspace root
+    const previousRoot = this.config.workspaceRoot;
+    const previousTrash = this.config.trashDir;
+    // Metadata collection can fail after validation (e.g. the directory disappears).
+    // Restore both mutable paths on failure so callers never observe a rejected root.
     this.setRoot(resolvedPath);
+    try {
+      const identity = await this.identifyProject();
+      const git = await this.getGitStatus();
+      const metadata = await this.getMetadata(identity);
+      const fileTree = await this.getDirectoryTree(2);
 
-    const identity = await this.identifyProject();
-    const git = await this.getGitStatus();
-    const metadata = await this.getMetadata(identity);
-    const fileTree = await this.getDirectoryTree(2);
-
-    return {
-      type: identity.type,
-      solution: identity.primarySolution,
-      projects: identity.projectFiles.length,
-      language: identity.language,
-      git,
-      metadata,
-      fileTree,
-    };
+      return {
+        type: identity.type,
+        solution: identity.primarySolution,
+        projects: identity.projectFiles.length,
+        language: identity.language,
+        git,
+        metadata,
+        fileTree,
+      };
+    } catch (error) {
+      this.config.workspaceRoot = previousRoot;
+      this.config.trashDir = previousTrash;
+      throw error;
+    }
   }
 
   /**

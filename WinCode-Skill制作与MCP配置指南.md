@@ -1,6 +1,6 @@
 # WinCode Skill 制作、安装与 MCP 配置指南
 
-适用于本仓库 v0.8 系列。以下以 Windows、Codex 和 `I:/WinCode` 为例；其他用户须替换为自己的仓库路径。客户端界面名称可能随版本变化。
+适用于本仓库 v0.8–v0.9 系列。以下以 Windows、Codex 和 `I:/WinCode` 为例；其他用户须替换为自己的仓库路径。客户端界面名称可能随版本变化。
 
 ## 1. Skill 与 MCP 各做什么
 

@@ -205,3 +205,29 @@
 - 核对现有技能、Protocol/启动入口、README 构建命令和已查证的 CLI 帮助；检查相对链接与 Git 空白差异。本轮仅写文档，不安装依赖、不修改客户端配置、不启动 UI。
 
 - 用户随后授权推送并合并：README 中英章节均加入指南链接；将技能与指南提交至既有 v0.8 分支，经 PR #9 发布。推送前 diff --check 通过；本次文档安装内容未重复执行 GUI 测试，功能验证沿用上文记录。
+
+## 2026-09-07（北京时间）— v0.9 有界局部取证、状态与完整性
+
+- 用户确认上一轮计划后实施。基于已合并 main 新建 codex/v0.9-local-ui；保留既有两份文档删除。README 在执行期间出现并行改版，保留其新版结构，仅追加本轮双语说明，不将整份改版归为本次独立产出。
+- 完整性：遍历异常计数并标记 enumerationFailed；OperationCanceledException 继续传播；深度边界仅确有子节点才标记截断。新增 treeComplete（仅结构/输出覆盖）、propertyIssues（不支持/错误/裁剪）和计数。UiPropertyEvidence 保证未读到布尔值不补 false。
+- 查询：既有 inspect/review 加可选 query，automationId/name/controlType 精确区分大小写 AND；默认扫描 1000/最多 5000 节点、返回 10/最多 20 候选、2 秒及 50 层软边界。独立于展开子树预算，完整唯一才展开；多个匹配保持歧义，未完成不判唯一。请求内只保留有界候选 COM 引用，不跨请求缓存；达到硬停止条件后不再逐层请求兄弟节点。整个 Helper 截止时间及清理保持原机制。
+- 状态：readStates 显式读取 Toggle/SelectionItem/ExpandCollapse 的值，不执行动作、不读取输入框内容；unsupported/unknown 明确。截图仍为整个目标窗口，仅标注返回子树。候选与子树共同计入 128 KiB 文本预算，源码证据继续使用剩余预算。
+- 兼容：Host inspectionVersion=2；请求局部查询/状态遇旧 Host 时返回 VERSION_MISMATCH，避免参数被忽略后整窗结果冒充定向结果。版本同步为 0.9.0，没有新增第三方依赖。
+- 失败纠偏：首次 Python 读取遇默认 GBK，改为 UTF-8；首次夹具 publish 未带 RID，补用 win-x64 发布到脚本实际目录。实机第一次将 Button 错当叶节点，实际有 Text 子节点，保持真实截断并增加 Text 叶节点断言。另一次将 TryGetValue=false 当成读取异常导致搜索误报不完整；核对 FlaUI v5.0.0 AutomationProperty 源码确认其含义是不支持，改为该属性无字面量可匹配，真实异常仍标记不完整（https://raw.githubusercontent.com/FlaUI/FlaUI/v5.0.0/src/FlaUI.Core/AutomationProperty.cs）。
+- 性能：增加响应准备阶段 helperPeakWorkingSetBytes（系统峰值 RSS，不含后续最终序列化，不是硬内存上限）。222 节点夹具全树约 62 KB，局部按钮约 1.6 KB，调用约 0.78 秒，没有证明提速。故不引入 UIA CacheRequest 或跨请求快照缓存；只落实输出缩减与峰值观测。
+- 验证：Host Release 发布、TS build/typecheck 通过。非交互默认回归 128 pass、1 skip、0 fail；随后兼容保护及相关变更的五个专项文件 22/22 通过，最终有界搜索停止逻辑及属性语义专项 4/4 通过（内含生产 C# 16 项断言）。前一轮全量结果不冒称包含随后新增的旧 Host 测试。测试脚本分为 npm test 非交互、test:ui 交互、test:all 两者，局部实机另用 test:ui-query。
+- 实机：test-tmp/ui-query-1788788783290/report.json，16 次取证全通过，覆盖完整/唯一/歧义/扫描与候选上限/无匹配/叶节点/三类状态/源码联动/标注/重复调用。另两次真实 query 取消和超时确认记录到 Helper PID，结束后 OS 查询为 ESRCH、目标 PID 仍存活；末次 MCP 健康 activePid=null。156 个 100ms 前台采样一致，不证明更短暂变化不存在。review.png 已目视确认窗口图与 #1/#2 局部标注对应，未读取个人应用。
+- 维护：README 双语、CHANGELOG、独立安装指南、Skill UI/诊断手册同步；替换安装手册前比较 HEAD 基线，确认无用户编辑，源副本/安装副本一致，技能校验通过。未增加 Skill 入口或默认预读范围。
+- 未验证：真实目标控件动态消失的实机注入（搜索/属性失败用生产函数故障注入断言）、本轮新的浏览器遮挡实机、超大 4K/多 DPI 和长期资源走势。未运行会激活窗口的旧 GUI 全量套件。保持本地修改，未提交、推送或合并。
+
+
+## 2026-09-07（北京时间）— README 双语复核与独立替换稿
+
+- 对照现有源码、配置、脚本和此前验收证据，参考 Playwright MCP、Repomix、FlaUI 的价值说明与快速上手结构，以及 MCP Filesystem 的路径示例。纠正零 Token、绝对免疫、防篡改、MSBuild 求值、即时失效和全进程内存硬上限等超出证据的表述；同步 v0.9 查询、源码候选边界、资源预算与真实测试入口。
+- 两次原 README 写入遭工具策略拒绝（blocked by policy，无具体原因），没有执行写入。用户随后明确要求新建 reamdeV2.md 自行覆盖；已按此文件名生成完整中英替换稿，原 README 保留。按用户要求维持 ~ 示例，并明确整段替换为实际绝对路径；修正 Serena 上游链接，不改变代码或客户端配置。
+- 验证：15 个本地文档链接存在、4 个 JSON 示例解析通过、所有 npm run 命令与 package.json 一致。反证核查包括后台截图不保证所有渲染器可用、局部查询截图仍覆盖整窗、test:all 不含独立 test:ui-query。仅文档变更，未重复构建或 GUI 测试，未提交或推送。
+
+## 2026-09-07（北京时间）— v0.9 提交与合并
+
+- 用户授权提交合并，并确认删除旧的 v0.6 实施方案与初步构思；两项删除纳入版本记录。用户已将独立替换稿覆盖到 README，提交当前双语版本。
+- 本轮验证：typecheck、build、局部查询 4/4 通过；npm test 共 130 项，129 通过、1 跳过、0 失败。未重复运行交互 GUI 套件。提交前确认远端 linnnn89/WinCode、分支 codex/v0.9-local-ui 与 origin/main 无分歧，忽略的临时截图及构建产物不提交。

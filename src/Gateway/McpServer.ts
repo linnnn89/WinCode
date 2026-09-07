@@ -10,7 +10,7 @@ import { ToolRouter } from '../Core/ToolRouter.js';
 import { WINCODE_TOOLS } from './Protocol.js';
 import { WINCODE_VERSION } from '../Core/Config.js';
 import { AbortError } from '../Core/ResourceManager.js';
-import { UI_INSPECT_DEFAULTS, validateWindowQuery, UiListWindowsRequest } from '../Core/UiContracts.js';
+import { UI_INSPECT_DEFAULTS, validateUiQuery, UiQuery, validateWindowQuery, UiListWindowsRequest } from '../Core/UiContracts.js';
 import { validateCandidateFiles } from '../Core/UiSourceMapper.js';
 import { validateTextQueries } from '../Core/UiTextSearch.js';
 import { UiReviewResult } from '../CompositeTools/UiReview.js';
@@ -356,6 +356,8 @@ export class WinCodeMcpServer {
 
           case 'wincode_ui_review':
           case 'wincode_ui_inspect': {
+            try { validateUiQuery(args.query, args.readStates); }
+            catch (error) { return {content: [{type: 'text', text: JSON.stringify({success:false, errorCode:'INVALID_ARGUMENT', errorMessage:(error as Error).message})}], isError:true}; }
             if ((args.backgroundOnly !== undefined && typeof args.backgroundOnly !== 'boolean') ||
                 (args.backgroundOnly === true && (!args.pid || !args.hwnd))) {
               return { content: [{ type: 'text', text: JSON.stringify({ success: false,
@@ -534,6 +536,8 @@ export class WinCodeMcpServer {
                 pid,
                 hwnd,
                 capture,
+                query: args.query as UiQuery | undefined,
+                readStates: args.readStates as boolean | undefined,
                 backgroundOnly: args.backgroundOnly as boolean | undefined,
                 maxDepth,
                 maxNodes,

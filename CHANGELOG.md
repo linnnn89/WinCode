@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.2 (unreleased)
+
+- Add optional bounded textQueries to UI review; preserve independent ID candidates and runtime evidence.
+- Report literal attributes, unresolved resource references and bindings with source lines/hashes.
+- Test contradictory identity/text evidence, duplicate hits, comments, clipping, validation and MCP output budgets.
+
+## 0.7.1 (unreleased)
+
+- UI source evidence now explains missing/clipped IDs, unsupported values, incomplete file scans, ambiguous candidates and literal misses. Coverage distinguishes evaluated nodes from nodes retained in the final response budget.
+- Runtime health exposes passive FlaUI process/error state and workspace watcher failure history. Cached successful health does not erase recent inspection errors; diagnostics never capture a target window.
+- Add an opt-in `scripts/verify-ui-runtime.ts` acceptance runner for explicit PIDs, bounded mixed calls, cancellation, workspace switches and resource measurements. It never launches the target or configures model providers.
+- Actual isolated TavernDesk main-window validation: 20 review iterations, 4 cancellations and 3 round-trip workspace switches; no retained helpers at sample points. UI-to-source coverage remains limited by absent/literal-unmatched AutomationIds.
+
+## 0.7.0 (unreleased)
+
+- Add `wincode_ui_review`: one UI snapshot plus literal AutomationId source candidates in explicit WPF XAML files. Candidates include real start-tag lines, bounded snippets, SHA-256 and attribute declarations; they do not assert runtime/source identity.
+- Reuse inspect cancellation, request slots and image separation. Source lookup failures preserve the UI snapshot; source evidence uses the remaining 128 KiB text budget.
+- Bound source reads to 16 files, 256 KiB per file, 1 MiB total, with cancellation/deadline checkpoints. Resolve paths before reading and reject outside-workspace junctions.
+- Add source-boundary tests and a real WPF-to-XAML MCP flow. No new dependencies or target-application instrumentation.
+
 ## 0.5.1
 
 Patch for the long-running risks called out in 0.5.0. Tool honesty is unchanged.

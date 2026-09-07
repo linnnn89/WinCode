@@ -7,6 +7,36 @@ import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
+it('helper pipe preserves Chinese characters split across UTF-8 chunks', async () => {
+  const adapter = new FlaUiAdapter(getDefaultConfig(process.cwd()));
+  const code = `process.stdin.resume(); process.stdin.on('end', () => {
+    const bytes = Buffer.from(JSON.stringify({protocolVersion:'1.0', success:true, errorMessage:'中文'}));
+    const split = bytes.indexOf(Buffer.from('中')) + 1;
+    process.stdout.write(bytes.subarray(0,split));
+    setTimeout(() => process.stdout.write(bytes.subarray(split)), 40);
+  });`;
+  (adapter as any).resolveHostCommand = () => ({ command: process.execPath, args: ['-e', code] });
+  try {
+    const result = await (adapter as any).executeHost({ requestId: 'split', action: 'inspect' }, 3000);
+    assert.equal(result.success, true);
+    assert.equal(result.errorMessage, '中文');
+    assert.equal(adapter.isRunning, false);
+  } finally { await adapter.dispose(); }
+});
+
+it('flooding helper is rejected at the transport budget and reaped', async () => {
+  const adapter = new FlaUiAdapter(getDefaultConfig(process.cwd()));
+  const code = `process.stdin.resume(); process.stdin.on('end', () => {
+    setInterval(() => process.stdout.write(Buffer.alloc(65536, 120)), 1);
+  });`;
+  (adapter as any).resolveHostCommand = () => ({ command: process.execPath, args: ['-e', code] });
+  try {
+    const result = await (adapter as any).executeHost({ requestId: 'flood', action: 'inspect' }, 5000);
+    assert.equal(result.errorCode, 'PAYLOAD_TOO_LARGE');
+    assert.equal(adapter.isRunning, false);
+  } finally { await adapter.dispose(); }
+});
+
 it('inspect deadline includes time waiting behind another request', async () => {
   const adapter = new FlaUiAdapter(getDefaultConfig(process.cwd()));
   let release!: () => void;

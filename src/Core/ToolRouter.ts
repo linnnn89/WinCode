@@ -7,6 +7,7 @@ import { RepomixAdapter } from '../Adapters/RepomixAdapter.js';
 import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
 import { FlaUiAdapter } from '../Adapters/FlaUiAdapter.js';
 import { UiInspectRequest, UiInspectResult } from './UiContracts.js';
+import { reviewUi, UiReviewResult } from '../CompositeTools/UiReview.js';
 import { ArchitectureAnalyzer } from '../CompositeTools/ArchitectureAnalyzer.js';
 import { ImpactAnalyzer } from '../CompositeTools/ImpactAnalyzer.js';
 import { RefactorAssistant } from '../CompositeTools/RefactorAssistant.js';
@@ -23,6 +24,7 @@ export interface RuntimeHealth {
   uptimeMs: number;
   startedAt: string;
   activeWorkspace: string | null;
+  workspaceWatch: ReturnType<WorkspaceWatch['getStatus']>;
   session: WorkspaceSession | null;
   serena: {
     commandFound: boolean;
@@ -39,6 +41,7 @@ export interface RuntimeHealth {
     lastError?: AdapterLastError;
   };
   flaui: {
+    runtime: ReturnType<FlaUiAdapter['getRuntimeStatus']>;
     available: boolean;
     source: string;
     details?: string;
@@ -211,8 +214,8 @@ export class ToolRouter {
         const sameWorkspace =
           Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
 
-        const result = await this.workspace.openWorkspace(targetPath);
         const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
+        const result = await this.workspace.openWorkspace(targetPath);
 
         if (sameWorkspace) {
           const previousFp = this.session.current?.fingerprint ?? null;
@@ -287,6 +290,7 @@ export class ToolRouter {
       uptimeMs: Date.now() - this.startedAt,
       startedAt: new Date(this.startedAt).toISOString(),
       activeWorkspace: this.config.workspaceRoot,
+      workspaceWatch: this.watch.getStatus(),
       session: this.session.current,
       serena: {
         commandFound: up?.commandFound ?? false,
@@ -303,6 +307,7 @@ export class ToolRouter {
         lastError: repomixHealth.lastError,
       },
       flaui: {
+        runtime: this.flaui.getRuntimeStatus(),
         available: flauiHealth.available,
         source: flauiHealth.source,
         details: flauiHealth.details,
@@ -334,15 +339,18 @@ export class ToolRouter {
     return this.flaui.inspect(request, signal);
   }
 
+  async reviewUi(request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[]): Promise<UiReviewResult> {
+    // MCP owns the request slot across both stages, preventing workspace changes between them.
+    return reviewUi((input, abort) => this.inspectUi(input, abort),
+      this.config.workspaceRoot, request, candidateFiles, signal, textQueries);
+  }
+
   async dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.shuttingDown = true;
     this.disposePromise = this.disposeOnce();
-    try {
-      await this.disposePromise;
-    } finally {
-      this.disposePromise = Promise.resolve();
-    }
+    // Retain the settled result: repeated callers must not see success after failed cleanup.
+    return this.disposePromise;
   }
 
   private async disposeOnce(): Promise<void> {
@@ -355,12 +363,21 @@ export class ToolRouter {
         clearInterval(this.pruneTimer);
         this.pruneTimer = null;
       }
-      await this.repomix.dispose();
-      await this.serena.dispose();
-      await this.flaui.dispose();
-      await this.extensions.disposeAll();
-      this.session.close();
-      await this.resources.dispose();
+      const failures: unknown[] = [];
+      // Every owner gets a cleanup attempt even if a previous adapter failed.
+      // Keep ordering: adapters stop producing work before queued cache writes drain.
+      for (const cleanup of [
+        () => this.repomix.dispose(),
+        () => this.serena.dispose(),
+        () => this.flaui.dispose(),
+        () => this.extensions.disposeAll(),
+        () => this.cache.flush(),
+        () => this.session.close(),
+        () => this.resources.dispose(),
+      ]) {
+        try { await cleanup(); } catch (error) { failures.push(error); }
+      }
+      if (failures.length) throw new AggregateError(failures, 'One or more gateway resources failed to close.');
     });
   }
 }

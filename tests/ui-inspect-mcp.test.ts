@@ -354,8 +354,12 @@ describe('WinCode MCP UI Inspect Protocol & End-to-End Suite', () => {
     }
     assert.strictEqual(threw, true, 'client.callTool with aborted signal must reject');
 
-    // Wait briefly for server cancel notification to reap helper
-    await new Promise((r) => setTimeout(r, 200));
+    // Client cancellation precedes server cleanup; wait for its terminal state,
+    // not a scheduler-dependent 200ms sleep. Keep the exit assertion below.
+    const cleanupDeadline = Date.now() + 4000;
+    while ((router.flaui as any).activeProcess !== null && Date.now() < cleanupDeadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
     assert.strictEqual((router.flaui as any).activeProcess, null, 'Helper process must not linger after MCP cancellation');
 
     // Subsequent normal inspect must succeed without leftover process
@@ -436,6 +440,32 @@ describe('WinCode MCP UI Inspect Protocol & End-to-End Suite', () => {
       assert.equal(data.totalNodes, count);
       assert.ok(count < 350, 'Oversized tree should actually have been pruned');
     } finally { await killProcessTree(target); }
+  });
+
+  it('review links a real WPF snapshot to fixture XAML with the same request node IDs', async () => {
+    const res = await client.callTool({ name: 'wincode_ui_review', arguments: {
+      pid: wpfPid, capture: 'annotated', maxDepth: 6,
+      candidateFiles: ['tests/fixtures/wpf-ui-review/MainWindow.xaml'],
+    } });
+    assert.strictEqual(res.isError, false);
+    const content = getContent(res);
+    const data = JSON.parse(content[0].text!);
+    assert.strictEqual(content[1].type, 'image');
+    assert.strictEqual(data.sourceEvidence.runtimeSourceVerified, false);
+    const pending = [data.tree];
+    let disabled: any;
+    while (pending.length) {
+      const current = pending.pop();
+      if (current.automationId === 'btnDisabledAction') disabled = current;
+      pending.push(...current.children);
+    }
+    assert.ok(disabled, 'Fixture button must be in the actual UIA snapshot');
+    assert.strictEqual(disabled.isEnabled, false);
+    const evidence = data.sourceEvidence.nodes.find((entry: any) => entry.nodeId === disabled.id);
+    assert.strictEqual(evidence.status, 'single-candidate');
+    assert.strictEqual(evidence.candidates[0].declarations.IsEnabled, 'False');
+    const lines = (await fsPromises.readFile(path.join(root, evidence.candidates[0].file), 'utf8')).split('\n');
+    assert.ok(lines[evidence.candidates[0].line - 1].includes('<Button'));
   });
 
   it('16. disabled flaui adapter rejects MCP call at entry with HOST_UNAVAILABLE', async () => {

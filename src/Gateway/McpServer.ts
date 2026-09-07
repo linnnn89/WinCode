@@ -11,6 +11,9 @@ import { WINCODE_TOOLS } from './Protocol.js';
 import { WINCODE_VERSION } from '../Core/Config.js';
 import { AbortError } from '../Core/ResourceManager.js';
 import { UI_INSPECT_DEFAULTS } from '../Core/UiContracts.js';
+import { validateCandidateFiles } from '../Core/UiSourceMapper.js';
+import { validateTextQueries } from '../Core/UiTextSearch.js';
+import { UiReviewResult } from '../CompositeTools/UiReview.js';
 
 export class WinCodeMcpServer {
   private server: Server;
@@ -166,6 +169,7 @@ export class WinCodeMcpServer {
                         'wincode_plan_refactoring',
                         'wincode_safe_move_to_trash',
                         'wincode_ui_inspect',
+                        'wincode_ui_review',
                       ],
                     },
                     null,
@@ -332,7 +336,15 @@ export class WinCodeMcpServer {
             };
           }
 
+          case 'wincode_ui_review':
           case 'wincode_ui_inspect': {
+            if (name === 'wincode_ui_review') {
+              try { validateCandidateFiles(args.candidateFiles); validateTextQueries(args.textQueries); }
+              catch (error) {
+                return { content: [{ type: 'text', text: JSON.stringify({ success: false,
+                  errorCode: 'INVALID_ARGUMENT', errorMessage: (error as Error).message }) }], isError: true };
+              }
+            }
             let pid: number | undefined;
             if (args.pid !== undefined && args.pid !== null) {
               const parsed = Number(args.pid);
@@ -490,7 +502,11 @@ export class WinCodeMcpServer {
               maxNodes = parsed;
             }
 
-            const result = await this.router.inspectUi(
+            const inspect = name === 'wincode_ui_review'
+              ? (input: Parameters<ToolRouter['inspectUi']>[0], abort?: AbortSignal) =>
+                this.router.reviewUi(input, args.candidateFiles as string[], abort, args.textQueries as string[] | undefined)
+              : this.router.inspectUi.bind(this.router);
+            const result: UiReviewResult = await inspect(
               {
                 pid,
                 hwnd,
@@ -513,7 +529,38 @@ export class WinCodeMcpServer {
               ...cleanResult,
               hasScreenshot: Boolean(imageBase64),
             };
-            const text = JSON.stringify(textPayload);
+            let text = JSON.stringify(textPayload);
+            // Optional keyword hits spend only spare budget; keep existing ID evidence and UI first.
+            while (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES &&
+              textPayload.sourceEvidence?.textSearch?.matches.length) {
+              textPayload.sourceEvidence.textSearch.matches.pop();
+              textPayload.sourceEvidence.textSearch.truncated = true;
+              text = JSON.stringify(textPayload);
+            }
+            if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES && textPayload.sourceEvidence?.textSearch) {
+              delete textPayload.sourceEvidence.textSearch;
+              textPayload.sourceEvidence.truncated = true;
+              text = JSON.stringify(textPayload);
+            }
+            // Spend only the unused text budget on source candidates. Never trim the UI tree
+            // here: the existing screenshot badges must continue to reference its retained nodes.
+            while (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES &&
+              textPayload.sourceEvidence?.nodes.length) {
+              textPayload.sourceEvidence.nodes.pop();
+              textPayload.sourceEvidence.truncated = true;
+              textPayload.sourceEvidence.coverage.returnedNodes = textPayload.sourceEvidence.nodes.length;
+              text = JSON.stringify(textPayload);
+            }
+            if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES && textPayload.sourceEvidence) {
+              delete textPayload.sourceEvidence;
+              textPayload.sourceEvidenceOmitted = 'Source evidence exceeds remaining text budget.';
+              text = JSON.stringify(textPayload);
+            }
+            if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES && textPayload.sourceEvidenceOmitted) {
+              // A baseline snapshot can occupy the entire budget: even the omission notice is optional.
+              delete textPayload.sourceEvidenceOmitted;
+              text = JSON.stringify(textPayload);
+            }
             if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES) {
               // A malformed/custom helper must not bypass the final MCP budget.
               return {

@@ -185,7 +185,8 @@ export class CacheManager {
 
       this.setMemoryEntry(memKey, {
         ...entry,
-        byteSize: entry.byteSize ?? this.estimateBytes(entry.data),
+        // Disk metadata is not authoritative for heap accounting.
+        byteSize: this.estimateBytes(entry.data),
       });
       return entry.data;
     } catch {
@@ -213,6 +214,10 @@ export class CacheManager {
     }
 
     if (byteSize > this.maxEntryBytes) {
+      // A rejected replacement must invalidate the old value, not silently resurrect it.
+      this.deleteMemory(memKey);
+      const stalePath = this.getCacheFilePath(key);
+      await this.enqueueWrite(() => fs.unlink(stalePath).catch(() => {}));
       return;
     }
 
@@ -221,12 +226,12 @@ export class CacheManager {
       const filePath = targetFilePath;
       const tmpPath = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
       try {
-        await fs.mkdir(this.cacheDir, { recursive: true });
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(tmpPath, JSON.stringify(entry), 'utf-8');
         await fs.rename(tmpPath, filePath);
         this.writeCount++;
         if (this.writeCount % 20 === 0) {
-          await this.pruneDiskCache();
+          await this.pruneDiskCacheOnce();
           this.pruneExpiredMemory();
         }
       } catch (err) {
@@ -245,6 +250,11 @@ export class CacheManager {
     return run;
   }
 
+  /** Drain accepted writes before the gateway releases its remaining resources. */
+  async flush(): Promise<void> {
+    await this.writeChain;
+  }
+
   private deleteMemory(memKey: string): void {
     const existing = this.memoryCache.get(memKey);
     if (existing) {
@@ -257,12 +267,12 @@ export class CacheManager {
     const size = entry.byteSize ?? this.estimateBytes(entry.data);
     entry.byteSize = size;
 
-    if (size > this.maxEntryBytes) {
-      return;
-    }
+    // Invalidate a previous value even when the replacement is disk-only.
+    if (this.memoryCache.has(key)) this.deleteMemory(key);
 
-    if (this.memoryCache.has(key)) {
-      this.deleteMemory(key);
+    if (!Number.isFinite(size) || size < 0 || size > this.maxEntryBytes ||
+      size > this.maxMemoryBytes || this.maxMemoryEntries <= 0) {
+      return;
     }
 
     this.pruneExpiredMemory();
@@ -317,6 +327,11 @@ export class CacheManager {
   }
 
   async pruneDiskCache(options?: { orphanGraceMs?: number }): Promise<void> {
+    // Disk maintenance shares the writer queue so it cannot remove a replacement mid-write.
+    await this.enqueueWrite(() => this.pruneDiskCacheOnce(options));
+  }
+
+  private async pruneDiskCacheOnce(options?: { orphanGraceMs?: number }): Promise<void> {
     try {
       const files = await fs.readdir(this.cacheDir);
       const jsonFiles = files.filter((f) => f.endsWith('.json'));
@@ -349,6 +364,11 @@ export class CacheManager {
         const jsonPath = path.join(this.cacheDir, f);
         try {
           const stat = await fs.stat(jsonPath);
+          // Reject oversized JSON before parsing; overflow orphans are reconciled below.
+          if (stat.size > this.maxEntryBytes) {
+            await fs.unlink(jsonPath).catch(() => {});
+            continue;
+          }
           const content = await fs.readFile(jsonPath, 'utf-8');
           const entry: CacheEntry<any> = JSON.parse(content);
 
@@ -359,15 +379,6 @@ export class CacheManager {
 
           // Check TTL expiration
           if (entry.ttlMs && now - entry.timestamp > entry.ttlMs) {
-            await fs.unlink(jsonPath).catch(() => {});
-            if (overflowPath) {
-              await this.removeOverflow(overflowPath);
-            }
-            continue;
-          }
-
-          // Check oversized standalone JSON (exceeds maxEntryBytes)
-          if (stat.size > this.maxEntryBytes) {
             await fs.unlink(jsonPath).catch(() => {});
             if (overflowPath) {
               await this.removeOverflow(overflowPath);
@@ -721,6 +732,10 @@ export class CacheManager {
     this.fpMemo.clear();
     this.fpInflight.clear();
     this.watchGeneration.clear();
+    await this.enqueueWrite(() => this.clearDisk());
+  }
+
+  private async clearDisk(): Promise<void> {
     try {
       const files = await fs.readdir(this.cacheDir);
       for (const file of files) {

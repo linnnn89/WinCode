@@ -2,6 +2,8 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 namespace wpf_ui_review;
 
@@ -10,9 +12,38 @@ namespace wpf_ui_review;
 /// </summary>
 public partial class MainWindow : Window
 {
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] private static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    private static void ReportForeground()
+    {
+        var foreground = GetForegroundWindow();
+        GetWindowThreadProcessId(foreground, out var pid);
+        string name = "unavailable";
+        try { using var process = Process.GetProcessById((int)pid); name = process.ProcessName; } catch { }
+        Console.WriteLine($"FOREGROUND {pid} 0x{foreground.ToInt64():X} {name}");
+        Console.Out.Flush();
+    }
+
     public MainWindow()
     {
         InitializeComponent();
+        if (Environment.GetCommandLineArgs().Contains("--background-fixture"))
+        {
+            // Explicit test mode: never activate or place this fixture above the user's game.
+            ReportForeground();
+            ShowActivated = false;
+            ShowInTaskbar = false;
+            Title = "WinCode Background Evidence Fixture";
+            SourceInitialized += (_, _) => {
+                var handle = new WindowInteropHelper(this).Handle;
+                SetWindowLongPtr(handle, -20, new IntPtr(GetWindowLongPtr(handle, -20).ToInt64() | 0x08000000)); // WS_EX_NOACTIVATE
+            };
+        }
+        if (Environment.GetCommandLineArgs().Contains("--window-list-fixture")) Title = "WinCode 窗口发现夹具";
         if (Environment.GetCommandLineArgs().Contains("--budget-fixture"))
         {
             var panel = new StackPanel();
@@ -31,13 +62,22 @@ public partial class MainWindow : Window
     {
         var helper = new WindowInteropHelper(this);
         var hwnd = helper.Handle;
+        if (Environment.GetCommandLineArgs().Contains("--background-fixture"))
+        {
+            SetWindowPos(hwnd, new IntPtr(1), 0, 0, 0, 0, 0x0010 | 0x0001 | 0x0002); // HWND_BOTTOM, NOACTIVATE/NOSIZE/NOMOVE
+            var foregroundTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            foregroundTimer.Tick += (_, _) => ReportForeground();
+            Closed += (_, _) => foregroundTimer.Stop();
+            foregroundTimer.Start();
+            ReportForeground();
+        }
 
         // Print readiness signal to stdout for automated testing
         Console.WriteLine($"READY {Environment.ProcessId} 0x{hwnd.ToInt64():X}");
         Console.Out.Flush();
 
         var args = Environment.GetCommandLineArgs();
-        if (args.Contains("--multi-window"))
+        if (args.Contains("--multi-window") || args.Contains("--window-list-fixture"))
         {
             OpenSubWindow();
         }
@@ -65,7 +105,7 @@ public partial class MainWindow : Window
     {
         var subWin = new Window
         {
-            Title = "SubWindow Dialog",
+            Title = Environment.GetCommandLineArgs().Contains("--window-list-fixture") ? Title : "SubWindow Dialog",
             Width = 300,
             Height = 200,
             Owner = this,

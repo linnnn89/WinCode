@@ -10,7 +10,7 @@ import { ToolRouter } from '../Core/ToolRouter.js';
 import { WINCODE_TOOLS } from './Protocol.js';
 import { WINCODE_VERSION } from '../Core/Config.js';
 import { AbortError } from '../Core/ResourceManager.js';
-import { UI_INSPECT_DEFAULTS } from '../Core/UiContracts.js';
+import { UI_INSPECT_DEFAULTS, validateWindowQuery, UiListWindowsRequest } from '../Core/UiContracts.js';
 import { validateCandidateFiles } from '../Core/UiSourceMapper.js';
 import { validateTextQueries } from '../Core/UiTextSearch.js';
 import { UiReviewResult } from '../CompositeTools/UiReview.js';
@@ -169,6 +169,7 @@ export class WinCodeMcpServer {
                         'wincode_plan_refactoring',
                         'wincode_safe_move_to_trash',
                         'wincode_ui_inspect',
+                        'wincode_ui_list_windows',
                         'wincode_ui_review',
                       ],
                     },
@@ -336,8 +337,30 @@ export class WinCodeMcpServer {
             };
           }
 
+          case 'wincode_ui_list_windows': {
+            try {
+              if (Object.keys(args).some(key => !['pid', 'processName', 'titleContains', 'maxWindows'].includes(key)))
+                throw new Error('Unknown window query argument.');
+              validateWindowQuery(args as UiListWindowsRequest);
+            } catch (error) {
+              return { content: [{ type: 'text', text: JSON.stringify({ success: false,
+                errorCode: 'INVALID_ARGUMENT', errorMessage: (error as Error).message }) }], isError: true };
+            }
+            const result = await this.router.listUiWindows(args as UiListWindowsRequest, signal);
+            const text = JSON.stringify(result);
+            if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES)
+              return { content: [{ type: 'text', text: JSON.stringify({ success: false,
+                errorCode: 'PAYLOAD_TOO_LARGE', errorMessage: 'Window list exceeds text budget.', auditNotice: result.auditNotice }) }], isError: true };
+            return { content: [{ type: 'text', text }], isError: !result.success };
+          }
+
           case 'wincode_ui_review':
           case 'wincode_ui_inspect': {
+            if ((args.backgroundOnly !== undefined && typeof args.backgroundOnly !== 'boolean') ||
+                (args.backgroundOnly === true && (!args.pid || !args.hwnd))) {
+              return { content: [{ type: 'text', text: JSON.stringify({ success: false,
+                errorCode: 'INVALID_ARGUMENT', errorMessage: 'backgroundOnly requires explicit pid and hwnd.' }) }], isError: true };
+            }
             if (name === 'wincode_ui_review') {
               try { validateCandidateFiles(args.candidateFiles); validateTextQueries(args.textQueries); }
               catch (error) {
@@ -511,6 +534,7 @@ export class WinCodeMcpServer {
                 pid,
                 hwnd,
                 capture,
+                backgroundOnly: args.backgroundOnly as boolean | undefined,
                 maxDepth,
                 maxNodes,
               },
@@ -567,6 +591,7 @@ export class WinCodeMcpServer {
                 content: [{ type: 'text' as const, text: JSON.stringify({
                   success: false, errorCode: 'PAYLOAD_TOO_LARGE',
                   errorMessage: 'UI text response exceeds 128 KiB.',
+                  auditNotice: result.auditNotice,
                   imageOmitted: true, hasScreenshot: false,
                 }) }],
                 isError: true,

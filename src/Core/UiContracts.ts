@@ -30,6 +30,7 @@ export interface UiCandidateWindow {
   className: string;
   bounds: UiRect;
   isIconic: boolean;
+  titleTruncated?: boolean;
 }
 
 export type UiCaptureMode = 'none' | 'original' | 'annotated';
@@ -37,18 +38,27 @@ export type UiCaptureMode = 'none' | 'original' | 'annotated';
 export interface UiInspectRequest {
   schemaVersion?: string;
   requestId?: string;
-  action?: 'inspect' | 'health' | 'ping';
+  action?: 'inspect' | 'health' | 'ping' | 'listWindows';
+  processName?: string;
+  titleContains?: string;
+  maxWindows?: number;
   pid?: number;
   hwnd?: string;
   capture?: UiCaptureMode;
+  backgroundOnly?: boolean;
   maxDepth?: number;
   maxNodes?: number;
   timeoutMs?: number;
 }
 
-export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout' | 'budgetLimit';
+export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout' | 'budgetLimit' | 'maxWindows' | 'enumerationFailed';
 
 export interface UiInspectResult {
+  auditNotice?: { directory: string; totalBytes: number; warningBytes: number; stopBytes: number;
+    blocked: boolean; message?: string };
+  windows?: Array<UiCandidateWindow & { pid: number; processName?: string; processNameStatus: 'available' | 'unavailable' }>;
+  capturedAt?: string;
+  enumerationComplete?: boolean;
   schemaVersion: string;
   protocolVersion: string;
   requestId: string;
@@ -59,6 +69,7 @@ export interface UiInspectResult {
   hwnd?: string;
   captureOrigin?: UiRect;
   captureMethod?: string;
+  backgroundOnly?: boolean;
   imageWidth?: number;
   imageHeight?: number;
   imageScale?: number;
@@ -74,6 +85,18 @@ export interface UiInspectResult {
   candidateWindows?: UiCandidateWindow[];
   errorCode?: string;
   errorMessage?: string;
+}
+
+export type UiListWindowsRequest = Pick<UiInspectRequest, 'pid' | 'processName' | 'titleContains' | 'maxWindows'>;
+
+/** Reject unbounded/ambiguous filters before launching the helper. Strings are literal filters. */
+export function validateWindowQuery(value: UiListWindowsRequest): void {
+  if ((value.pid !== undefined && (!Number.isSafeInteger(value.pid) || value.pid < 1 || value.pid > 2147483647)) ||
+      (value.maxWindows !== undefined && (!Number.isInteger(value.maxWindows) || value.maxWindows < 1 || value.maxWindows > 100)) ||
+      [value.processName, value.titleContains].some(s => s !== undefined &&
+        (typeof s !== 'string' || !s.trim() || s.length > 128 || /[\x00-\x1f]/.test(s)))) {
+    throw new Error('Invalid window filters: positive PID, maxWindows 1–100, nonempty single-line strings up to 128 characters required.');
+  }
 }
 
 export const UiErrorCodes = {

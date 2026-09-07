@@ -2,6 +2,8 @@
 
 ## 0.8.0 (unreleased, stage 1)
 
+- Add mandatory metadata-only UI audit, 1 MiB warning/2 MiB admission limit, bounded reminder cooldown and explicit desktop reminder/checker.
+
 - Add opt-in backgroundOnly inspection/review requiring PID+HWND, disabling screen capture fallback and reporting normal capture failure without discarding the tree.
 - Add no-activate background fixture and opt-in live foreground sampling acceptance script.
 

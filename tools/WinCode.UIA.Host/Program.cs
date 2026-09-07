@@ -15,6 +15,12 @@ namespace WinCode.UIA.Host;
 
 public static class Program
 {
+    private static UiAudit? currentAudit;
+    private static bool indicatorDisplayed;
+    private static bool desktopNotice;
+    private static string? desktopMessage;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBox(IntPtr owner, string text, string title, uint flags);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -81,6 +87,15 @@ public static class Program
         InspectRequest? request = null;
         try
         {
+            desktopNotice = args.Contains("--desktop-notice");
+            if (args.Contains("--audit-check"))
+            {
+                // Directory override is read-only and only available to the explicit checker.
+                int directoryIndex = Array.IndexOf(args, "--audit-directory");
+                var directory = directoryIndex >= 0 && directoryIndex + 1 < args.Length ? args[directoryIndex + 1] : null;
+                WriteSuccessResponse(null, new InspectResponse { Success = true, Action = "auditCheck", AuditNotice = UiAudit.Check(directory) });
+                return;
+            }
             var input = Console.In.ReadToEnd();
             if (string.IsNullOrWhiteSpace(input))
             {
@@ -110,6 +125,9 @@ public static class Program
 
             if (request.Action == "listWindows")
             {
+                currentAudit = UiAudit.Start(request.Pid, request.Hwnd, "none", "listWindows");
+                using var notice = RecordingIndicator.Show();
+                indicatorDisplayed = true;
                 WriteSuccessResponse(request.RequestId, ListWindows(request));
                 return;
             }
@@ -126,10 +144,18 @@ public static class Program
             }
 
             var timeoutMs = request.TimeoutMs is > 0 ? request.TimeoutMs.Value : 10000;
+            currentAudit = UiAudit.Start(request.Pid, request.Hwnd, request.Capture, "inspect");
             using var cts = new CancellationTokenSource(timeoutMs);
+            using var recordingNotice = RecordingIndicator.Show();
+            indicatorDisplayed = true;
 
             var result = ExecuteInspect(request, cts.Token);
             WriteSuccessResponse(request.RequestId, result);
+        }
+        catch (AuditException error)
+        {
+            WriteSuccessResponse(request?.RequestId, new InspectResponse { Success = false,
+                ErrorCode = error.Code, ErrorMessage = error.Message, AuditNotice = error.Notice });
         }
         catch (OperationCanceledException)
         {
@@ -139,6 +165,13 @@ public static class Program
         {
             Console.Error.WriteLine($"[WinCode.UIA.Host] Unhandled exception: {ex}");
             WriteErrorResponse(request?.RequestId, "HOST_ERROR", ex.Message);
+        }
+        finally
+        {
+            currentAudit?.Dispose();
+            // All recording indicators have left their scopes before a desktop cleanup prompt.
+            if (desktopNotice && desktopMessage != null)
+                MessageBox(IntPtr.Zero, desktopMessage, "WinCode 日志清理提醒", 0x40);
         }
     }
 
@@ -153,6 +186,9 @@ public static class Program
         var windows = new List<CandidateWindowDto>();
         var watch = Stopwatch.StartNew();
         string? stopReason = null;
+        // Reuse bounded native string buffers across candidates instead of allocating per window.
+        var title = new StringBuilder(32769);
+        var className = new StringBuilder(257);
         // No UIA COM objects or activation. Native enumeration is bounded independently of output.
         // Do not throw across a native callback; the parent additionally enforces the 3s deadline.
         bool completed = EnumWindows((handle, _) =>
@@ -160,9 +196,9 @@ public static class Program
             if (watch.ElapsedMilliseconds >= 2000) { stopReason = "timeout"; return false; }
             if (!IsWindowVisible(handle)) return true;
             GetWindowThreadProcessId(handle, out var pid);
-            if (pid == 0 || (request.Pid > 0 && pid != request.Pid)) return true;
+            if (pid == 0 || pid == Environment.ProcessId || (request.Pid > 0 && pid != request.Pid)) return true;
             if (!GetWindowRect(handle, out var rect)) return true;
-            var title = new StringBuilder(32769);
+            title.Clear();
             GetWindowText(handle, title, title.Capacity);
             if (request.TitleContains != null && !title.ToString().Contains(request.TitleContains, StringComparison.OrdinalIgnoreCase)) return true;
             string? processName = null;
@@ -171,7 +207,7 @@ public static class Program
             if (request.ProcessName != null && !string.Equals(processName, request.ProcessName, StringComparison.OrdinalIgnoreCase)) return true;
             // Discover one extra match before marking the output cap, rather than claiming a total.
             if (windows.Count == limit) { stopReason = "maxWindows"; return false; }
-            var className = new StringBuilder(257);
+            className.Clear();
             GetClassName(handle, className, className.Capacity);
             GetWindowThreadProcessId(handle, out var finalPid);
             if (finalPid != pid || !IsWindowVisible(handle)) return true;
@@ -292,9 +328,10 @@ public static class Program
                 }
                 else if (captureMode == "annotated")
                 {
-                    using var annotatedBitmap = (Bitmap)rawBitmap.Clone();
-                    DrawAnnotations(annotatedBitmap, context.CollectedNodes, captureOrigin);
-                    var (b64, w, h, scale, omitted, reason) = ProcessImageWithBudget(annotatedBitmap);
+                    // A request returns either original or annotated, never both. Annotate in
+                    // place instead of retaining a second full-resolution bitmap (4 bytes/pixel).
+                    DrawAnnotations(rawBitmap, context.CollectedNodes, captureOrigin);
+                    var (b64, w, h, scale, omitted, reason) = ProcessImageWithBudget(rawBitmap);
                     annotatedBase64 = b64;
                     imageWidth = w;
                     imageHeight = h;
@@ -306,9 +343,9 @@ public static class Program
             else
             {
                 imageOmitted = true;
-                imageOmittedReason = request.BackgroundOnly
+                imageOmittedReason = capture.Reason ?? (request.BackgroundOnly
                     ? "Window capture failed; screen fallback disabled by backgroundOnly."
-                    : "Window capture failed.";
+                    : "Window capture failed.");
             }
         }
 
@@ -501,13 +538,19 @@ public static class Program
     private const uint PW_RENDERFULLCONTENT = 2;
     private const int SRCCOPY = 0x00CC0020;
 
-    private static (Bitmap? Bitmap, string? Method) CaptureWindowArea(IntPtr hwnd, RECT rect, bool backgroundOnly)
+    private const long MaxCapturePixels = 16 * 1024 * 1024; // 64 MiB raw 32bpp bitmap, not total process RSS.
+    private static (Bitmap? Bitmap, string? Method, string? Reason) CaptureWindowArea(IntPtr hwnd, RECT rect, bool backgroundOnly)
     {
-        if (rect.Width <= 0 || rect.Height <= 0) return (null, null);
+        if (rect.Width <= 0 || rect.Height <= 0) return (null, null, "Invalid capture dimensions.");
+        // PNG size is known only after allocation/encoding. Bound raw pixels first and keep
+        // the already collected UI tree when a huge window cannot be captured within budget.
+        if (rect.Width > 16384 || rect.Height > 16384 || (long)rect.Width * rect.Height > MaxCapturePixels)
+            return (null, null, "Raw screenshot exceeds 16777216 pixels or 16384px dimension limit.");
 
-        var bmp = new Bitmap(rect.Width, rect.Height, PixelFormat.Format32bppRgb);
+        Bitmap? bmp = null;
         try
         {
+            bmp = new Bitmap(rect.Width, rect.Height, PixelFormat.Format32bppRgb);
             using (var g = Graphics.FromImage(bmp))
             {
                 g.Clear(Color.Black);
@@ -521,12 +564,12 @@ public static class Program
                     {
                         if (PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT))
                         {
-                            return (bmp, "printWindowDwm");
+                            return (bmp, "printWindowDwm", null);
                         }
 
                         if (PrintWindow(hwnd, hdc, 0))
                         {
-                            return (bmp, "printWindow");
+                            return (bmp, "printWindow", null);
                         }
                     }
                     finally
@@ -537,7 +580,7 @@ public static class Program
 
                 // A covered screen region belongs to the foreground application (e.g. a game).
                 // Fail closed before any screen DC is read; never label those pixels as the target.
-                if (backgroundOnly) { bmp.Dispose(); return (null, null); }
+                if (backgroundOnly) { g.Dispose(); bmp.Dispose(); return (null, null, null); }
 
                 // Priority 2: BitBlt from screen DC
                 var hdcDest = g.GetHdc();
@@ -548,7 +591,7 @@ public static class Program
                     {
                         if (BitBlt(hdcDest, 0, 0, rect.Width, rect.Height, hdcSrc, rect.Left, rect.Top, SRCCOPY))
                         {
-                            return (bmp, "bitBltScreen");
+                            return (bmp, "bitBltScreen", null);
                         }
                     }
                 }
@@ -562,7 +605,7 @@ public static class Program
                 try
                 {
                     g.CopyFromScreen(rect.Left, rect.Top, 0, 0, new Size(rect.Width, rect.Height), CopyPixelOperation.SourceCopy);
-                    return (bmp, "copyFromScreen");
+                    return (bmp, "copyFromScreen", null);
                 }
                 catch
                 {
@@ -571,12 +614,12 @@ public static class Program
             }
 
             bmp.Dispose();
-            return (null, null);
+            return (null, null, null);
         }
         catch
         {
-            bmp.Dispose();
-            return (null, null);
+            bmp?.Dispose();
+            return (null, null, null);
         }
     }
 
@@ -651,11 +694,11 @@ public static class Program
                 scaledBmp.Save(memoryStream, ImageFormat.Png);
             }
 
-            var bytes = memoryStream.ToArray();
-            if (bytes.Length <= MaxImageBytes)
+            // Check length before copying; GetBuffer avoids an extra PNG-sized byte array.
+            if (memoryStream.Length <= MaxImageBytes)
             {
                 return (
-                    Convert.ToBase64String(bytes),
+                    Convert.ToBase64String(memoryStream.GetBuffer(), 0, (int)memoryStream.Length),
                     targetW,
                     targetH,
                     factor,
@@ -842,9 +885,20 @@ public static class Program
 
     private static void WriteSuccessResponse(string? requestId, InspectResponse response)
     {
+        if (currentAudit != null)
+        {
+            var audit = currentAudit;
+            currentAudit = null;
+            try { response.AuditNotice = audit.Finish(response.Success, response.ErrorCode, indicatorDisplayed); }
+            catch (AuditException error) { response.Success = false; response.ErrorCode = error.Code;
+                response.ErrorMessage = error.Message; response.AuditNotice = error.Notice; }
+        }
         var json = JsonSerializer.Serialize(response, JsonOptions);
         Console.WriteLine(json);
         Console.Out.Flush();
+        // MCP never sets this command-line flag. A desktop wrapper opts in explicitly;
+        // cooldown lives in the audit state, and the dialog contains no collected UI content.
+        if (desktopNotice && response.AuditNotice?.Message is string message) desktopMessage = message;
     }
 
     private static void WriteErrorResponse(string? requestId, string errorCode, string errorMessage)
@@ -857,9 +911,7 @@ public static class Program
             ErrorCode = errorCode,
             ErrorMessage = errorMessage
         };
-        var json = JsonSerializer.Serialize(response, JsonOptions);
-        Console.WriteLine(json);
-        Console.Out.Flush();
+        WriteSuccessResponse(requestId, response);
     }
 
     private class TraversalContext
@@ -896,6 +948,7 @@ public class InspectRequest
 
 public class InspectResponse
 {
+    public AuditNotice? AuditNotice { get; set; }
     public bool? BackgroundOnly { get; set; }
     public List<CandidateWindowDto>? Windows { get; set; }
     public string? CapturedAt { get; set; }

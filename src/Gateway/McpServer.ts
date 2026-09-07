@@ -350,7 +350,7 @@ export class WinCodeMcpServer {
             const text = JSON.stringify(result);
             if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES)
               return { content: [{ type: 'text', text: JSON.stringify({ success: false,
-                errorCode: 'PAYLOAD_TOO_LARGE', errorMessage: 'Window list exceeds text budget.' }) }], isError: true };
+                errorCode: 'PAYLOAD_TOO_LARGE', errorMessage: 'Window list exceeds text budget.', auditNotice: result.auditNotice }) }], isError: true };
             return { content: [{ type: 'text', text }], isError: !result.success };
           }
 
@@ -591,6 +591,7 @@ export class WinCodeMcpServer {
                 content: [{ type: 'text' as const, text: JSON.stringify({
                   success: false, errorCode: 'PAYLOAD_TOO_LARGE',
                   errorMessage: 'UI text response exceeds 128 KiB.',
+                  auditNotice: result.auditNotice,
                   imageOmitted: true, hasScreenshot: false,
                 }) }],
                 isError: true,

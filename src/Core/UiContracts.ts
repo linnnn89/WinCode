@@ -54,6 +54,8 @@ export interface UiInspectRequest {
 export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout' | 'budgetLimit' | 'maxWindows' | 'enumerationFailed';
 
 export interface UiInspectResult {
+  auditNotice?: { directory: string; totalBytes: number; warningBytes: number; stopBytes: number;
+    blocked: boolean; message?: string };
   windows?: Array<UiCandidateWindow & { pid: number; processName?: string; processNameStatus: 'available' | 'unavailable' }>;
   capturedAt?: string;
   enumerationComplete?: boolean;

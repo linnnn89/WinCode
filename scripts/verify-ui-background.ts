@@ -11,6 +11,8 @@ const output = path.resolve('test-tmp', 'background-' + Date.now());
 await fs.mkdir(output, { recursive: true });
 const samples: Array<{ at: string; pid: number; hwnd: string; processName: string }> = [];
 const rounds: unknown[] = [];
+const roundCount = Number(process.argv.find(arg => arg.startsWith('--rounds='))?.split('=')[1] ?? 5);
+assert.ok(Number.isInteger(roundCount) && roundCount >= 1 && roundCount <= 20);
 const fixture = spawn(path.resolve('tests/fixtures/wpf-ui-review/bin/Release/net10.0-windows/win-x64/publish/wpf-ui-review.exe'),
   ['--background-fixture', '--auto-close=30000'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 const client = new Client({ name: 'background-acceptance', version: '1' });
@@ -44,9 +46,10 @@ try {
     assert.ok(samples.length >= 10 && samples.slice(-10).every(s => s.processName === expectedForeground), 'Expected foreground did not stabilize');
     measurementStart = samples.length - 1;
   }
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < roundCount; i++) {
+    const capture = process.argv.includes('--alternate-capture') && i % 2 ? 'annotated' : 'original';
     const response = await client.callTool({ name: 'wincode_ui_inspect', arguments: {
-      ...target, backgroundOnly: true, capture: 'original', maxNodes: 100,
+      ...target, backgroundOnly: true, capture, maxNodes: 100,
     } });
     const blocks = response.content as Array<{ type: string; text?: string; data?: string }>;
     const result = JSON.parse(blocks[0].text!);
@@ -61,7 +64,12 @@ try {
       await fs.writeFile(path.join(output, `snapshot-${i}.png`), Buffer.from(image.data!, 'base64'));
     } else { assert.equal(result.imageOmitted, true); }
     process.kill(target.pid, 0);
-    rounds.push({ index: i, totalNodes: result.totalNodes, captureMethod: result.captureMethod,
+    const healthResponse = await client.callTool({ name: 'wincode_hello_world', arguments: {} });
+    const health = JSON.parse((healthResponse.content as Array<{text:string}>)[0].text).health;
+    assert.equal(health.flaui.runtime.activePid, null);
+    assert.equal(health.flaui.runtime.isRunning, false);
+    rounds.push({ index: i, capture, totalNodes: result.totalNodes, captureMethod: result.captureMethod,
+      nodeMemory: health.nodeMemory, cache: health.cache, managedChildProcesses: health.managedChildProcesses,
       imageReturned: Boolean(image), imageOmittedReason: result.imageOmittedReason });
     await new Promise(resolve => setTimeout(resolve, 500));
   }

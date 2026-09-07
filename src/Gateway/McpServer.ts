@@ -124,6 +124,11 @@ export class WinCodeMcpServer {
                           source: health.repomix.source,
                           details: health.repomix.details,
                         },
+                        flaui: {
+                          available: health.flaui.available,
+                          source: health.flaui.source,
+                          details: health.flaui.details,
+                        },
                       },
                       capabilities: [
                         'wincode_hello_world',
@@ -135,6 +140,7 @@ export class WinCodeMcpServer {
                         'wincode_diagnose_project',
                         'wincode_plan_refactoring',
                         'wincode_safe_move_to_trash',
+                        'wincode_ui_inspect',
                       ],
                     },
                     null,
@@ -297,6 +303,209 @@ export class WinCodeMcpServer {
                   text: JSON.stringify(result, null, 2),
                 },
               ],
+              isError: !result.success,
+            };
+          }
+
+          case 'wincode_ui_inspect': {
+            let pid: number | undefined;
+            if (args.pid !== undefined && args.pid !== null) {
+              const parsed = Number(args.pid);
+              if (!Number.isInteger(parsed) || parsed <= 0) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify(
+                        {
+                          schemaVersion: '1.0',
+                          protocolVersion: '1.0',
+                          success: false,
+                          errorCode: 'INVALID_ARGUMENT',
+                          errorMessage: `Invalid "pid": must be a positive integer, received ${args.pid}`,
+                        },
+                        null,
+                        2
+                      ),
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+              pid = parsed;
+            }
+
+            let hwnd: string | undefined;
+            if (args.hwnd !== undefined && args.hwnd !== null) {
+              const str = String(args.hwnd).trim();
+              if (!str) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify(
+                        {
+                          schemaVersion: '1.0',
+                          protocolVersion: '1.0',
+                          success: false,
+                          errorCode: 'INVALID_ARGUMENT',
+                          errorMessage: 'Invalid "hwnd": must be a non-empty string.',
+                        },
+                        null,
+                        2
+                      ),
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+              hwnd = str;
+            }
+
+            if (!pid && !hwnd) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify(
+                      {
+                        schemaVersion: '1.0',
+                        protocolVersion: '1.0',
+                        success: false,
+                        errorCode: 'INVALID_ARGUMENT',
+                        errorMessage: 'Either "pid" or "hwnd" must be provided for UI inspection.',
+                      },
+                      null,
+                      2
+                    ),
+                  },
+                ],
+                isError: true,
+              };
+            }
+
+            let capture: 'none' | 'original' | 'annotated' | undefined;
+            if (args.capture !== undefined && args.capture !== null) {
+              const captureStr = String(args.capture);
+              if (!['none', 'original', 'annotated'].includes(captureStr)) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify(
+                        {
+                          schemaVersion: '1.0',
+                          protocolVersion: '1.0',
+                          success: false,
+                          errorCode: 'INVALID_ARGUMENT',
+                          errorMessage: `Invalid "capture": must be one of "none", "original", "annotated", received "${args.capture}".`,
+                        },
+                        null,
+                        2
+                      ),
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+              capture = captureStr as 'none' | 'original' | 'annotated';
+            }
+
+            let maxDepth: number | undefined;
+            if (args.maxDepth !== undefined && args.maxDepth !== null) {
+              const parsed = Number(args.maxDepth);
+              if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify(
+                        {
+                          schemaVersion: '1.0',
+                          protocolVersion: '1.0',
+                          success: false,
+                          errorCode: 'INVALID_ARGUMENT',
+                          errorMessage: `Invalid "maxDepth": must be an integer between 1 and 50, received ${args.maxDepth}.`,
+                        },
+                        null,
+                        2
+                      ),
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+              maxDepth = parsed;
+            }
+
+            let maxNodes: number | undefined;
+            if (args.maxNodes !== undefined && args.maxNodes !== null) {
+              const parsed = Number(args.maxNodes);
+              if (!Number.isInteger(parsed) || parsed < 1 || parsed > 5000) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify(
+                        {
+                          schemaVersion: '1.0',
+                          protocolVersion: '1.0',
+                          success: false,
+                          errorCode: 'INVALID_ARGUMENT',
+                          errorMessage: `Invalid "maxNodes": must be an integer between 1 and 5000, received ${args.maxNodes}.`,
+                        },
+                        null,
+                        2
+                      ),
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+              maxNodes = parsed;
+            }
+
+            const result = await this.router.inspectUi({
+              pid,
+              hwnd,
+              capture,
+              maxDepth,
+              maxNodes,
+            });
+
+            // Extract image data for MCP image block; omit base64 payload from text JSON
+            const imageBase64 = result.annotatedPngBase64 || result.screenshotPngBase64;
+            const {
+              annotatedPngBase64: _omittedAnnotated,
+              screenshotPngBase64: _omittedScreenshot,
+              ...cleanResult
+            } = result;
+
+            const textPayload = {
+              ...cleanResult,
+              hasScreenshot: Boolean(imageBase64),
+            };
+
+            const content: Array<
+              | { type: 'text'; text: string }
+              | { type: 'image'; data: string; mimeType: string }
+            > = [
+              {
+                type: 'text',
+                text: JSON.stringify(textPayload, null, 2),
+              },
+            ];
+
+            if (imageBase64) {
+              content.push({
+                type: 'image',
+                data: imageBase64,
+                mimeType: 'image/png',
+              });
+            }
+
+            return {
+              content,
               isError: !result.success,
             };
           }

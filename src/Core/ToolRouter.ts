@@ -5,6 +5,8 @@ import { WorkspaceManager } from './Workspace.js';
 import { ContextManager } from './Context.js';
 import { RepomixAdapter } from '../Adapters/RepomixAdapter.js';
 import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
+import { FlaUiAdapter } from '../Adapters/FlaUiAdapter.js';
+import { UiInspectRequest, UiInspectResult } from './UiContracts.js';
 import { ArchitectureAnalyzer } from '../CompositeTools/ArchitectureAnalyzer.js';
 import { ImpactAnalyzer } from '../CompositeTools/ImpactAnalyzer.js';
 import { RefactorAssistant } from '../CompositeTools/RefactorAssistant.js';
@@ -36,6 +38,12 @@ export interface RuntimeHealth {
     details?: string;
     lastError?: AdapterLastError;
   };
+  flaui: {
+    available: boolean;
+    source: string;
+    details?: string;
+    lastError?: AdapterLastError;
+  };
   cache: CacheStats;
   managedChildProcesses: number;
   nodeMemory: NodeJS.MemoryUsage;
@@ -52,6 +60,7 @@ export class ToolRouter {
   context: ContextManager;
   repomix: RepomixAdapter;
   serena: SerenaAdapter;
+  flaui: FlaUiAdapter;
   architecture: ArchitectureAnalyzer;
   impact: ImpactAnalyzer;
   refactor: RefactorAssistant;
@@ -82,6 +91,7 @@ export class ToolRouter {
     this.workspace = new WorkspaceManager(config);
     this.repomix = new RepomixAdapter(config, this.cache, this.resources);
     this.serena = new SerenaAdapter(config, this.cache, this.resources);
+    this.flaui = new FlaUiAdapter(config, this.resources);
     this.context = new ContextManager(config, this.workspace, this.repomix, this.serena);
     this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
     this.impact = new ImpactAnalyzer(this.serena, this.config);
@@ -126,6 +136,7 @@ export class ToolRouter {
     await this.cache.initialize();
     await this.repomix.initialize();
     await this.serena.initialize();
+    await this.flaui.initialize();
     await this.extensions.initializeAll();
     const fp = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
     this.session.setFingerprint(fp);
@@ -242,9 +253,14 @@ export class ToolRouter {
   async getRuntimeHealth(): Promise<RuntimeHealth> {
     const serenaHealth = await this.serena.checkHealth();
     const repomixHealth = await this.repomix.checkHealth();
+    const flauiHealth = await this.flaui.checkHealth();
     const cache = await this.cache.getStats();
     const up = serenaHealth.upstream;
-    const lastAdapterError = this.pickLastError(serenaHealth.lastError, 'serena', repomixHealth.lastError, 'repomix');
+    const lastAdapterError = this.pickLastError(
+      { error: serenaHealth.lastError, provider: 'serena' },
+      { error: repomixHealth.lastError, provider: 'repomix' },
+      { error: flauiHealth.lastError, provider: 'flaui' }
+    );
 
     return {
       version: WINCODE_VERSION,
@@ -267,6 +283,12 @@ export class ToolRouter {
         details: repomixHealth.details,
         lastError: repomixHealth.lastError,
       },
+      flaui: {
+        available: flauiHealth.available,
+        source: flauiHealth.source,
+        details: flauiHealth.details,
+        lastError: flauiHealth.lastError,
+      },
       cache,
       managedChildProcesses: this.resources.childProcessCount(),
       nodeMemory: process.memoryUsage(),
@@ -276,17 +298,21 @@ export class ToolRouter {
   }
 
   private pickLastError(
-    a: AdapterLastError | undefined,
-    aProvider: string,
-    b: AdapterLastError | undefined,
-    bProvider: string
+    ...entries: Array<{ error: AdapterLastError | undefined; provider: string }>
   ): (AdapterLastError & { provider: string }) | null {
     const items: Array<AdapterLastError & { provider: string }> = [];
-    if (a) items.push({ ...a, provider: aProvider });
-    if (b) items.push({ ...b, provider: bProvider });
+    for (const entry of entries) {
+      if (entry.error) {
+        items.push({ ...entry.error, provider: entry.provider });
+      }
+    }
     if (items.length === 0) return null;
     items.sort((x, y) => (x.at < y.at ? 1 : -1));
     return items[0];
+  }
+
+  async inspectUi(request: UiInspectRequest): Promise<UiInspectResult> {
+    return this.flaui.inspect(request);
   }
 
   async dispose(): Promise<void> {
@@ -312,6 +338,7 @@ export class ToolRouter {
       }
       await this.repomix.dispose();
       await this.serena.dispose();
+      await this.flaui.dispose();
       await this.extensions.disposeAll();
       this.session.close();
       await this.resources.dispose();

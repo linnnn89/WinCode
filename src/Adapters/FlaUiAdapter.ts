@@ -2,12 +2,14 @@ import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { IAdapter, AdapterHealth, AdapterLastError } from './IAdapter.js';
 import { WinCodeConfig } from '../Core/Config.js';
 import {
   ResourceManager,
   Mutex,
   TimeoutError,
+  AbortError,
   killProcessTree,
 } from '../Core/ResourceManager.js';
 import {
@@ -25,6 +27,7 @@ export class FlaUiAdapter implements IAdapter {
   private config: WinCodeConfig;
   private resources?: ResourceManager;
   private activeProcess: ChildProcess | null = null;
+  private cleanupActive: (() => Promise<boolean>) | null = null;
   private mutex = new Mutex();
   private shuttingDown = false;
   private healthCache: { at: number; value: AdapterHealth } | null = null;
@@ -52,11 +55,15 @@ export class FlaUiAdapter implements IAdapter {
       if (fs.existsSync(customPath)) {
         return { command: customPath, args: [] };
       }
+      throw new Error(`Configured customHostPath "${customPath}" was not found.`);
     }
 
+    const currentDir = path.dirname(fileURLToPath(import.meta.url));
+    const installRoot = path.resolve(currentDir, '../..');
+
     const candidateExes = [
-      path.resolve(this.config.workspaceRoot, 'tools/WinCode.UIA.Host/bin/Release/net10.0-windows/win-x64/publish/WinCode.UIA.Host.exe'),
-      path.resolve(this.config.workspaceRoot, 'tools/WinCode.UIA.Host/bin/Debug/net10.0-windows/win-x64/WinCode.UIA.Host.exe'),
+      path.resolve(installRoot, 'tools/WinCode.UIA.Host/bin/Release/net10.0-windows/win-x64/publish/WinCode.UIA.Host.exe'),
+      path.resolve(installRoot, 'tools/WinCode.UIA.Host/bin/Debug/net10.0-windows/win-x64/WinCode.UIA.Host.exe'),
     ];
 
     for (const cand of candidateExes) {
@@ -66,7 +73,7 @@ export class FlaUiAdapter implements IAdapter {
     }
 
     // Fallback: dotnet run against project file if dotnet is available
-    const projPath = path.resolve(this.config.workspaceRoot, 'tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj');
+    const projPath = path.resolve(installRoot, 'tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj');
     if (fs.existsSync(projPath)) {
       return { command: 'dotnet', args: ['run', '--project', projPath, '--no-build', '--'] };
     }
@@ -105,7 +112,26 @@ export class FlaUiAdapter implements IAdapter {
       return val;
     }
 
-    const host = this.resolveHostCommand();
+    let host: { command: string; args: string[] } | null = null;
+    try {
+      host = this.resolveHostCommand();
+    } catch (cfgErr) {
+      const msg = cfgErr instanceof Error ? cfgErr.message : String(cfgErr);
+      const val: AdapterHealth = {
+        available: false,
+        source: 'unavailable',
+        details: msg,
+        lastError: {
+          at: new Date().toISOString(),
+          reason: 'error',
+          message: msg,
+          recoverable: false,
+        },
+      };
+      this.healthCache = { at: Date.now(), value: val };
+      return val;
+    }
+
     if (!host) {
       const val: AdapterHealth = {
         available: false,
@@ -123,44 +149,58 @@ export class FlaUiAdapter implements IAdapter {
     }
 
     const probeTimeout = timeoutMs ?? this.config.timeouts?.healthProbeMs ?? 3_000;
+    const probeAbortController = new AbortController();
+    const probeTimer = setTimeout(() => probeAbortController.abort(), probeTimeout);
+    probeTimer.unref?.();
+
     try {
-      const res = await this.executeHost(
-        {
-          schemaVersion: '1.0',
-          requestId: 'health-probe',
-          action: 'health',
-          pid: 0,
-        },
-        probeTimeout
-      );
+      return await this.mutex.runExclusive(async () => {
+        const res = await this.executeHost(
+          {
+            schemaVersion: '1.0',
+            requestId: 'health-probe',
+            action: 'health',
+            pid: 0,
+          },
+          probeTimeout,
+          probeAbortController.signal
+        );
 
-      if (res.success && res.status === 'healthy') {
-        const val: AdapterHealth = {
-          available: true,
-          source: 'installed',
-          version: '1.0.0',
-          details: 'WinCode.UIA.Host is available and responsive.',
-        };
-        this.healthCache = { at: Date.now(), value: val };
-        return val;
-      }
+        if (res.success && res.status === 'healthy') {
+          const val: AdapterHealth = {
+            available: true,
+            source: 'installed',
+            version: '1.0.0',
+            details: 'WinCode.UIA.Host is available and responsive.',
+          };
+          this.healthCache = { at: Date.now(), value: val };
+          return val;
+        }
 
-      throw new Error(res.errorMessage || 'Host probe failed');
+        throw new Error(res.errorMessage || 'Host probe failed');
+      }, probeAbortController.signal);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const isAbort = err instanceof AbortError || probeAbortController.signal.aborted;
+      const msg = isAbort
+        ? `Health probe timed out after ${probeTimeout}ms.`
+        : err instanceof Error
+        ? err.message
+        : String(err);
       const val: AdapterHealth = {
         available: false,
         source: 'unavailable',
         details: `Host probe failed: ${msg}`,
         lastError: {
           at: new Date().toISOString(),
-          reason: err instanceof TimeoutError ? 'timeout' : 'error',
+          reason: isAbort ? 'timeout' : 'error',
           message: msg,
           recoverable: true,
         },
       };
       this.healthCache = { at: Date.now(), value: val };
       return val;
+    } finally {
+      clearTimeout(probeTimer);
     }
   }
 
@@ -207,37 +247,79 @@ export class FlaUiAdapter implements IAdapter {
       };
     }
 
+    if (this.config.adapters.flaui?.enabled === false) {
+      return {
+        schemaVersion: '1.0',
+        protocolVersion: '1.0',
+        requestId,
+        success: false,
+        errorCode: UiErrorCodes.HOST_UNAVAILABLE,
+        errorMessage: 'FlaUI adapter is disabled in configuration.',
+      };
+    }
+
     const effectiveTimeout =
       normRequest.timeoutMs ??
       this.config.adapters.flaui?.timeoutMs ??
       this.config.timeouts?.flauiInspectMs ??
       UI_INSPECT_DEFAULTS.TIMEOUT_MS;
 
-    return this.mutex.runExclusive(async () => {
-      if (this.shuttingDown) {
+    const deadline = Date.now() + effectiveTimeout;
+    const deadlineController = new AbortController();
+    const deadlineTimer = setTimeout(() => deadlineController.abort(), effectiveTimeout);
+    const executionSignal = signal
+      ? AbortSignal.any([signal, deadlineController.signal])
+      : deadlineController.signal;
+
+    try {
+      return await this.mutex.runExclusive(async () => {
+        if (this.shuttingDown) {
+          return {
+            schemaVersion: '1.0',
+            protocolVersion: '1.0',
+            requestId,
+            success: false,
+            errorCode: UiErrorCodes.SHUTDOWN,
+            errorMessage: 'WinCode is shutting down; UI inspection rejected.',
+          };
+        }
+
+        if (signal?.aborted) {
+          return {
+            schemaVersion: '1.0',
+            protocolVersion: '1.0',
+            requestId,
+            success: false,
+            errorCode: UiErrorCodes.CANCELLED,
+            errorMessage: 'Inspection was cancelled before execution started.',
+          };
+        }
+
+        const result = await this.executeHost(normRequest, Math.max(1, deadline - Date.now()), executionSignal);
+        if (deadlineController.signal.aborted && !signal?.aborted && result.errorCode === UiErrorCodes.CANCELLED) {
+          return { ...result, errorCode: UiErrorCodes.TIMEOUT, errorMessage: 'UI inspection deadline exceeded.' };
+        }
+        return result;
+      }, executionSignal);
+    } catch (err) {
+      if (err instanceof AbortError) {
         return {
           schemaVersion: '1.0',
           protocolVersion: '1.0',
           requestId,
           success: false,
-          errorCode: UiErrorCodes.SHUTDOWN,
-          errorMessage: 'WinCode is shutting down; UI inspection rejected.',
+          errorCode: signal?.aborted ? UiErrorCodes.CANCELLED : UiErrorCodes.TIMEOUT,
+          errorMessage: signal?.aborted ? 'UI inspection was cancelled.' : 'UI inspection deadline exceeded while queued.',
         };
       }
-
-      if (signal?.aborted) {
-        return {
-          schemaVersion: '1.0',
-          protocolVersion: '1.0',
-          requestId,
-          success: false,
-          errorCode: UiErrorCodes.CANCELLED,
-          errorMessage: 'Inspection was cancelled before execution started.',
-        };
-      }
-
-      return this.executeHost(normRequest, effectiveTimeout, signal);
-    });
+      return {
+        schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
+        errorCode: UiErrorCodes.HOST_ERROR,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      clearTimeout(deadlineTimer);
+    }
   }
 
   private async executeHost(
@@ -245,7 +327,27 @@ export class FlaUiAdapter implements IAdapter {
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<UiInspectResult> {
-    const host = this.resolveHostCommand();
+    if (this.shuttingDown || this.activeProcess) {
+      return {
+        schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
+        success: false, errorCode: this.shuttingDown ? UiErrorCodes.SHUTDOWN : UiErrorCodes.BUSY,
+        errorMessage: 'Helper unavailable: shutting down or previous helper exit is not confirmed.',
+      };
+    }
+    let host: { command: string; args: string[] } | null = null;
+    try {
+      host = this.resolveHostCommand();
+    } catch (cfgErr) {
+      return {
+        schemaVersion: '1.0',
+        protocolVersion: '1.0',
+        requestId: request.requestId,
+        success: false,
+        errorCode: UiErrorCodes.HOST_UNAVAILABLE,
+        errorMessage: cfgErr instanceof Error ? cfgErr.message : String(cfgErr),
+      };
+    }
+
     if (!host) {
       return {
         schemaVersion: '1.0',
@@ -274,40 +376,76 @@ export class FlaUiAdapter implements IAdapter {
     let childProc: ChildProcess | null = null;
     let timer: NodeJS.Timeout | null = null;
     let resourceId: string | null = null;
-
-    const killHelperOnly = async () => {
-      if (!childProc) return;
-      const procToKill = childProc;
-      childProc = null;
-      this.activeProcess = null;
-      try {
-        await killProcessTree(procToKill);
-      } catch {
-        // Safe catch: only helper process is targeted
+    let exited = false;
+    let exitResolve: (() => void) | null = null;
+    const exitPromise = new Promise<void>((r) => {
+      exitResolve = r;
+    });
+    const markExited = () => {
+      exited = true;
+      if (this.activeProcess === childProc) {
+        this.activeProcess = null;
+        this.cleanupActive = null;
       }
+      if (resourceId && this.resources) {
+        this.resources.unregister(resourceId);
+        resourceId = null;
+      }
+      if (exitResolve) {
+        exitResolve();
+        exitResolve = null;
+      }
+    };
+
+    let killing: Promise<boolean> | null = null;
+    const killHelperOnly = (): Promise<boolean> => {
+      if (exited || !childProc) return Promise.resolve(exited);
+      if (killing) return killing;
+      const procToKill = childProc;
+      killing = (async () => {
+        try { await killProcessTree(procToKill); } catch { /* retain ownership */ }
+        let cleanupTimer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([exitPromise, new Promise<void>(resolve => {
+            cleanupTimer = setTimeout(resolve, 1500);
+          })]);
+        } finally { if (cleanupTimer) clearTimeout(cleanupTimer); }
+        return exited;
+      })().finally(() => { killing = null; });
+      return killing;
     };
 
     const runPromise = new Promise<UiInspectResult>((resolve, reject) => {
       try {
+        const cwd = fs.existsSync(this.config.workspaceRoot)
+          ? this.config.workspaceRoot
+          : path.dirname(fileURLToPath(import.meta.url));
+
         childProc = spawn(host.command, host.args, {
           windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe'],
-          cwd: this.config.workspaceRoot,
+          cwd,
         });
 
+        childProc.on('close', markExited);
+        childProc.on('exit', markExited);
+
         this.activeProcess = childProc;
+        this.cleanupActive = killHelperOnly;
 
         if (this.resources && childProc.pid) {
           resourceId = this.resources.registerProcess('FlaUiAdapter', childProc);
         }
 
-        const maxBytes = UI_INSPECT_DEFAULTS.MAX_JSON_BYTES;
+        let totalBytes = 0;
+        const maxBytes = UI_INSPECT_DEFAULTS.MAX_HOST_TRANSPORT_BYTES;
 
         childProc.stdout?.on('data', (chunk: Buffer) => {
+          totalBytes += chunk.byteLength;
           stdoutData += chunk.toString('utf8');
-          if (stdoutData.length > maxBytes) {
+          if (totalBytes > maxBytes) {
             void killHelperOnly();
-            reject(new Error(`Host stdout exceeded budget limit of ${maxBytes} bytes.`));
+            reject(new Error(`Host stdout exceeded transport budget limit of ${maxBytes} bytes.`));
           }
         });
 
@@ -318,12 +456,12 @@ export class FlaUiAdapter implements IAdapter {
         });
 
         childProc.on('error', (err) => {
-          this.activeProcess = null;
+          if (!childProc?.pid) markExited();
           reject(err);
         });
 
         childProc.on('close', (code) => {
-          this.activeProcess = null;
+          markExited();
           if (signal?.aborted) {
             resolve({
               schemaVersion: '1.0',
@@ -377,6 +515,7 @@ export class FlaUiAdapter implements IAdapter {
         childProc.stdin?.write(payload, 'utf8');
         childProc.stdin?.end();
       } catch (spawnErr) {
+        markExited();
         reject(spawnErr);
       }
     });
@@ -390,8 +529,7 @@ export class FlaUiAdapter implements IAdapter {
     }
 
     const timeoutPromise = new Promise<UiInspectResult>((_, reject) => {
-      timer = setTimeout(async () => {
-        await killHelperOnly();
+      timer = setTimeout(() => {
         reject(new TimeoutError('FlaUiAdapter', timeoutMs));
       }, timeoutMs);
       timer.unref?.();
@@ -401,9 +539,9 @@ export class FlaUiAdapter implements IAdapter {
       return await Promise.race([runPromise, timeoutPromise]);
     } catch (err) {
       await killHelperOnly();
-      const isCancelled = signal?.aborted;
+      const isCancelled = signal?.aborted || err instanceof AbortError;
       const isTimeout = err instanceof TimeoutError;
-      const isPayloadTooLarge = String(err).includes('exceeded budget limit');
+      const isPayloadTooLarge = String(err).includes('transport budget limit');
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = {
         at: new Date().toISOString(),
@@ -428,23 +566,17 @@ export class FlaUiAdapter implements IAdapter {
     } finally {
       if (timer) clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', abortHandler);
-      if (resourceId && this.resources) {
-        this.resources.unregister(resourceId);
+      if (!exited && !(await killHelperOnly())) {
+        // Retain the PID/resource registration. New calls fail BUSY until exit.
+        throw new Error('Helper cleanup timed out; process remains tracked and new helper calls are blocked.');
       }
-      this.activeProcess = null;
     }
   }
 
   async dispose(): Promise<void> {
     this.shuttingDown = true;
-    if (this.activeProcess) {
-      const proc = this.activeProcess;
-      this.activeProcess = null;
-      try {
-        await killProcessTree(proc);
-      } catch {
-        // Safe termination
-      }
+    if (this.cleanupActive && !(await this.cleanupActive())) {
+      throw new Error('Helper cleanup timed out during shutdown; exit is not confirmed.');
     }
   }
 }

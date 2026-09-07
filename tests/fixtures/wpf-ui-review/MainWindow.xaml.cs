@@ -13,6 +13,17 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        if (Environment.GetCommandLineArgs().Contains("--budget-fixture"))
+        {
+            var panel = new StackPanel();
+            for (int i = 0; i < 350; i++)
+            {
+                var button = new Button { Content = $"Budget button {i}", Height = 24 };
+                System.Windows.Automation.AutomationProperties.SetAutomationId(button, new string('界', 300) + i);
+                panel.Children.Add(button);
+            }
+            Content = panel;
+        }
         Loaded += MainWindow_Loaded;
     }
 
@@ -83,4 +94,4 @@ public partial class MainWindow : Window
         subWin.Content = panel;
         subWin.Show();
     }
-}
+}

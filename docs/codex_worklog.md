@@ -307,3 +307,14 @@
 - 契约：tools/list 与 hello 使用同一已注册定义快照，默认只返回 schemaHash/toolCount；toolName 按需返回单个 inputSchema 和 hash，capabilities 直接源自注册工具。hello/context 未知参数明确失败，避免拼错后静默成功。原手写 JSON-RPC 脚本换成现有 SDK stdio 客户端，隔离夹具且 finally 清理。
 - 验证：typecheck/build 通过，身份/契约专项 8/8；完整非交互回归 178 项，177 pass、1 skip、0 fail。test:e2e 启动独立生产 Gateway stdio 进程：initialize、tools/list、hello 参数/hash 对照、scopeFiles+symbol 与 lineRanges 的第 50 行实际正文、未知参数拒绝及末次同实例核对均通过。报告 test-tmp/r2/，该测试关闭上游/GUI。
 - 宿主边界：实际调用当前 Codex 的 WinCode hello，仍返回 0.9.0、无新 build/schema 身份，证明重新编译不自动刷新既有连接。未重复尝试新参数；未改全局 MCP 配置或终止宿主进程。后续真实宿主 R3 验收仍需要客户端重连，不能用独立 stdio 成功替代。
+- 合并：PR #15 C#/TypeScript CodeQL 全部成功后锁定 9467ede 合并，远端确认 MERGED，main=2cbf443cc983828dd9c9cdb066f2c03f5aecaada。
+
+## 2026-09-08（北京时间）— R3 精准范围覆盖 0.9.3
+
+- 从 R2 合并基线新建 codex/r3-context-coverage。显式 lineRanges 读取使用剩余响应预算，不再固定截为 4000 字符；500 行/500KB 等既有限制保留。序列化每次裁剪后重算最终 coverage，包含请求/完整行数、实际范围、半截尾行、未返回原因和有界补取；超预算可省明细但保留总计。非范围请求 coverage=null、taskCoverage=null，不把声明附近片段当方法本体覆盖。
+- 反证：223 行足预算、512 token 半行、newline 边界、重复证据去重、多文件明细裁剪、缺失/EOF、最大预算无进展重试均覆盖；nextRequest 从半截整行补取并在需要时提高预算，达到最大值且不前进时停止建议重复请求。
+- 测试组织失败与修复：首次完整回归因 test-tmp 下两个临时 worktree 被既有符号搜索纳入，ToolRouter 出现三处定义而触发 UNKNOWN。没有削弱断言或改搜索语义；核对绝对路径后用 git worktree move 移到 I:/WinCode-worktrees，完整复测恢复正常。该问题归于本次测试环境组织。
+- 验证：typecheck/build 通过，专项及既有上下文 34/34；最终完整非交互回归 187 项，186 pass、1 skip、0 fail；独立 stdio 契约与正文探针通过。真实 TavernDesk 源码验收脚本 scripts/verify-tavern-context.ts 通过 8 场景并逐片段与实际源文本核对；当前 ShowCharactersAsync 位于 309–324 行，已知方法首调命中。1–223 行请求实际完整返回，9942 字符；该新增场景没有旧版配对测量。原 7 个场景的基线与新版请求相同，新增覆盖信息使部分响应更长，不主张普遍 token 降低。
+- 报告：test-tmp/r3/baseline-1788823132218.json、acceptance-1788823577798.json、regression-final.log、stdio.log；源码只读，哈希和实例身份记录于报告。仅知文件时仍返回文件头，不能替代已知方法时显式传 symbol；未知文件的当前例子首调找到目标，不能推论所有未知任务成功。
+- GUI 与归因：复用 I:/New-tarven/work/TAVERN-TEST/profile，经既有脚本 --no-restore 构建 0 警告/0 错误并启动本轮 PID 24964，启动回执核对专用数据/配置/日志路径。当前旧版 WinCode 按该 PID/HWND 查询 NavCharacters，完整遍历 68 节点唯一命中，名称“角色”、isEnabled=true，说明应用可访问性修复有效。后台 PrintWindow 图像几乎空白，不能用于视觉验收；computer use 本轮未调用，不能将空图归为其窗口归属问题。
+- 宿主限制：用户表示无法重连当前 Codex WinCode MCP；保留真实宿主新版验收待办，继续以新启动生产 MCP 进程完成可执行复测与已授权 PR 流程。没有终止旧 MCP 或修改全局配置，不能将本版源代码/stdio 成功写成旧连接已升级。

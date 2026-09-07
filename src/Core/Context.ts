@@ -76,6 +76,10 @@ export interface PreparedContextResult {
 export function validateContextOptions(value: unknown): asserts value is PreparedContextOptions {
   if (!value || typeof value !== 'object') throw new Error('Context options must be an object.');
   const opts = value as Record<string, unknown>;
+  if (Object.keys(opts).some(key => !['task', 'candidateFiles', 'scopeFiles', 'symbol', 'lineRanges',
+    'focusAreas', 'compress', 'outputFormat', 'responseFormat', 'includeFullText', 'maxTokens'].includes(key))) {
+    throw new Error('Unsupported context parameter. Check the connected tools/list schema.');
+  }
   if (typeof opts.task !== 'string' || !opts.task.trim() || opts.task.length > 8192) {
     throw new Error('task must be a non-empty string of at most 8192 characters.');
   }

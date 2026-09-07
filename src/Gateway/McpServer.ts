@@ -7,7 +7,8 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { ToolRouter } from '../Core/ToolRouter.js';
-import { WINCODE_TOOLS } from './Protocol.js';
+import { WINCODE_TOOLS, contractHash, toolsContractHash } from './Protocol.js';
+import { RUNTIME_IDENTITY } from '../Core/RuntimeIdentity.js';
 import { WINCODE_VERSION } from '../Core/Config.js';
 import { AbortError } from '../Core/ResourceManager.js';
 import { UI_INSPECT_DEFAULTS, validateUiQuery, UiQuery, validateWindowQuery, UiListWindowsRequest } from '../Core/UiContracts.js';
@@ -21,6 +22,8 @@ export class WinCodeMcpServer {
   private server: Server;
   private router: ToolRouter;
   private stopPromise: Promise<void> | null = null;
+  private readonly registeredTools = structuredClone(WINCODE_TOOLS);
+  private readonly schemaHash = toolsContractHash(this.registeredTools);
 
   constructor(router: ToolRouter) {
     this.router = router;
@@ -42,7 +45,7 @@ export class WinCodeMcpServer {
   private registerHandlers(): void {
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return { tools: WINCODE_TOOLS };
+      return { tools: structuredClone(this.registeredTools) };
     });
 
     // Call tool
@@ -134,6 +137,13 @@ export class WinCodeMcpServer {
           }
 
           case 'wincode_hello_world': {
+            if (Object.keys(args).some(key => !['greeting', 'toolName'].includes(key)) ||
+              (args.greeting !== undefined && (typeof args.greeting !== 'string' || args.greeting.length > 1024)) ||
+              (args.toolName !== undefined && (typeof args.toolName !== 'string' || !args.toolName || args.toolName.length > 128))) {
+              throw new Error('Unsupported hello parameter. Check this connection tools/list schema.');
+            }
+            const selectedTool = args.toolName === undefined ? undefined : this.registeredTools.find(tool => tool.name === args.toolName);
+            if (args.toolName !== undefined && !selectedTool) throw new Error(`Tool is not registered in this instance: ${args.toolName}`);
             const greeting = args.greeting ? String(args.greeting) : 'Hello from WinCode MCP Gateway!';
             const health = await this.router.getRuntimeHealth();
             return {
@@ -146,6 +156,13 @@ export class WinCodeMcpServer {
                       message: greeting,
                       gateway: 'WinCode Agent Gateway',
                       version: WINCODE_VERSION,
+                      runtime: RUNTIME_IDENTITY,
+                      toolContract: {
+                        schemaHash: this.schemaHash,
+                        toolCount: this.registeredTools.length,
+                        ...(selectedTool ? { tool: { name: selectedTool.name, inputSchema: selectedTool.inputSchema,
+                          schemaHash: contractHash(selectedTool.inputSchema) } } : {}),
+                      },
                       platform: process.platform,
                       workspace: this.router.config.workspaceRoot,
                       timestamp: new Date().toISOString(),
@@ -174,21 +191,7 @@ export class WinCodeMcpServer {
                           details: health.flaui.details,
                         },
                       },
-                      capabilities: [
-                        'wincode_list_directory',
-                        'wincode_hello_world',
-                        'wincode_analyze_workspace',
-                        'wincode_prepare_context',
-                        'wincode_find_code_symbol',
-                        'wincode_find_references',
-                        'wincode_analyze_change_impact',
-                        'wincode_diagnose_project',
-                        'wincode_plan_refactoring',
-                        'wincode_safe_move_to_trash',
-                        'wincode_ui_inspect',
-                        'wincode_ui_list_windows',
-                        'wincode_ui_review',
-                      ],
+                      capabilities: this.registeredTools.map(tool => tool.name),
                     },
                     null,
                     2

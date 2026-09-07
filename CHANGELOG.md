@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2
+
+- Build manifests fingerprint source inputs and compiled outputs; runtime identity is frozen at startup and reports unknown for missing, stale or development builds.
+- Hello derives capabilities and schema fingerprints from its registered tools snapshot; an optional toolName returns one actual input schema. Unknown hello/context parameters fail explicitly.
+- Replace the manual JSON-RPC smoke script with an isolated SDK stdio probe asserting schema agreement and actual symbol/range bodies. No upstream/GUI or separate host-connection claim.
+
 ## 0.9.1
 
 - Default workspace opening to a compact project summary with at most eight entry paths and an 8,000-character whole-response budget. Skip recursive file-size inventory; retain bounded project-discovery gaps and report unmeasured totals as null.

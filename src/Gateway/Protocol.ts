@@ -54,23 +54,48 @@ export const WINCODE_TOOLS: Tool[] = [
   },
   {
     name: 'wincode_prepare_context',
-    description: 'Returns task-related file evidence (path, symbol, line, snippet) within a token budget. Does not invent architecture advice when evidence is missing. Set includeFullText to fetch file bodies; omitted files can be requested next.',
+    description: 'Returns compact file evidence with actual source ranges and omission metadata. maxTokens budgets ALL response text using characters/4 (not a model tokenizer). Set includeFullText for packed bodies; legacy opts into JSON plus Markdown.',
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
         task: {
           type: 'string',
+          minLength: 1, maxLength: 8192,
           description: 'Description of the coding task or query the agent is working on (e.g. "分析这个项目架构").',
         },
         candidateFiles: {
           type: 'array',
-          items: { type: 'string' },
-          description: 'Optional list of candidate file paths to prioritize.',
+          maxItems: 20,
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+          description: 'Literal in-workspace file paths to prioritize, not an exclusive search scope. No glob patterns or parent traversal.',
+        },
+        scopeFiles: {
+          type: 'array', minItems: 1, maxItems: 20,
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+          description: 'Exclusive literal file scope; skips workspace symbol search. candidateFiles/lineRanges must stay inside it. Cannot combine with focusAreas.',
+        },
+        symbol: {
+          type: 'string', minLength: 1, maxLength: 128,
+          description: 'Exact case-sensitive declaration name within required scopeFiles. Local pattern matching, not semantic analysis. Ambiguous/missing targets return issues instead of file-head evidence. Cannot combine with lineRanges.',
+        },
+        lineRanges: {
+          type: 'array', minItems: 1, maxItems: 8,
+          items: {
+            type: 'object', required: ['file', 'startLine', 'endLine'],
+            properties: {
+              file: { type: 'string', minLength: 1, maxLength: 1024 },
+              startLine: { type: 'integer', minimum: 1 },
+              endLine: { type: 'integer', minimum: 1 },
+            },
+          },
+          description: 'Inclusive 1-based ranges, one per file, at most 500 lines each. Skips symbol search; out-of-bounds ranges return issues. Cannot combine with symbol/includeFullText. Budget may truncate returned lines.',
         },
         focusAreas: {
           type: 'array',
-          items: { type: 'string' },
-          description: 'Optional subdirectories or glob patterns to focus on (e.g. ["src/Core"]).',
+          maxItems: 5,
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+          description: 'Literal in-workspace files or directories, e.g. ["src/Core"]. No globs. Adds at most 8 immediate code files, scanning at most 1000 entries per directory; gaps appear in fileIssues.',
         },
         compress: {
           type: 'boolean',
@@ -85,9 +110,13 @@ export const WINCODE_TOOLS: Tool[] = [
           type: 'boolean',
           description: 'If true, pack related file bodies within maxTokens. Default false: snippets with locations only.',
         },
+        responseFormat: {
+          type: 'string', enum: ['compact', 'legacy'], default: 'compact',
+          description: 'compact returns one JSON text block without repeated evidence. legacy preserves JSON plus Markdown; both blocks share maxTokens.',
+        },
         maxTokens: {
-          type: 'number',
-          description: 'Evidence/snapshot budget in tokens (default 8000).',
+          type: 'integer', minimum: 512, maximum: 65536, default: 8000,
+          description: 'Total returned text budget estimated as UTF-16 characters / 4, including JSON and metadata (default 8000). Actual model tokens can differ.',
         },
       },
       required: ['task'],

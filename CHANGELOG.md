@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — agent efficiency, round 1
+
+- Follow-up review fixes: trim auxiliary metadata before useful source, preserve declarations at exact newline clipping boundaries, support focus paths through workspace junctions, and distinguish selected/packed/returned files using packer body spans (missing spans remain unknown).
+- Add opt-in exclusive `scopeFiles`, exact local declaration `symbol`, and bounded `lineRanges` to `wincode_prepare_context`. Known locations skip workspace symbol queries; ambiguous or missing symbols remain explicit gaps. Existing `candidateFiles` priority semantics are unchanged; scoped symbol matching is explicitly non-semantic.
+
+- Default `wincode_prepare_context` to one compact JSON text block; `responseFormat: "legacy"` retains JSON plus Markdown. All returned text, including metadata and JSON escaping, shares the character-based `maxTokens` estimate. Metrics explicitly identify characters/4 rather than a model tokenizer.
+- Preserve truncation, incomplete searches, omitted-file counts and metadata loss under small budgets. Full-text compact responses return the packed body once; empty packs are insufficient evidence.
+- Align literal `focusAreas` paths with actual support: reject globs up front, bound immediate-directory selection, and report missing/unreadable/oversized/out-of-workspace files instead of silently returning empty evidence.
+- Keep matched symbols, retrieval reasons and displayed line ranges consistent, including long prefixes and clipped excerpts. Refactoring plans retain impact uncertainty and follow the requested goal instead of always prescribing a new interface.
+- Add isolated MCP regression coverage for compact/legacy compatibility, total output accounting, Unicode/escaping, target preservation, file boundaries and evidence-based plans. Update the repository skill's on-demand code manual.
+
 ## 0.9.0
 
 - Added bounded exact UI queries, local subtree selection and opt-in toggle/selection/expand-collapse state.

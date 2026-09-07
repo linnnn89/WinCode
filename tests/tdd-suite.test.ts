@@ -1138,14 +1138,21 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
         name: 'wincode_prepare_context',
         arguments: { task: '分析这个项目架构' },
       });
-      assert.ok(res.result?.content?.length >= 2);
+      assert.strictEqual(res.result?.content?.length, 1);
       const meta = JSON.parse(res.result.content[0].text);
       assert.strictEqual(meta.task, '分析这个项目架构');
       assert.ok(Array.isArray(meta.evidence));
       assert.strictEqual(typeof meta.evidenceInsufficient, 'boolean');
       assert.ok(meta.guidance.length > 0);
 
-      const text = res.result.content[1].text;
+      assert.strictEqual(meta.metrics.totalCharacters, res.result.content[0].text.length);
+      assert.ok(meta.metrics.estimatedTokens <= meta.metrics.budgetTokens);
+      const legacy = await callMcp('tools/call', {
+        name: 'wincode_prepare_context',
+        arguments: { task: '分析这个项目架构', responseFormat: 'legacy' },
+      });
+      assert.strictEqual(legacy.result.content.length, 2);
+      const text = legacy.result.content[1].text;
       assert.ok(text.includes('AI Agent Context Snapshot'));
       assert.ok(text.includes('分析这个项目架构'));
     });

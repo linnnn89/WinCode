@@ -25,6 +25,8 @@ export interface RepomixPackResult {
   /** Set when the full snapshot was spilled to disk instead of kept in the heap. */
   overflowPath?: string;
   contentOmitted?: boolean;
+  /** UTF-16 offsets of file bodies in content; end is exclusive. */
+  fileSpans?: { file: string; start: number; end: number }[];
 }
 
 export class RepomixAdapter implements IAdapter {
@@ -156,7 +158,7 @@ export class RepomixAdapter implements IAdapter {
    * Packs workspace into a structured AI context snapshot
    */
   async packWorkspace(options?: RepomixPackOptions): Promise<RepomixPackResult> {
-    const cacheKey = `repomix_pack_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
+    const cacheKey = `repomix_pack_v2_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<RepomixPackResult>(cacheKey, fingerprint);
@@ -449,13 +451,16 @@ export class RepomixAdapter implements IAdapter {
     outputFormat?: string
   ): RepomixPackResult {
     let output = '';
+    const fileSpans: NonNullable<RepomixPackResult['fileSpans']> = [];
 
     // [P2 Fix]: True XML format generation when requested
     if (outputFormat === 'xml') {
       output = `<?xml version="1.0" encoding="UTF-8"?>\n`;
       output += `<project_context root="${root}" total_files="${collectedFiles.length}">\n`;
       for (const file of collectedFiles) {
-        output += `  <file path="${file.relPath}">\n<![CDATA[\n${file.content}\n]]>\n  </file>\n`;
+        output += `  <file path="${file.relPath}">\n<![CDATA[\n`;
+        fileSpans.push({ file: file.relPath, start: output.length, end: output.length + file.content.length });
+        output += `${file.content}\n]]>\n  </file>\n`;
       }
       output += `</project_context>\n`;
     } else {
@@ -467,6 +472,7 @@ export class RepomixAdapter implements IAdapter {
         output += `================================================\n`;
         output += `File: ${file.relPath}\n`;
         output += `================================================\n`;
+        fileSpans.push({ file: file.relPath, start: output.length, end: output.length + file.content.length });
         output += file.content + `\n\n`;
       }
     }
@@ -477,6 +483,7 @@ export class RepomixAdapter implements IAdapter {
       totalCharacters: output.length,
       fromCache: false,
       source: 'builtin-fallback',
+      fileSpans,
     };
   }
 

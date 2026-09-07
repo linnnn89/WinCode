@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts",
+    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts",
     "test:verify": "tsx tests/verify.ts",
     "test:e2e": "tsx scripts/test-mcp-client.ts",
     "typecheck": "tsc -p tsconfig.test.json",

@@ -22,6 +22,8 @@
 <span id="-english"></span>
 ## 🌐 English
 
+Skill setup and MCP configuration: [standalone guide (Chinese)](WinCode-Skill制作与MCP配置指南.md).
+
 ### v0.8 UI access, budgets and audit
 
 `wincode_ui_list_windows` discovers visible top-level windows, including minimized windows, without activation, screenshots or control-tree reads. Filters are combined: `pid`, exact case-insensitive `processName` (without `.exe`), and literal case-insensitive `titleContains`. `maxWindows` defaults to 30 and is capped at 100. Results include PID/HWND, title, process name, state, capture time and `enumerationComplete`; titles are capped at 256 characters with `titleTruncated`. Unreadable process metadata is marked unavailable. Enumeration has a 2-second soft budget and a 3-second adapter deadline including queue time (cleanup is additional). Truncation is explicit; handles are not cached and can become stale immediately. Local control queries and UIA state patterns are not implemented.
@@ -277,6 +279,8 @@ Add WinCode to your MCP client configuration (`claude_desktop_config.json`):
 
 <span id="-简体中文"></span>
 ## 🇨🇳 简体中文
+
+技能制作、安装与 MCP 配置请参阅[独立指南](WinCode-Skill制作与MCP配置指南.md)。
 
 ### 极简 UI 审计与清理提醒
 

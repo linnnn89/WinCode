@@ -331,7 +331,7 @@ export const WINCODE_TOOLS: Tool[] = [
 const uiInspectTool = WINCODE_TOOLS.find(tool => tool.name === 'wincode_ui_inspect')!;
 WINCODE_TOOLS.push({
   name: 'wincode_ui_review',
-  description: 'Collects one UI snapshot and literal AutomationId candidates in supplied WPF XAML files. Returns source lines and ambiguity, not verified runtime/source identity or automatic defect diagnosis.',
+  description: 'Collects one UI snapshot and literal AutomationId candidates in supplied WPF XAML files. Optional C# files provide Click/simple Binding candidates and scoped next requests. Reports ambiguity; runtime/source identity and binding causality remain unverified.',
   inputSchema: {
     ...uiInspectTool.inputSchema,
     properties: {
@@ -344,6 +344,11 @@ WINCODE_TOOLS.push({
         type: 'array', minItems: 1, maxItems: 16,
         items: { type: 'string', maxLength: 512 },
         description: 'Explicit relative in-workspace .xaml files; no recursive repository scan.',
+      },
+      candidateCodeFiles: {
+        type: 'array', minItems: 1, maxItems: 8,
+        items: { type: 'string', minLength: 1, maxLength: 512 },
+        description: 'Optional explicit relative in-workspace .cs files for literal declarations/assignments. No full-repository scan, DataContext/template resolution, or inferred CanExecute cause.',
       },
     },
     required: ['candidateFiles'],

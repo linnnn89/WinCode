@@ -12,6 +12,8 @@ namespace wpf_ui_review;
 /// </summary>
 public partial class MainWindow : Window
 {
+    public System.Windows.Input.ICommand ReviewActionCommand { get; private set; } = null!;
+
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
@@ -31,6 +33,12 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        if (Environment.GetCommandLineArgs().Contains("--code-navigation-fixture"))
+        {
+            ReviewActionCommand = new SourceRepairCommand(CanExecuteReviewAction);
+            DataContext = this;
+            btnCodeNavigation.Visibility = Visibility.Visible;
+        }
         if (Environment.GetCommandLineArgs().Contains("--background-fixture"))
         {
             // Explicit test mode: never activate or place this fixture above the user's game.
@@ -114,6 +122,18 @@ public partial class MainWindow : Window
     private void BtnSpawnDialog_Click(object sender, RoutedEventArgs e)
     {
         OpenSubWindow();
+    }
+
+    private bool CanExecuteReviewAction()
+    {
+        return false; // R6_SOURCE_DEFECT
+    }
+
+    private sealed class SourceRepairCommand(Func<bool> canExecute) : System.Windows.Input.ICommand
+    {
+        public bool CanExecute(object? parameter) => canExecute();
+        public void Execute(object? parameter) { }
+        public event EventHandler? CanExecuteChanged { add { } remove { } }
     }
 
     private void OpenSubWindow()

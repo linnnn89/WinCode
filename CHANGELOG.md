@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0
+
+- Extend UI review with optional explicit C# candidate files: follow literal Click/simple Binding names to declarations or assignments and offer scoped context requests.
+- Bound file reads, candidate counts and output; validate paths before inspection. Optional code metadata cannot displace UI nodes/image badges or existing XAML evidence.
+- Preserve ambiguity, incomplete scans and unsupported bindings. Runtime/source build identity, DataContext, templates and CanExecute causality remain unverified; no new UI actions or full-repository scans.
+
 ## 0.10.0
 
 - Migrate server/client, stdio, in-memory tests and scripts to MCP SDK v2.0.0; minimum Node.js is now 20 (runtime verification on Node 24.19.0).

@@ -240,8 +240,8 @@ Repomix 的个别有用做法可独立参考；当前显式候选打包会走内
 | 0.9.2 / R2 | [PR #15](https://github.com/linnnn89/WinCode/pull/15) 已合并，main 2cbf443 | 专项 8/8，非交互回归 177 pass、1 skip，独立 stdio 契约与实际正文核对通过；CodeQL 通过 |
 | 0.9.3 / R3 | [PR #16](https://github.com/linnnn89/WinCode/pull/16) 已合并，main 0351111；主连接新版验收待办 | 专项 34/34；非交互回归 186 pass、1 skip；CodeQL 通过。真实 TavernDesk 新 stdio 8 场景通过 |
 | 0.9.4 / R4 | [PR #17](https://github.com/linnnn89/WinCode/pull/17) 已合并，main 95446c3 | 新增 27 项；完整回归 213 pass、1 skip；CodeQL、stdio/TavernDesk 复测通过，真实 Serena LSP 未验收 |
-| 0.10.0 / R5 | SDK v2 迁移已实现并复测，准备 PR | typecheck/build、stdio/TavernDesk、非交互回归 213 pass、1 skip；GUI/协议 34/34；工具 schemaHash 与 R4 相同 |
-| R6 | 独立 worktree 实现已准备，待整合验收 | 未完成版本不得据此宣称已验证 |
+| 0.10.0 / R5 | [PR #18](https://github.com/linnnn89/WinCode/pull/18) 已合并，main 9d9053b | typecheck/build、stdio/TavernDesk、非交互回归 213 pass、1 skip；GUI/协议 34/34，CodeQL 通过；工具 schemaHash 与 R4 相同 |
+| 0.11.0 / R6 | [PR #19](https://github.com/linnnn89/WinCode/pull/19)：显式 C# 候选与 Gateway 实现、复测完成；远端合并状态见 PR | 专项 15/15，非交互回归 228 pass、1 skip，UI/协议 34/34，隔离源码修复闭环 1/1；最终构建 TavernDesk 8 场景及 UI→赋值→方法正文通过 |
 | R7–R9 | 条件阶段，尚未进入 | 依据真实阻塞决定是否实施 |
 
 ## 13. Codex 旧版本连接诊断（2026-09-08）

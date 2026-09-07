@@ -336,3 +336,16 @@
 - 安装失败与修复：首次并存安装被旧 SDK 依赖链 body-parser@2.3.0 请求未发布 iconv-lite@^0.8.0 阻止；只读 npm 日志及公共 registry 核对后，移除已计划退出的 v1 声明和未用直接 Zod 声明再安装成功，未加不满足上游范围的 override。首次 typecheck 查出三处旧 callTool 三参用法，按 v2 API 修正，保留信号/超时断言。
 - 验证：typecheck/build、独立 stdio initialize/list/schema/目标正文、TavernDesk 8 场景通过；完整非交互回归 214 项（213 pass、1 skip）；真实隔离 WPF 的 UI/协议回归 34/34，含图片独立 block、真实客户端取消传递、helper 退出、工作区切换和重复窗口筛选。日志 test-tmp/r5/；GUI测试为专用夹具，不证明 TavernDesk 的后台空白截图已修复。
 - 旧连接诊断结论：专用 GPT-6 xHigh 子代理核对同配置同绝对启动路径，旧主连接与新子连接返回不同版本/启动时间；旧进程持续运行是直接解释，不是新版磁盘无法被 Codex 加载。新实例0.9.4与当时manifest一致。官方 config/mcpServer/reload 存在但当前工具未暴露且无单服务器无扰动保证，未调用。详见根路线图第13节；该取证在R5依赖迁移前完成。
+- 合并：PR #18 CodeQL 全部成功，锁定 fe78222 合并并确认 MERGED，main=9d9053b87fea1dc9accd7965b8bbcedb0c0782b3。
+
+## 2026-09-08（北京时间）— R6 UI 到源码候选 0.11.0
+
+- 从 R5 合并 main 建立 codex/r6-ui-code-navigation。UiReview 仍只采一次快照，增加可选 candidateCodeFiles（1–8 个明确 .cs 路径）；从已有 XAML 的 Click/简单 Binding 提取文字声明/赋值候选、哈希和下一步限定读取。不提供 DataContext/模板求值，不推定 CanExecute 原因，runtimeSourceVerified=false、runtimeBuildSourceIdentity=unknown。
+- 预算与隔离：单文件 256 KiB、总计 1 MiB、40 线索/200 匹配/每线索最多 5 个输出、代码 JSON 16000 字符，受整体 UI 文本 128 KiB 二次约束。非法候选参数在采集前拒绝；无该参数不读 C#，显式候选外不扫描；Gateway 优先省略新增代码元数据，保留 UI 节点与图片标号。
+- 独立反证发现并安排修补：插值表达式内嵌字符串泄漏为代码、多赋值伴声明未标歧义、null/超长构造参数被作为 symbol 建议、最后一次文件关闭期间取消未传播。为避免变量遮蔽导致跳错方法，nextRequest 改为赋值所在精确行，relatedSymbol 仅线索；调用方读取赋值后再明确请求候选方法。
+- 新 Codex 连接早期验收：构建 990ab3cc9f22ba454f7867fc1013414650bad5c054560a50084eae8ac29101bb（边界修补前），0.11.0/verified、schema 确有 candidateCodeFiles。TavernDesk PID24964/HWND0x100800 完整查询 68 节点、NavCharacters 唯一；XAML116 行 Command → C#127 行赋值/192 行声明 → 实际 ShowCharactersAsync309–324 正文。7 次 MCP 调用含工作区恢复预算2000被拒后改2500成功；本连接最后恢复 I:/WinCode。该证据不能替代后续最终构建，父连接仍旧。
+- 隔离 WPF 测试在仓库外复制 6 个源码文件，空本地 NuGet feed 只复用 SDK/缓存；已观察 false→源码副本单行 true→重新编译与启用，首次结束清理因 EXE 短暂占用失败，补退出等待与有限重试后复测。两个旧失败目录的后续 PowerShell 清理被自动审批拒绝（仅 blocked by policy）；未绕过，保留 C:/Users/40218/AppData/Local/Temp/wincode-ui-code-runtime-0oJpM9 与 wincode-ui-code-runtime-EybwBw 作为故障遗留，不影响工作区。
+- 最终修补与验证：上述 4 项均修复，普通/verbatim 插值支持有限嵌套屏蔽（深度 12）；复杂插值原始字符串明确不支持。专项 15/15，typecheck/build/独立 stdio 通过；非交互回归 229 项（228 pass、1 skip）；重编译专用 WPF 后 UI/协议 34/34。新源码修复测试 1/1：PID27644 disabled → 读取第38行赋值 → 显式请求谓词正文 → 外部副本 false 改 true → 重新编译 → PID8236 enabled；源码与程序集哈希均变化，精准读取不含旧 false，本次新目录已正常清理。
+- 最终构建 aa1bb067cc79e5cab41ed17961a5c4a11c1d2948acee1c908356cf6b22acf49d，在新生产 stdio 上通过 TavernDesk 原有 8 场景及可选真实 UI 验收：UI review、赋值行 nextRequest、显式方法正文共 3 次调用，分别 6164/1877/2181 字符；赋值行覆盖完整，方法正文实际核对通过。报告 test-tmp/r3/acceptance-1788825262426.json；其余日志 test-tmp/r6/。没有将截图空白、旧主连接或真实 Serena LSP 未验收写成已解决。
+- 提交与交付：实现 dfeeab1 已推送 [PR #19](https://github.com/linnnn89/WinCode/pull/19)，本次记录补充后按最终提交的远端检查结果合并，实际合并状态以该 PR 为准。R1–R6 均已完成版本实现与复测；R7–R9 尚无新进入证据，继续按路线图条件安排，不擅自启动 MSBuild 求值、进程内 WPF 深检或 Repo Map。
+- 最终真实 Codex 身份验收：07:56:53 新代理实例 a90b9128-2d0b-4c02-9676-9512f9c36b6d 实际 hello 返回 0.11.0、verified，buildId 与上述最终 aa1bb067… 完全一致；实际 ui_review schema 含 candidateCodeFiles，整体 schemaHash=2837d4e1e2b0b35bdae5bd9ec451ea7bea9396df26aa4446cbe2d4020c4316b7。仅调用一次 hello，没有重启/修改配置；它确认最终构建可由 Codex 加载，不代表父连接更新。

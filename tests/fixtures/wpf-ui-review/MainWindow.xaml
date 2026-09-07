@@ -31,6 +31,12 @@
                     Content="Open SubWindow"
                     Width="130" Height="32" Margin="0,0,8,0"
                     Click="BtnSpawnDialog_Click"/>
+            <Button x:Name="btnCodeNavigation"
+                    AutomationProperties.AutomationId="btnCodeNavigation"
+                    Content="Source Repair Action"
+                    Command="{Binding ReviewActionCommand}"
+                    Visibility="Collapsed"
+                    Width="150" Height="32"/>
         </StackPanel>
 
         <!-- Input controls -->

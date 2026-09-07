@@ -20,5 +20,9 @@ queryResult.searchComplete=true 且 status="unique" 才展开子树；ambiguous 
 - 候选为 1–16 个工作区内相对 XAML 路径；只传相关文件。
 - textQueries 最多 5 个、每个 80 字符，字面量且区分大小写。
 - 行号/哈希/AutomationId 候选不证明运行时版本；runtimeSourceVerified=false，保留 ambiguous、unsupported、not-found 等边界。
+- 已知相关 C# 文件时可加 candidateCodeFiles:["ViewModels/MainWindowViewModel.cs"]，1–8 个工作区内相对 .cs 路径。codeEvidence 提供 Click/简单 Binding 的文字声明/赋值候选；按实际线索使用其 nextRequest 续查 prepare_context，并核对目标正文。
+- 不传 candidateCodeFiles 不读取 C#。单文件 256 KiB、总计 1 MiB，线索/匹配/JSON 均有限额；检查 fileScanComplete、searchComplete、truncated 和省略原因。候选文件无匹配不证明全仓不存在。
+- runtimeBuildSourceIdentity=unknown、templateResolution=unsupported；不推定 DataContext 或 CanExecute，也不把构造参数相似当执行链证明。多个同名声明继续保留歧义，不能自动选择首项。
+- nextRequest 先读候选所在精确行；relatedSymbol 仅为构造参数文字线索，可能是变量。核对赋值后再明确请求方法，不能因该字段自动认定为方法或完整调用链。复杂插值原始字符串/超出嵌套限制的文字扫描报告不支持。
 
 内置 Host 强制显示半透明 REC/WinCoding 标志并记录极简审计，不绕过。审计提示按诊断手册处理。取证不授权点击、输入或读取其他窗口。启动测试应用时使用其全新隔离数据模式，避免个人数据库。

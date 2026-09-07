@@ -343,10 +343,10 @@ export class ToolRouter {
     return this.flaui.listWindows(request, signal);
   }
 
-  async reviewUi(request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[]): Promise<UiReviewResult> {
+  async reviewUi(request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[], candidateCodeFiles?: string[]): Promise<UiReviewResult> {
     // MCP owns the request slot across both stages, preventing workspace changes between them.
     return reviewUi((input, abort) => this.inspectUi(input, abort),
-      this.config.workspaceRoot, request, candidateFiles, signal, textQueries);
+      this.config.workspaceRoot, request, candidateFiles, signal, textQueries, candidateCodeFiles);
   }
 
   async dispose(): Promise<void> {

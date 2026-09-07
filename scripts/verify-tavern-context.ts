@@ -9,8 +9,12 @@ import { createHash } from 'node:crypto';
 
 // Opt-in read-only source acceptance. Never opens or changes the application's database.
 const target = process.argv[2];
-if (!target || target.startsWith('--')) throw new Error('Usage: npm run test:tavern-context -- <TavernDesk repository> [--baseline]');
+if (!target || target.startsWith('--')) throw new Error('Usage: npm run test:tavern-context -- <TavernDesk repository> [--baseline] [--ui-pid=<PID> --ui-hwnd=<HWND>]');
 const baseline = process.argv.includes('--baseline');
+const uiPid = process.argv.find(arg => arg.startsWith('--ui-pid='))?.slice(9);
+const uiHwnd = process.argv.find(arg => arg.startsWith('--ui-hwnd='))?.slice(10);
+assert.equal(Boolean(uiPid), Boolean(uiHwnd), 'UI acceptance requires both PID and HWND of an existing dedicated test process');
+if (uiPid) assert.ok(/^[1-9]\d*$/.test(uiPid) && Number.isSafeInteger(Number(uiPid)) && /^0x[\da-f]+$/i.test(uiHwnd!), 'invalid PID/HWND');
 const workspace = await fs.realpath(target);
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const file = 'src/TavernDesk.App/ViewModels/MainWindowViewModel.cs';
@@ -40,14 +44,14 @@ import { ToolRouter } from ${url('Core/ToolRouter.js')};
 import { WinCodeMcpServer } from ${url('Gateway/McpServer.js')};
 const config = getDefaultConfig(${JSON.stringify(temporary)});
 config.adapters.serena.enabled = false;
-config.adapters.flaui.enabled = false;
+config.adapters.flaui.enabled = ${Boolean(uiPid)};
 config.adapters.repomix.useCli = false;
 const server = new WinCodeMcpServer(new ToolRouter(config));
 process.stdin.on('end', () => { void server.stop(); });
 process.on('SIGTERM', () => { void server.stop(); });
 await server.start();
 `);
-  transport = new StdioClientTransport({ command: process.execPath, args: [bootstrap], cwd: temporary, stderr: 'pipe' });
+  transport = new StdioClientTransport({ command: process.execPath, args: [bootstrap], cwd: repo, stderr: 'pipe' });
   await client.connect(transport);
   const call = async (name: string, args: Record<string, unknown>) => {
     const result: any = await client.callTool({ name, arguments: args });
@@ -92,6 +96,33 @@ await server.start();
       targetLocated, queryComplete: data.queryComplete, truncated: data.truncated, coverage: data.coverage ?? null,
       returned: data.evidence.map((item: any) => ({ file: item.file, startLine: item.startLine, endLine: item.endLine,
         endLineComplete: item.endLineComplete, truncated: item.truncated })), fileIssues: data.fileIssues });
+  }
+  if (uiPid) {
+    const response = await call('wincode_ui_review', {
+      pid: Number(uiPid), hwnd: uiHwnd, backgroundOnly: true, capture: 'none', readStates: true, maxNodes: 100,
+      query: { automationId: 'NavCharacters', controlType: 'Button' },
+      candidateFiles: ['src/TavernDesk.App/MainWindow.xaml'], candidateCodeFiles: [file],
+    });
+    const ui = response.data;
+    assert.equal(ui.success, true);
+    assert.equal(ui.queryResult.status, 'unique');
+    assert.equal(ui.queryResult.searchComplete, true);
+    assert.equal(ui.tree.automationId, 'NavCharacters');
+    assert.equal(ui.tree.isEnabled, true);
+    assert.equal(ui.codeEvidence.runtimeSourceVerified, false);
+    const clue = ui.codeEvidence.clues.find((item: any) => item.identifier === 'ShowCharactersCommand');
+    assert.ok(clue);
+    const assignment = clue.candidates.find((item: any) => item.kind === 'assignment' && item.relatedSymbol === symbol);
+    assert.ok(assignment, 'command assignment must identify the method as a candidate clue');
+    const nextResponse = await call('wincode_prepare_context', assignment.nextRequest);
+    assert.ok(nextResponse.data.evidence.some((item: any) => item.file === file && item.snippet.includes('ShowCharactersCommand = new AsyncRelayCommand(ShowCharactersAsync)')));
+    assert.equal(nextResponse.data.coverage.allRequestedCovered, true);
+    // The assignment is now read; a separate scoped request checks its candidate method body.
+    const body = await call('wincode_prepare_context', { task: 'Inspect the method named by the confirmed assignment.', scopeFiles: [file], symbol: assignment.relatedSymbol });
+    assert.ok(body.data.evidence.some((item: any) => item.file === file && item.snippet.includes('private async Task ShowCharactersAsync()') && item.snippet.includes('await ')));
+    report.gui = { pid: Number(uiPid), hwnd: uiHwnd, screenshotVerified: false, calls: 3,
+      queryResult: ui.queryResult, isEnabled: ui.tree.isEnabled, codeEvidence: ui.codeEvidence,
+      characters: [response.characters, nextResponse.characters, body.characters] };
   }
   assert.equal(await fs.readFile(path.join(workspace, file), 'utf8'), source, 'source changed during acceptance; rerun on a stable tree');
   assert.deepEqual((await call('wincode_hello_world', {})).data.runtime, report.hello.runtime);

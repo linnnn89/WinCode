@@ -18,6 +18,8 @@ lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details
 
 按目标选工具，不顺序执行整张表。已知文件范围时直接限定：
 
+上游结果有 namePath 时保留原值（如 Service/Save[0]），续查用 symbolName:namePath 加 relativePath:file；不要还原成短名或删除重载索引。简单名称歧义检查 resolution/candidateCount/candidatesTruncated，不能选第一项。queryComplete=false 或解析失败不能解释为零引用；lineKind=containing-symbol 不是精确调用点。
+
 workspace_open 默认返回项目摘要和最多 8 个入口，整份 JSON 默认不超过 8000 个 UTF-16 字符；不生成目录树或统计全仓大小。检查 projectScanComplete，null 统计不等于零。需要目录时用 wincode_list_directory 指定窄路径，查看 scanComplete/truncated/omissions。includeTree:true 可显式取得有界兼容树，不能当成完整仓库清单。maxOutputChars 为 2048–32768；目录 maxDepth 为 1–5，maxEntries 为 1–500。需要生成目录时显式 includeIgnored:true，但不能越过工作区边界。
 
 ```json

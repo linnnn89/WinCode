@@ -238,6 +238,7 @@ Repomix 的个别有用做法可独立参考；当前显式候选打包会走内
 | --- | --- | --- |
 | 0.9.1 / R1 | [PR #14](https://github.com/linnnn89/WinCode/pull/14) 已合并，main 7ce737f | 非交互回归 169 pass、1 skip；最终入口筛选修正后专项 9/9。真实 TavernDesk 独立 MCP 响应 3705 字符，保留 solution、应用项目入口；CodeQL 通过 |
 | 0.9.2 / R2 | [PR #15](https://github.com/linnnn89/WinCode/pull/15) 已合并，main 2cbf443 | 专项 8/8，非交互回归 177 pass、1 skip，独立 stdio 契约与实际正文核对通过；CodeQL 通过 |
-| 0.9.3 / R3 | 源码覆盖修正已实现并复测，准备 PR；真实宿主验收待办 | 专项 34/34（含既有上下文）；非交互回归 186 pass、1 skip。真实 TavernDesk 新 stdio 8 场景通过，223 行实际完整返回。用户表示无法重连，旧 Codex 0.9.0 连接不作为新版验收 |
-| R4–R6 | 按序推进，R4/R6 在仓库外独立 worktree 准备 | 未完成版本不得据此宣称已验证 |
+| 0.9.3 / R3 | [PR #16](https://github.com/linnnn89/WinCode/pull/16) 已合并，main 0351111；主连接新版验收待办 | 专项 34/34；非交互回归 186 pass、1 skip；CodeQL 通过。真实 TavernDesk 新 stdio 8 场景通过 |
+| 0.9.4 / R4 | 符号身份/解析正确性已实现并复测，准备 PR | 新增 27 项；完整回归 213 pass、1 skip；stdio/TavernDesk 复测通过，真实 Serena LSP 未验收 |
+| R5–R6 | 按序推进，R6 在仓库外独立 worktree 准备 | 未完成版本不得据此宣称已验证 |
 | R7–R9 | 条件阶段，尚未进入 | 依据真实阻塞决定是否实施 |

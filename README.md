@@ -20,7 +20,7 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.9.3**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.9.4**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
@@ -96,6 +96,8 @@ Query specific controls directly rather than dumping an entire window's visual t
 
 ### Tool reference
 
+Serena results retain full `namePath`, including containers and overload indices. Pass it as `symbolName` together with its defining `relativePath`. Simple names require complete unique semantic resolution; ambiguity returns at most 20 candidates plus the count. Malformed/shortened responses are incomplete; valid empty results stay empty. Coordinates are one-based; `lineKind: "containing-symbol"` marks a containing declaration, not an exact call site. Controlled upstream tests do not establish actual language-server availability.
+
 `wincode_hello_world` reports a frozen running instance ID and build fingerprint, plus a hash of the tool definitions actually registered by that instance. Pass `toolName: "wincode_prepare_context"` to inspect just that tool's input schema. Compare it with `tools/list` on the same connection. `npm run build` emits a manifest; direct `tsc`, missing/mismatched artifacts or source development mode can report `unknown`. The build fingerprint checks local output consistency, not release authenticity. Workspace changes do not change the running build.
 
 Explicit `lineRanges` return `coverage` computed from the final serialized evidence: requested/complete line counts, actual returned intervals, missing intervals and reasons. A partial last line (`endLineComplete: false`) is not a covered line. Recoverable gaps can include a bounded `nextRequest`; EOF/missing files do not suggest blind retries. Detail pruning reports `omittedItemCount` while retaining totals. Other requests return `coverage: null`; `taskCoverage` is always null because source excerpts do not prove whole-method or task sufficiency. `npm run test:tavern-context -- <TavernDesk repository>` runs an opt-in read-only source acceptance in a new stdio process.
@@ -109,7 +111,7 @@ After rebuilding, reconnect the client's MCP server and check hello again; rebui
 | `wincode_analyze_workspace` | Parse solution structure and declared `.sln`/`.csproj` project references. |
 | `wincode_prepare_context` | Prepare scoped code evidence and actual line ranges within a character-based output budget. |
 | `wincode_find_code_symbol` | Search codebase symbols with transparent source and completeness metadata. |
-| `wincode_find_references` | Trace symbol references and call sites across files without false negatives. |
+| `wincode_find_references` | Trace exact identities and report ambiguity, incomplete queries and degraded evidence. |
 | `analyze_change_impact` | Assess refactor blast radius; explicitly mark confidence as `UNKNOWN` if ambiguous. |
 | `wincode_plan_refactoring` | Generate impact-driven verification checklists prior to making code edits. |
 | `wincode_safe_move_to_trash` | Safely quarantine obsolete files to `trash/` with metadata; rejects path traversal. |
@@ -203,7 +205,7 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.9.3**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.9.4**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
@@ -279,6 +281,8 @@ dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-
 
 ### 工具一览
 
+Serena 结果保留完整 `namePath`（容器及重载索引）；将其作为 `symbolName` 并附定义文件 `relativePath` 续查引用。简单名称只有完整、唯一语义定位才继续；歧义最多返回 20 个候选及总数。损坏/缩略响应不完整，合法空结果保持为空。坐标统一一基；`lineKind:"containing-symbol"` 表示所在声明起点，不是精确调用行。受控上游测试不替代真实语言服务器验收。
+
 `wincode_hello_world` 返回启动时固定的实例 ID、构建指纹及当前注册工具定义的 hash。传 `toolName: "wincode_prepare_context"` 可按需查看单个工具参数，与同一连接的 `tools/list` 对照。`npm run build` 生成 manifest；直接运行 `tsc`、产物缺失/失配或源码开发模式会明确报告 `unknown`。构建指纹校验本地产物一致性，不证明发布来源可信；切换分析工作区不会改变运行构建。
 
 显式 `lineRanges` 的 `coverage` 按最终返回正文计算：请求/完整行数、实际返回区间、未返回区间及原因。尾行只有一部分字符（`endLineComplete:false`）不计完整覆盖；可补取缺口可带有界 `nextRequest`，EOF/缺文件不建议盲重试。明细超预算会记录 `omittedItemCount` 并保留总计。其他请求 `coverage:null`，`taskCoverage` 始终为 null，片段非空不证明整个方法或任务证据充足。`npm run test:tavern-context -- <TavernDesk仓库>` 在新 stdio 进程执行显式启动的只读源码验收。
@@ -292,7 +296,7 @@ dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-
 | `wincode_analyze_workspace` | 解析工程依赖拓扑，提取 `.sln`/`.csproj` 项目引用关系。 |
 | `wincode_prepare_context` | 在基于字符数估算的输出预算内，按文件、符号或行号范围提供代码证据。 |
 | `wincode_find_code_symbol` | 检索代码符号，透明附带数据源置信度与完整性标识。 |
-| `wincode_find_references` | 跨文件查找引用点与调用方，杜绝静默漏报。 |
+| `wincode_find_references` | 按完整身份查引用，明确报告歧义、查询缺口及降级证据。 |
 | `analyze_change_impact` | 评估代码改动爆炸半径与重构风险；若存在歧义或查询受限，置信度如实返回 `UNKNOWN`。 |
 | `wincode_plan_refactoring` | 基于影响面分析生成改动前置检查清单与验证步骤。 |
 | `wincode_safe_move_to_trash` | 安全回收站：校验相对路径后将文件移入 `trash/` 归档并记录元数据，杜绝物理硬删除。 |

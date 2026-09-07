@@ -27,6 +27,8 @@ export interface CodeSymbol {
   line: number;
   signature?: string;
   containerName?: string;
+  /** Exact upstream identity, including overload indices; name is only a display label. */
+  namePath?: string;
 }
 
 export interface SymbolReference {
@@ -34,6 +36,7 @@ export interface SymbolReference {
   file: string;
   line: number;
   preview: string;
+  lineKind?: 'reference' | 'containing-symbol';
 }
 
 export interface FindSymbolsResult {
@@ -61,6 +64,18 @@ export interface FindReferencesResult {
   queryComplete: boolean;
   queryError?: string;
   truncated: boolean;
+  resolution?: 'resolved' | 'ambiguous' | 'not-found' | 'incomplete' | 'unavailable';
+  candidates?: CodeSymbol[];
+  candidateCount?: number;
+  candidatesTruncated?: boolean;
+  target?: { namePath: string; relativePath: string };
+}
+
+interface ParsedSerenaResult<T> {
+  items: T[];
+  complete: boolean;
+  shortened: boolean;
+  error?: string;
 }
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum']);
@@ -73,12 +88,13 @@ export function computeTypeMatchStats(
   symbols: CodeSymbol[],
   query: string
 ): { uniqueTypeMatch: boolean; typeMatchCount: number } {
-  const q = query.toLowerCase();
   const typeMatches = symbols.filter(
-    (s) => TYPE_KINDS.has((s.kind || '').toLowerCase()) && s.name.toLowerCase() === q
+    (s) => TYPE_KINDS.has((s.kind || '').toLowerCase()) && s.name === query
   );
-  const files = new Set(typeMatches.map((s) => (s.file || '').replace(/\\/g, '/').toLowerCase()));
-  const typeMatchCount = files.size;
+  const identities = new Set(typeMatches.map((s) => JSON.stringify([
+    (s.file || '').replace(/\\/g, '/'), s.namePath ?? [s.containerName, s.name, s.line],
+  ])));
+  const typeMatchCount = identities.size;
   return {
     typeMatchCount,
     uniqueTypeMatch: typeMatchCount === 1,
@@ -374,8 +390,8 @@ export class SerenaAdapter implements IAdapter {
     return res.symbols;
   }
 
-  async findSymbolsDetailed(query: string, kindFilter?: string): Promise<FindSymbolsResult> {
-    const cacheKey = `serena_symbols_${query}_${kindFilter || 'all'}_${this.config.workspaceRoot}`;
+  async findSymbolsDetailed(query: string, kindFilter?: string, relativePath?: string): Promise<FindSymbolsResult> {
+    const cacheKey = `serena_symbols_v2_${JSON.stringify([query, kindFilter, relativePath, this.config.workspaceRoot])}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<FindSymbolsResult>(cacheKey, fingerprint);
@@ -389,19 +405,18 @@ export class SerenaAdapter implements IAdapter {
 
     await this.ensureConnected().catch(() => false);
 
-    const serenaToolName = ['find_symbol', 'find_symbols', 'get_symbols_overview'].find((t) =>
+    const serenaToolName = ['find_symbol', 'find_symbols'].find((t) =>
       this.serenaTools.has(t)
     );
 
     if (this.isConnectedToSerena && this.serenaClient && serenaToolName) {
       try {
         const serenaRes = await this.callSerenaTool(serenaToolName, {
-          name_path_pattern: query,
-          name_path: query,
-          relative_path: '',
+          [serenaToolName === 'find_symbol' ? 'name_path_pattern' : 'name_path']: query,
+          relative_path: relativePath ?? '',
         });
 
-        const rawText = (serenaRes.content as any[])?.[0]?.text;
+        const rawText = this.serenaResultText(serenaRes);
         const isExplicitError =
           serenaRes.isError ||
           (typeof rawText === 'string' &&
@@ -414,15 +429,14 @@ export class SerenaAdapter implements IAdapter {
             this.projectActive = false;
           }
           console.warn(`[SerenaAdapter] Serena MCP ${serenaToolName} returned error:`, rawText);
-        } else if (rawText) {
-          truncated = rawText.length > 200_000;
-          symbols = this.mapSerenaSymbols(rawText, query, kindFilter);
-          source = 'serena-mcp';
-          this.projectActive = true;
-          if (truncated) {
-            queryComplete = false;
-            queryError = 'Serena symbol response exceeded 200k characters and may be truncated.';
-          }
+        } else {
+          const parsed = this.parseSerenaSymbols(rawText, kindFilter);
+          truncated = parsed.shortened || rawText.length > 200_000;
+          queryComplete = parsed.complete && !truncated;
+          queryError = parsed.error ?? (truncated ? 'Serena symbol response exceeded the supported response size.' : undefined);
+          symbols = parsed.items;
+          if (parsed.complete || parsed.items.length > 0) source = 'serena-mcp';
+          if (parsed.complete) this.projectActive = true;
         }
       } catch (err) {
         queryComplete = false;
@@ -433,6 +447,10 @@ export class SerenaAdapter implements IAdapter {
 
     if (symbols.length === 0 && source === 'serena-adapter-fallback') {
       symbols = await this.scanSymbolsLocally(query, kindFilter);
+      if (relativePath) {
+        const scopedPath = relativePath.replace(/\\/g, '/');
+        symbols = symbols.filter(s => s.file.replace(/\\/g, '/') === scopedPath);
+      }
     }
 
     const { uniqueTypeMatch, typeMatchCount } = computeTypeMatchStats(symbols, query);
@@ -462,7 +480,7 @@ export class SerenaAdapter implements IAdapter {
       queryComplete,
       queryError,
       truncated,
-      uniqueTypeMatch,
+      uniqueTypeMatch: queryComplete && !truncated && uniqueTypeMatch,
       typeMatchCount,
     };
 
@@ -481,7 +499,7 @@ export class SerenaAdapter implements IAdapter {
   }
 
   async findReferencesDetailed(symbolName: string, relativePath?: string): Promise<FindReferencesResult> {
-    const cacheKey = `serena_refs_${symbolName}_${relativePath || 'auto'}_${this.config.workspaceRoot}`;
+    const cacheKey = `serena_refs_v2_${JSON.stringify([symbolName, relativePath, this.config.workspaceRoot])}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<FindReferencesResult>(cacheKey, fingerprint);
@@ -492,6 +510,11 @@ export class SerenaAdapter implements IAdapter {
     let queryComplete = true;
     let queryError: string | undefined;
     let truncated = false;
+    let resolution: NonNullable<FindReferencesResult['resolution']> = 'unavailable';
+    let candidates: CodeSymbol[] | undefined;
+    let candidateCount: number | undefined;
+    let target: FindReferencesResult['target'];
+    let allowFallback = true;
 
     await this.ensureConnected().catch(() => false);
 
@@ -504,64 +527,83 @@ export class SerenaAdapter implements IAdapter {
         let targetRelPath = relativePath;
         let targetNamePath = symbolName;
 
-        // Serena's find_referencing_symbols requires relative_path.
-        // If not supplied, resolve symbol definition first to determine defining file & name_path.
-        if (!targetRelPath) {
-          const found = await this.findSymbols(symbolName);
-          const matched = found.find((s) => s.name === symbolName) || found[0];
-          if (matched?.file) {
-            targetRelPath = matched.file;
-            if (matched.containerName) {
-              targetNamePath = `${matched.containerName}/${matched.name}`;
+        // A file plus an explicit name path can be passed directly to upstream's
+        // unique resolver. A simple name must first be resolved without picking a winner.
+        if (!targetRelPath || !/[\/\[]/.test(symbolName)) {
+          const found = await this.findSymbolsDetailed(symbolName, undefined, relativePath);
+          candidateCount = found.symbols.length;
+          candidates = found.symbols.slice(0, 20);
+          if (!found.queryComplete || found.truncated || found.source !== 'serena-mcp') {
+            resolution = 'incomplete';
+            queryComplete = false;
+            queryError = found.queryError ?? 'Symbol identity could not be resolved by a complete semantic query.';
+            truncated = found.truncated;
+          } else if (found.symbols.length !== 1) {
+            resolution = found.symbols.length === 0 ? 'not-found' : 'ambiguous';
+            queryComplete = false;
+            queryError = `Symbol identity is ${resolution}: ${found.symbols.length} candidates. Supply a full namePath and relativePath.`;
+            source = 'serena-mcp';
+            allowFallback = false;
+          } else {
+            const matched = found.symbols[0];
+            if (matched.file && matched.namePath) {
+              targetRelPath = matched.file;
+              targetNamePath = matched.namePath;
+              resolution = 'resolved';
+            } else {
+              resolution = 'incomplete';
+              queryComplete = false;
+              queryError = 'The candidate does not include an exact upstream namePath and defining file.';
             }
           }
+        } else {
+          resolution = 'resolved';
         }
 
-        if (targetRelPath) {
+        if (resolution === 'resolved' && targetRelPath) {
+          target = { namePath: targetNamePath.replace(/^\//, ''), relativePath: targetRelPath };
           const serenaRes = await this.callSerenaTool(refToolName, {
-            name_path: targetNamePath,
+            name_path: `/${target.namePath}`,
             relative_path: targetRelPath,
           });
 
-          const rawText = (serenaRes.content as any[])?.[0]?.text;
+          const rawText = this.serenaResultText(serenaRes);
           const isExplicitError =
             serenaRes.isError ||
             (typeof rawText === 'string' &&
               (rawText.startsWith('Error:') || rawText.includes('没有激活项目') || rawText.includes('No active project')));
 
           if (isExplicitError) {
+            resolution = 'incomplete';
             queryComplete = false;
             queryError = typeof rawText === 'string' ? rawText : 'Serena MCP returned isError';
             if (typeof rawText === 'string' && (rawText.includes('没有激活项目') || rawText.includes('No active project'))) {
               this.projectActive = false;
             }
             console.warn(`[SerenaAdapter] Serena MCP ${refToolName} returned error:`, rawText);
-          } else if (rawText) {
-            truncated = rawText.length > 200_000;
-            refs = this.mapSerenaReferences(rawText, symbolName);
-            source = 'serena-mcp';
-            this.projectActive = true;
-            if (truncated) {
-              queryComplete = false;
-              queryError = 'Serena reference response exceeded 200k characters and may be truncated.';
-            }
+          } else {
+            const parsed = this.parseSerenaReferences(rawText, symbolName);
+            truncated = parsed.shortened || rawText.length > 200_000;
+            refs = parsed.items;
+            queryComplete = parsed.complete && !truncated;
+            queryError = parsed.error ?? (truncated ? 'Serena reference response exceeded the supported response size.' : undefined);
+            if (parsed.complete || parsed.items.length > 0) source = 'serena-mcp';
+            if (parsed.complete) this.projectActive = true;
+            if (!queryComplete) resolution = 'incomplete';
+            allowFallback = !parsed.complete && parsed.items.length === 0;
           }
-        } else {
-          queryComplete = false;
-          queryError = `Could not determine relative_path for symbol '${symbolName}'`;
-          console.warn(
-            `[SerenaAdapter] Could not determine relative_path for symbol '${symbolName}', skipping Serena upstream and falling back to local scanner.`
-          );
         }
       } catch (err) {
+        resolution = 'incomplete';
         queryComplete = false;
         queryError = err instanceof Error ? err.message : String(err);
         console.warn('[SerenaAdapter] Serena MCP call failed, falling back to local reference scanner:', err);
       }
     }
 
-    if (refs.length === 0 && source === 'serena-adapter-fallback') {
-      refs = await this.scanReferencesLocally(symbolName);
+    if (refs.length === 0 && source === 'serena-adapter-fallback' && allowFallback) {
+      const displayName = symbolName.split('/').pop()!.replace(/\[\d+\]$/, '');
+      refs = await this.scanReferencesLocally(displayName);
     }
 
     const analysisCompleteness: FindReferencesResult['analysisCompleteness'] = !queryComplete
@@ -592,6 +634,11 @@ export class SerenaAdapter implements IAdapter {
       queryComplete,
       queryError,
       truncated,
+      resolution,
+      candidates,
+      candidateCount,
+      candidatesTruncated: candidateCount === undefined ? undefined : candidateCount > (candidates?.length ?? 0),
+      target,
     };
 
     if (queryComplete) {
@@ -600,192 +647,130 @@ export class SerenaAdapter implements IAdapter {
     return result;
   }
 
-  /**
-   * Maps Serena MCP response formats to WinCode CodeSymbol schema
-   */
-  public mapSerenaSymbols(rawText: string, query: string, kindFilter?: string): CodeSymbol[] {
-    const symbols: CodeSymbol[] = [];
-    try {
-      const parsed = JSON.parse(rawText);
-      const rawList: any[] = [];
-
-      if (Array.isArray(parsed)) {
-        rawList.push(...parsed);
-      } else if (parsed && typeof parsed === 'object') {
-        if (Array.isArray(parsed.symbols)) {
-          rawList.push(...parsed.symbols);
-        } else {
-          // Support grouped structures like { "Class": [...], "Method": [...] }
-          for (const val of Object.values(parsed)) {
-            if (Array.isArray(val)) {
-              rawList.push(...val);
-            } else if (val && typeof val === 'object') {
-              rawList.push(val);
-            }
-          }
-        }
-      }
-
-      for (const item of rawList) {
-        if (!item || typeof item !== 'object') continue;
-
-        // Parse name & containerName from item.name_path or item.name
-        let symbolName = item.name;
-        let containerName = item.containerName;
-
-        if (!symbolName && item.name_path) {
-          const parts = String(item.name_path).split('/');
-          const rawName = parts.pop() || '';
-          symbolName = rawName.replace(/\[\d+\]$/, '');
-          if (parts.length > 0) {
-            containerName = parts.join('/');
-          }
-        }
-        symbolName = symbolName || query;
-
-        // Parse file / relative_path
-        const file =
-          item.relative_path ||
-          item.file ||
-          item.path ||
-          item.location?.uri ||
-          item.location?.relative_path ||
-          '';
-
-        // Parse line / body_location
-        const line =
-          item.body_location?.start_line ||
-          item.line ||
-          item.location?.range?.start?.line ||
-          item.body_location?.start ||
-          1;
-
-        // Parse kind
-        const kind = (item.kind || 'class').toLowerCase();
-
-        // Parse signature / info
-        const signature =
-          item.signature ||
-          item.preview ||
-          (typeof item.info === 'string' ? item.info : item.info?.description) ||
-          undefined;
-
-        symbols.push({
-          name: symbolName,
-          kind: kind as any,
-          file,
-          line: typeof line === 'number' ? line : parseInt(String(line), 10) || 1,
-          signature,
-          containerName,
-        });
-      }
-    } catch {
-      // If plaintext output from Serena, parse line by line
-      const lines = rawText.split(/\r?\n/);
-      for (const l of lines) {
-        const match = l.match(/(?:Symbol|Function|Class|Method):\s*([A-Za-z0-9_]+)\s+in\s+([^\s:]+):(\d+)/i);
-        if (match) {
-          symbols.push({
-            name: match[1],
-            kind: 'class',
-            file: match[2],
-            line: parseInt(match[3], 10),
-            signature: l.trim(),
-          });
-        }
-      }
-    }
-
-    if (kindFilter) {
-      return symbols.filter((s) => s.kind.toLowerCase() === kindFilter.toLowerCase());
-    }
-    return symbols;
+  private serenaResultText(result: Awaited<ReturnType<Client['callTool']>>): string {
+    if (result.structuredContent !== undefined) return JSON.stringify(result.structuredContent);
+    return Array.isArray(result.content)
+      ? result.content.filter(block => block.type === 'text').map(block => (block as { text: string }).text).join('\n')
+      : '';
   }
 
-  /**
-   * Maps Serena MCP response formats to WinCode SymbolReference schema
-   */
-  public mapSerenaReferences(rawText: string, symbolName: string): SymbolReference[] {
-    const refs: SymbolReference[] = [];
+  private parsePayload(rawText: string): { value?: unknown; shortened: boolean; error?: string } {
+    const shortened = /^\s*(?:The answer is too long|Shortened result:|Matched \d+>max_matches|References without surrounding lines:|Reference counts per file:|Found \d+ references\.)/i.test(rawText);
+    if (shortened) return { shortened: true, error: 'Serena returned a shortened response; refine the query.' };
     try {
-      const parsed = JSON.parse(rawText);
-
-      const collectRefs = (node: any, currentPath = '') => {
-        if (!node) return;
-
-        if (Array.isArray(node)) {
-          for (const item of node) {
-            collectRefs(item, currentPath);
-          }
-          return;
-        }
-
-        if (typeof node === 'object') {
-          // Detect if this object itself represents a reference leaf node
-          const hasRefSignal =
-            node.content_around_reference !== undefined ||
-            node.body_location !== undefined ||
-            node.reference_line !== undefined ||
-            node.snippet !== undefined ||
-            node.line_content !== undefined ||
-            (node.preview !== undefined && (node.file || node.relative_path || currentPath));
-
-          if (hasRefSignal) {
-            const file = node.relative_path || node.file || node.path || currentPath || '';
-            const line =
-              node.reference_line ||
-              node.body_location?.start_line ||
-              node.line ||
-              node.location?.range?.start?.line ||
-              1;
-            const preview =
-              node.content_around_reference ||
-              node.preview ||
-              node.snippet ||
-              node.line_content ||
-              (node.name_path ? `Reference in ${node.name_path}` : '');
-
-            refs.push({
-              symbolName,
-              file,
-              line: typeof line === 'number' ? line : parseInt(String(line), 10) || 1,
-              preview: String(preview).trim(),
-            });
-            return;
-          }
-
-          if (Array.isArray(node.references)) {
-            collectRefs(node.references, currentPath);
-            return;
-          }
-
-          for (const [key, value] of Object.entries(node)) {
-            // Check if key is a file path (has extension or path separator)
-            const isPathLike =
-              !currentPath && (key.includes('/') || key.includes('\\') || /\.[a-zA-Z0-9]+$/i.test(key));
-            const nextPath = isPathLike ? key : currentPath;
-            collectRefs(value, nextPath);
-          }
-        }
-      };
-
-      collectRefs(parsed);
+      return { value: JSON.parse(rawText), shortened: false };
     } catch {
-      // Plain text fallback parsing
-      const lines = rawText.split(/\r?\n/);
-      for (const l of lines) {
-        const match = l.match(/([^\s:]+):(\d+):\s*(.*)/);
-        if (match) {
-          refs.push({
-            symbolName,
-            file: match[1],
-            line: parseInt(match[2], 10),
-            preview: match[3].trim(),
-          });
+      return { shortened: false, error: 'Serena response is not valid JSON.' };
+    }
+  }
+
+  private isRecord(value: unknown): value is Record<string, any> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  /** LSP coordinates are zero-based; legacy plain line fields are already one-based. */
+  private oneBasedLine(zeroBased: unknown, legacy?: unknown): number | undefined {
+    if (typeof zeroBased === 'number' && Number.isInteger(zeroBased) && zeroBased >= 0) return zeroBased + 1;
+    if (zeroBased !== undefined && zeroBased !== null) return undefined;
+    if (typeof legacy === 'number' && Number.isInteger(legacy) && legacy >= 1) return legacy;
+    return undefined;
+  }
+
+  private parseSerenaSymbols(rawText: string, kindFilter?: string): ParsedSerenaResult<CodeSymbol> {
+    const payload = this.parsePayload(rawText);
+    if (payload.error) return { items: [], complete: false, shortened: payload.shortened, error: payload.error };
+    const value = payload.value;
+    const rawList = Array.isArray(value) ? value :
+      this.isRecord(value) && Array.isArray(value.symbols) && Object.keys(value).length === 1 ? value.symbols : undefined;
+    if (!rawList) return { items: [], complete: false, shortened: false, error: 'Unsupported Serena symbol response structure.' };
+    const items: CodeSymbol[] = [];
+    let invalid = 0;
+    for (const item of rawList) {
+      if (!this.isRecord(item)) { invalid++; continue; }
+      const namePath = typeof item.name_path === 'string' && item.name_path.trim() ? item.name_path : undefined;
+      const parts = namePath?.split('/');
+      const leafName = parts?.pop()?.replace(/\[\d+\]$/, '');
+      const name = typeof item.name === 'string' && item.name ? item.name : leafName;
+      const file = item.relative_path ?? item.file ?? item.path;
+      const line = this.oneBasedLine(item.body_location?.start_line ?? item.location?.range?.start?.line, item.line);
+      const kind = typeof item.kind === 'string' ? item.kind.toLowerCase() : undefined;
+      if (!name || typeof file !== 'string' || !file || line === undefined || !kind) { invalid++; continue; }
+      const signature = item.signature ?? item.preview ?? (typeof item.info === 'string' ? item.info : item.info?.description);
+      items.push({
+        name, namePath, file, line, kind: kind as CodeSymbol['kind'],
+        containerName: parts?.length ? parts.join('/') : typeof item.containerName === 'string' ? item.containerName : undefined,
+        signature: typeof signature === 'string' ? signature : undefined,
+      });
+    }
+    return {
+      items: kindFilter ? items.filter(s => s.kind === kindFilter.toLowerCase()) : items,
+      complete: invalid === 0, shortened: false,
+      error: invalid ? 'Serena symbol response contains ' + invalid + ' invalid entries.' : undefined,
+    };
+  }
+
+  /** Compatibility wrapper. Detailed queries also inspect the parser's completeness. */
+  public mapSerenaSymbols(rawText: string, _query: string, kindFilter?: string): CodeSymbol[] {
+    return this.parseSerenaSymbols(rawText, kindFilter).items;
+  }
+
+  private parseSerenaReferences(rawText: string, symbolName: string): ParsedSerenaResult<SymbolReference> {
+    const payload = this.parsePayload(rawText);
+    if (payload.error) return { items: [], complete: false, shortened: payload.shortened, error: payload.error };
+    const items: SymbolReference[] = [];
+    let invalid = 0;
+    const visit = (node: unknown, currentPath = '', level = 0): void => {
+      if (Array.isArray(node)) {
+        for (const item of node) visit(item, currentPath, level + 1);
+        return;
+      }
+      if (!this.isRecord(node)) { invalid++; return; }
+      const keys = Object.keys(node);
+      // The official grouped empty reference result is {}, and ungrouped is [].
+      if (keys.length === 0) {
+        if (level > 0) invalid++;
+        return;
+      }
+      const leaf = ['body_location', 'reference_line', 'content_around_reference', 'line', 'snippet', 'line_content', 'preview']
+        .some(key => key in node);
+      if (leaf) {
+        const file = node.relative_path ?? node.file ?? node.path ?? currentPath;
+        const hasReferenceLine = node.reference_line !== undefined && node.reference_line !== null;
+        const zeroLine = hasReferenceLine ? node.reference_line : node.body_location?.start_line ?? node.location?.range?.start?.line;
+        const line = this.oneBasedLine(zeroLine, node.line);
+        const preview = node.content_around_reference ?? node.preview ?? node.snippet ?? node.line_content ??
+          (typeof node.name_path === 'string' ? 'Reference in ' + node.name_path : undefined);
+        if (typeof file !== 'string' || !file || line === undefined || typeof preview !== 'string') { invalid++; return; }
+        items.push({
+          symbolName, file, line, preview: preview.trim(),
+          lineKind: hasReferenceLine || node.line !== undefined ? 'reference' : 'containing-symbol',
+        });
+        return;
+      }
+      if (keys.length === 1 && Array.isArray(node.references)) {
+        visit(node.references, currentPath, level + 1);
+        return;
+      }
+      for (const [key, child] of Object.entries(node)) {
+        if (!currentPath && (key.includes('/') || key.includes('\\') || /\.[a-zA-Z0-9]+$/.test(key))) {
+          visit(child, key, level + 1);
+        } else if (currentPath && /^[A-Z][a-zA-Z]+$/.test(key)) {
+          visit(child, currentPath, level + 1);
+        } else {
+          invalid++;
         }
       }
-    }
-    return refs;
+    };
+    visit(payload.value);
+    return {
+      items, complete: invalid === 0, shortened: false,
+      error: invalid ? 'Serena reference response contains ' + invalid + ' invalid entries or groups.' : undefined,
+    };
+  }
+
+  /** Compatibility wrapper. Empty items alone do not establish a complete query. */
+  public mapSerenaReferences(rawText: string, symbolName: string): SymbolReference[] {
+    return this.parseSerenaReferences(rawText, symbolName).items;
   }
 
   /**

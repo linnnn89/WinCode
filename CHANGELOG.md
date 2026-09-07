@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4
+
+- Preserve Serena full name paths and overload identity; reject ambiguous or incomplete automatic reference targets. Limit returned ambiguity candidates while retaining the count.
+- Distinguish valid empty results from shortened, malformed or unsupported payloads; use supported symbol search parameters and do not substitute file overview for global search.
+- Convert upstream zero-based locations to one-based coordinates and label containing-symbol reference locations. Impact analysis forwards exact identity only after complete unique resolution.
+
 ## 0.9.3
 
 - Explicit line-range requests use the available response budget instead of a fixed 4000-character source cap. Final serialization recomputes complete-line coverage, partial tail lines and omission reasons.

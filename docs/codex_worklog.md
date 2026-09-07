@@ -318,3 +318,12 @@
 - 报告：test-tmp/r3/baseline-1788823132218.json、acceptance-1788823577798.json、regression-final.log、stdio.log；源码只读，哈希和实例身份记录于报告。仅知文件时仍返回文件头，不能替代已知方法时显式传 symbol；未知文件的当前例子首调找到目标，不能推论所有未知任务成功。
 - GUI 与归因：复用 I:/New-tarven/work/TAVERN-TEST/profile，经既有脚本 --no-restore 构建 0 警告/0 错误并启动本轮 PID 24964，启动回执核对专用数据/配置/日志路径。当前旧版 WinCode 按该 PID/HWND 查询 NavCharacters，完整遍历 68 节点唯一命中，名称“角色”、isEnabled=true，说明应用可访问性修复有效。后台 PrintWindow 图像几乎空白，不能用于视觉验收；computer use 本轮未调用，不能将空图归为其窗口归属问题。
 - 宿主限制：用户表示无法重连当前 Codex WinCode MCP；保留真实宿主新版验收待办，继续以新启动生产 MCP 进程完成可执行复测与已授权 PR 流程。没有终止旧 MCP 或修改全局配置，不能将本版源代码/stdio 成功写成旧连接已升级。
+- 合并：PR #16 CodeQL 全部成功后锁定 8bda24d 合并，远端确认 MERGED，main=0351111772a3265418d04bd3d0e35116644f5b0a。
+
+## 2026-09-08（北京时间）— R4 Serena 身份与解析 0.9.4
+
+- 从 R3 合并 main 建立 codex/r4-serena-correctness，整合独立 worktree 的两个生产文件和专项测试。原始 namePath/容器/重载索引完整保留；简单名称先完整唯一语义定位，歧义或查询不完整不再查询第一项引用。完整身份使用前导 / 的精确模式，防止同后缀重定向；ImpactAnalyzer 透传身份且歧义不发引用查询。
+- parser 区分合法空 []/{}、未知结构、损坏 JSON、上游缩略输出；部分合法条目不能变成完整唯一结果。find_symbol 使用官方 name_path_pattern，不拿需要具体文件的 overview 替代全局搜索。上游零基坐标改为一基，引用的声明起点另标 lineKind=containing-symbol；现有四个测试坐标断言按真实转换规则对齐。
+- 反证修补：同一文件内两个容器/重载按身份计数，不能按文件去重为唯一；歧义候选上限 20，保留 candidateCount/candidatesTruncated，41 个候选也不选择首项。源码片段包含摘要字样不误判为上游摘要。
+- 验证：新增专项 27 项（子智能体 26 项加主智能体候选上限测试）；typecheck/build、默认完整回归 214 项（213 pass、1 skip、0 fail）通过；生产新 stdio 契约/正文与 TavernDesk 8 场景再次通过。报告 test-tmp/r4/；未安装/启动真实 Serena LSP，受控响应/现有 mock 握手不能替代真实语言服务器验收。
+- 用户新增要求：另开 gpt-6-astra/xhigh 专用只读子代理诊断旧版本连接。初步对照：该新代理实际 Codex MCP hello 已为 0.9.4 且 build.status=verified，主代理同时仍为 0.9.0、旧启动时间不变；配置/进程根因继续核对。新代理连接成功不代表父连接已重启。

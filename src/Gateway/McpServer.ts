@@ -9,6 +9,8 @@ import {
 import { ToolRouter } from '../Core/ToolRouter.js';
 import { WINCODE_TOOLS } from './Protocol.js';
 import { WINCODE_VERSION } from '../Core/Config.js';
+import { AbortError } from '../Core/ResourceManager.js';
+import { UI_INSPECT_DEFAULTS } from '../Core/UiContracts.js';
 
 export class WinCodeMcpServer {
   private server: Server;
@@ -39,8 +41,9 @@ export class WinCodeMcpServer {
     });
 
     // Call tool
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: args = {} } = request.params;
+      const signal = extra?.signal;
 
       if (this.router.isShuttingDown) {
         return {
@@ -64,11 +67,33 @@ export class WinCodeMcpServer {
         };
       }
 
+      if (signal?.aborted) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  status: 'failed',
+                  reason: 'cancelled',
+                  provider: 'wincode',
+                  recoverable: true,
+                  message: 'Tool call was cancelled.',
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const isSwitchOp = name === 'workspace_open' || name === 'wincode_workspace_open';
       let acquired = false;
       try {
         if (!isSwitchOp) {
-          await this.router.acquireRequestSlot();
+          await this.router.acquireRequestSlot(signal);
           acquired = true;
         }
         switch (name) {
@@ -465,13 +490,16 @@ export class WinCodeMcpServer {
               maxNodes = parsed;
             }
 
-            const result = await this.router.inspectUi({
-              pid,
-              hwnd,
-              capture,
-              maxDepth,
-              maxNodes,
-            });
+            const result = await this.router.inspectUi(
+              {
+                pid,
+                hwnd,
+                capture,
+                maxDepth,
+                maxNodes,
+              },
+              signal
+            );
 
             // Extract image data for MCP image block; omit base64 payload from text JSON
             const imageBase64 = result.annotatedPngBase64 || result.screenshotPngBase64;
@@ -485,6 +513,18 @@ export class WinCodeMcpServer {
               ...cleanResult,
               hasScreenshot: Boolean(imageBase64),
             };
+            const text = JSON.stringify(textPayload);
+            if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES) {
+              // A malformed/custom helper must not bypass the final MCP budget.
+              return {
+                content: [{ type: 'text' as const, text: JSON.stringify({
+                  success: false, errorCode: 'PAYLOAD_TOO_LARGE',
+                  errorMessage: 'UI text response exceeds 128 KiB.',
+                  imageOmitted: true, hasScreenshot: false,
+                }) }],
+                isError: true,
+              };
+            }
 
             const content: Array<
               | { type: 'text'; text: string }
@@ -492,7 +532,7 @@ export class WinCodeMcpServer {
             > = [
               {
                 type: 'text',
-                text: JSON.stringify(textPayload, null, 2),
+                text,
               },
             ];
 
@@ -514,6 +554,27 @@ export class WinCodeMcpServer {
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
       } catch (err: any) {
+        if (err instanceof AbortError || err?.name === 'AbortError' || signal?.aborted) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    schemaVersion: '1.0',
+                    protocolVersion: '1.0',
+                    success: false,
+                    errorCode: 'CANCELLED',
+                    errorMessage: 'Tool call was cancelled.',
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+            isError: true,
+          };
+        }
         return {
           content: [
             {

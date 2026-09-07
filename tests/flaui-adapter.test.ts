@@ -153,7 +153,7 @@ describe('FlaUiAdapter Unit & Lifecycle Suite', () => {
     assert.ok((res.totalNodes ?? 0) <= 8, `Total nodes ${res.totalNodes} should be <= 8`);
   });
 
-  it('7. timeout aborts helper, returns TIMEOUT, and target WPF fixture remains alive', async () => {
+  it('7. timeout aborts helper, returns TIMEOUT, target WPF remains alive, and next inspect succeeds', async () => {
     // Call with an impractically short timeout of 1ms
     const res = await adapter.inspect({
       requestId: 'req-short-timeout',
@@ -164,6 +164,7 @@ describe('FlaUiAdapter Unit & Lifecycle Suite', () => {
 
     assert.strictEqual(res.success, false);
     assert.strictEqual(res.errorCode, UiErrorCodes.TIMEOUT);
+    assert.strictEqual(adapter.isRunning, false, 'Helper process must not be running after timeout');
 
     // Target process must remain running!
     let targetAlive = false;
@@ -174,6 +175,16 @@ describe('FlaUiAdapter Unit & Lifecycle Suite', () => {
       targetAlive = false;
     }
     assert.strictEqual(targetAlive, true, 'Target WPF application must remain alive after helper timeout');
+
+    // Subsequent inspect must succeed promptly without collision or leftover helper
+    const nextRes = await adapter.inspect({
+      requestId: 'req-after-timeout',
+      pid: wpfPid,
+      hwnd: wpfHwnd,
+      maxDepth: 2,
+    });
+    assert.strictEqual(nextRes.success, true);
+    assert.strictEqual(adapter.isRunning, false);
   });
 
   it('8. concurrent inspect calls are serialized safely by mutex', async () => {
@@ -210,10 +221,9 @@ describe('FlaUiAdapter Unit & Lifecycle Suite', () => {
     assert.strictEqual(res.errorCode, UiErrorCodes.SHUTDOWN);
   });
 
-  it('10. AbortSignal cancellation returns CANCELLED and aborts helper promptly', async () => {
+  it('10. AbortSignal cancellation returns CANCELLED, aborts helper promptly, and next inspect succeeds', async () => {
     const ac = new AbortController();
-    setTimeout(() => ac.abort(), 10);
-    const res = await adapter.inspect(
+    const pending = adapter.inspect(
       {
         requestId: 'req-cancelled',
         pid: wpfPid,
@@ -223,7 +233,105 @@ describe('FlaUiAdapter Unit & Lifecycle Suite', () => {
       ac.signal
     );
 
+    // Obtain the real spawned helper PID before cancellation; never skip this assertion.
+    const deadline = Date.now() + 2000;
+    while (!(adapter as any).activeProcess?.pid && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    const helperPid = (adapter as any).activeProcess?.pid;
+    assert.ok(helperPid, 'Expected an actual helper PID');
+    ac.abort();
+    const res = await pending;
+    assert.throws(() => process.kill(helperPid, 0), (err: any) => err.code === 'ESRCH');
+
     assert.strictEqual(res.success, false);
     assert.strictEqual(res.errorCode, UiErrorCodes.CANCELLED);
+    assert.strictEqual(adapter.isRunning, false, 'Helper process must not linger after cancellation');
+
+    // Subsequent inspect must succeed without leftover helper
+    const nextRes = await adapter.inspect({
+      requestId: 'req-after-cancelled',
+      pid: wpfPid,
+      hwnd: wpfHwnd,
+      maxDepth: 2,
+    });
+    assert.strictEqual(nextRes.success, true);
+    assert.strictEqual(adapter.isRunning, false);
+  });
+
+  it('11. Cancelling queued request immediately aborts and does not block the third request', async () => {
+    // p1: active request
+    const p1 = adapter.inspect({
+      requestId: 'req-queue-1',
+      pid: wpfPid,
+      hwnd: wpfHwnd,
+      maxDepth: 3,
+    });
+
+    // p2: queued request with abort signal
+    const ac2 = new AbortController();
+    const p2 = adapter.inspect(
+      {
+        requestId: 'req-queue-2',
+        pid: wpfPid,
+        hwnd: wpfHwnd,
+        maxDepth: 3,
+      },
+      ac2.signal
+    );
+
+    // p3: normal queued request
+    const p3 = adapter.inspect({
+      requestId: 'req-queue-3',
+      pid: wpfPid,
+      hwnd: wpfHwnd,
+      maxDepth: 2,
+    });
+
+    // Abort p2 while it is waiting in queue
+    ac2.abort();
+
+    const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+    assert.strictEqual(r1.success, true, 'Task 1 must succeed');
+    assert.strictEqual(r2.success, false, 'Task 2 must be cancelled');
+    assert.strictEqual(r2.errorCode, UiErrorCodes.CANCELLED);
+    assert.strictEqual(r3.success, true, 'Task 3 must succeed after task 2 was cancelled in queue');
+    assert.strictEqual(adapter.isRunning, false);
+  });
+
+  it('12. enabled=false rejects inspect immediately at entry without helper spawn', async () => {
+    const disabledConfig = getDefaultConfig(root);
+    disabledConfig.adapters.flaui.enabled = false;
+    const disabledAdapter = new FlaUiAdapter(disabledConfig);
+
+    const res = await disabledAdapter.inspect({
+      requestId: 'req-disabled',
+      pid: wpfPid,
+      hwnd: wpfHwnd,
+    });
+
+    assert.strictEqual(res.success, false);
+    assert.strictEqual(res.errorCode, UiErrorCodes.HOST_UNAVAILABLE);
+    assert.ok(res.errorMessage?.includes('disabled'));
+    assert.strictEqual(disabledAdapter.isRunning, false);
+  });
+
+  it('13. explicit customHostPath error clearly reports configured path not found', async () => {
+    const badConfig = getDefaultConfig(root);
+    badConfig.adapters.flaui.customHostPath = 'C:\\non_existent_tools\\WinCode.UIA.Host.exe';
+    const badAdapter = new FlaUiAdapter(badConfig);
+
+    const health = await badAdapter.checkHealth(1000);
+    assert.strictEqual(health.available, false);
+    assert.ok(health.details?.includes('Configured customHostPath'));
+
+    const res = await badAdapter.inspect({
+      requestId: 'req-bad-path',
+      pid: wpfPid,
+      hwnd: wpfHwnd,
+    });
+    assert.strictEqual(res.success, false);
+    assert.strictEqual(res.errorCode, UiErrorCodes.HOST_UNAVAILABLE);
+    assert.ok(res.errorMessage?.includes('Configured customHostPath'));
   });
 });

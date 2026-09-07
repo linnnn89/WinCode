@@ -12,7 +12,7 @@ import { ImpactAnalyzer } from '../CompositeTools/ImpactAnalyzer.js';
 import { RefactorAssistant } from '../CompositeTools/RefactorAssistant.js';
 import { ProjectDiagnostics } from '../CompositeTools/ProjectDiagnostics.js';
 import { ExtensionManager } from '../Extensions/ExtensionManager.js';
-import { Mutex, ResourceManager } from './ResourceManager.js';
+import { Mutex, ResourceManager, AbortError } from './ResourceManager.js';
 import { SessionManager, WorkspaceSession } from './SessionManager.js';
 import { WorkspaceWatch } from './WorkspaceWatch.js';
 import { AdapterLastError } from '../Adapters/IAdapter.js';
@@ -112,10 +112,29 @@ export class ToolRouter {
     return this.switchingPromise !== null;
   }
 
-  async acquireRequestSlot(): Promise<void> {
+  async acquireRequestSlot(signal?: AbortSignal): Promise<void> {
     if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
+    if (signal?.aborted) throw new AbortError('The tool call was cancelled.');
     while (this.switchingPromise) {
-      await this.switchingPromise;
+      if (!signal) {
+        await this.switchingPromise;
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => reject(new AbortError('The tool call was cancelled.'));
+          signal.addEventListener('abort', onAbort, { once: true });
+          this.switchingPromise!.then(
+            () => {
+              signal.removeEventListener('abort', onAbort);
+              resolve();
+            },
+            () => {
+              signal.removeEventListener('abort', onAbort);
+              resolve();
+            }
+          );
+        });
+      }
+      if (signal?.aborted) throw new AbortError('The tool call was cancelled.');
     }
     if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
     this.beginRequest();
@@ -311,8 +330,8 @@ export class ToolRouter {
     return items[0];
   }
 
-  async inspectUi(request: UiInspectRequest): Promise<UiInspectResult> {
-    return this.flaui.inspect(request);
+  async inspectUi(request: UiInspectRequest, signal?: AbortSignal): Promise<UiInspectResult> {
+    return this.flaui.inspect(request, signal);
   }
 
   async dispose(): Promise<void> {

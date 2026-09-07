@@ -46,7 +46,7 @@ export interface UiInspectRequest {
   timeoutMs?: number;
 }
 
-export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout';
+export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout' | 'budgetLimit';
 
 export interface UiInspectResult {
   schemaVersion: string;
@@ -59,6 +59,11 @@ export interface UiInspectResult {
   hwnd?: string;
   captureOrigin?: UiRect;
   captureMethod?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  imageScale?: number;
+  imageOmitted?: boolean;
+  imageOmittedReason?: string;
   tree?: UiNode;
   totalNodes?: number;
   maxDepthReached?: number;
@@ -97,6 +102,8 @@ export const UI_INSPECT_DEFAULTS = {
   TIMEOUT_MS: 10_000,
   MAX_DEPTH: 6,
   MAX_NODES: 300,
-  MAX_JSON_BYTES: 8 * 1024 * 1024,
+  MAX_TEXT_JSON_BYTES: 128 * 1024,
   MAX_IMAGE_BYTES: 2 * 1024 * 1024,
+  MAX_HOST_TRANSPORT_BYTES: 6 * 1024 * 1024,
+  MAX_JSON_BYTES: 6 * 1024 * 1024,
 } as const;

@@ -88,19 +88,68 @@ export async function withTimeout<T>(
   }
 }
 
+export class AbortError extends Error {
+  readonly code = 'ABORT_ERR';
+  constructor(message = 'The operation was aborted') {
+    super(message);
+    this.name = 'AbortError';
+  }
+}
+
 /**
  * Serializes a critical section. Callers queue; there is no OS thread pool.
+ * Supports cancellation via optional AbortSignal during queue wait or execution.
  */
 export class Mutex {
   private tail: Promise<void> = Promise.resolve();
 
-  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.tail.then(fn, fn);
+  runExclusive<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) {
+      return Promise.reject(
+        new AbortError(signal.reason ? String(signal.reason) : 'The operation was aborted')
+      );
+    }
+
+    let onAbort: (() => void) | undefined;
+    let skipped = false;
+
+    const previousTail = this.tail;
+
+    const execute = async (): Promise<T> => {
+      if (onAbort && signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      if (skipped || signal?.aborted) {
+        throw new AbortError(signal?.reason ? String(signal.reason) : 'The operation was aborted');
+      }
+      return fn();
+    };
+
+    const run = previousTail.then(execute, execute);
     this.tail = run.then(
       () => undefined,
       () => undefined
     );
-    return run;
+
+    if (!signal) {
+      return run;
+    }
+
+    const abortPromise = new Promise<T>((_, reject) => {
+      onAbort = () => {
+        skipped = true;
+        reject(
+          new AbortError(signal.reason ? String(signal.reason) : 'The operation was aborted')
+        );
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+
+    return Promise.race([run, abortPromise]).finally(() => {
+      if (onAbort && signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    });
   }
 }
 

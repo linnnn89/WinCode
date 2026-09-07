@@ -202,10 +202,21 @@ public static class Program
         var walker = automation.TreeWalkerFactory.GetControlViewWalker();
         var rootNode = TraverseElement(rootElement, walker, null, 1, context);
 
+        if (rootNode != null)
+        {
+            // Reserve room for the response envelope; annotate only retained nodes.
+            EnforceTreeJsonBudget(rootNode, MaxTextJsonBytes - 8 * 1024, context);
+        }
+
         var captureMode = (request.Capture ?? "none").ToLowerInvariant();
         string? screenshotBase64 = null;
         string? annotatedBase64 = null;
         string? captureMethod = null;
+        int? imageWidth = null;
+        int? imageHeight = null;
+        double? imageScale = null;
+        bool? imageOmitted = null;
+        string? imageOmittedReason = null;
 
         if (captureMode is "original" or "annotated")
         {
@@ -216,13 +227,25 @@ public static class Program
                 captureMethod = capture.Method;
                 if (captureMode == "original")
                 {
-                    screenshotBase64 = BitmapToBase64Png(rawBitmap);
+                    var (b64, w, h, scale, omitted, reason) = ProcessImageWithBudget(rawBitmap);
+                    screenshotBase64 = b64;
+                    imageWidth = w;
+                    imageHeight = h;
+                    imageScale = scale;
+                    imageOmitted = omitted ? true : null;
+                    imageOmittedReason = reason;
                 }
                 else if (captureMode == "annotated")
                 {
                     using var annotatedBitmap = (Bitmap)rawBitmap.Clone();
                     DrawAnnotations(annotatedBitmap, context.CollectedNodes, captureOrigin);
-                    annotatedBase64 = BitmapToBase64Png(annotatedBitmap);
+                    var (b64, w, h, scale, omitted, reason) = ProcessImageWithBudget(annotatedBitmap);
+                    annotatedBase64 = b64;
+                    imageWidth = w;
+                    imageHeight = h;
+                    imageScale = scale;
+                    imageOmitted = omitted ? true : null;
+                    imageOmittedReason = reason;
                 }
             }
         }
@@ -237,6 +260,11 @@ public static class Program
             Hwnd = $"0x{targetHwnd.ToInt64():X}",
             CaptureOrigin = captureOrigin,
             CaptureMethod = captureMethod,
+            ImageWidth = imageWidth,
+            ImageHeight = imageHeight,
+            ImageScale = imageScale,
+            ImageOmitted = imageOmitted,
+            ImageOmittedReason = imageOmittedReason,
             Tree = rootNode,
             TotalNodes = context.TotalCount,
             MaxDepthReached = context.MaxDepthReached,
@@ -529,11 +557,113 @@ public static class Program
         }
     }
 
-    private static string BitmapToBase64Png(Bitmap bmp)
+    private const int MaxImageBytes = 2 * 1024 * 1024; // 2 MiB
+    private const int MaxTextJsonBytes = 128 * 1024;    // 128 KiB
+
+    private static (string? base64, int? width, int? height, double? scale, bool omitted, string? reason) ProcessImageWithBudget(Bitmap originalBitmap)
     {
-        using var ms = new MemoryStream();
-        bmp.Save(ms, ImageFormat.Png);
-        return Convert.ToBase64String(ms.ToArray());
+        double[] scaleFactors = [1.0, 0.75, 0.5, 0.25];
+        foreach (var factor in scaleFactors)
+        {
+            int targetW = Math.Max(1, (int)(originalBitmap.Width * factor));
+            int targetH = Math.Max(1, (int)(originalBitmap.Height * factor));
+
+            using var memoryStream = new MemoryStream();
+            if (Math.Abs(factor - 1.0) < 0.001)
+            {
+                originalBitmap.Save(memoryStream, ImageFormat.Png);
+            }
+            else
+            {
+                using var scaledBmp = new Bitmap(targetW, targetH, PixelFormat.Format32bppArgb);
+                using var g = Graphics.FromImage(scaledBmp);
+                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.DrawImage(originalBitmap, new Rectangle(0, 0, targetW, targetH));
+                scaledBmp.Save(memoryStream, ImageFormat.Png);
+            }
+
+            var bytes = memoryStream.ToArray();
+            if (bytes.Length <= MaxImageBytes)
+            {
+                return (
+                    Convert.ToBase64String(bytes),
+                    targetW,
+                    targetH,
+                    factor,
+                    false,
+                    null
+                );
+            }
+        }
+
+        return (
+            null,
+            originalBitmap.Width,
+            originalBitmap.Height,
+            1.0,
+            true,
+            $"Screenshot PNG size exceeds 2MiB limit even after scaling (original: {originalBitmap.Width}x{originalBitmap.Height})."
+        );
+    }
+
+    private static void EnforceTreeJsonBudget(UiNodeDto root, int maxBytes, TraversalContext context)
+    {
+        bool fieldsTrimmed = LimitNodeText(root);
+        int currentMaxDepth = context.MaxDepthReached;
+        bool trimmed = fieldsTrimmed;
+        while (currentMaxDepth > 1 && JsonSerializer.SerializeToUtf8Bytes(root, JsonOptions).Length > maxBytes)
+        {
+            PruneAtDepth(root, currentMaxDepth);
+            currentMaxDepth--;
+            trimmed = true;
+        }
+        if (trimmed)
+        {
+            context.Truncated = true;
+            context.TruncateReason = "budgetLimit";
+        }
+        context.CollectedNodes.Clear();
+        context.MaxDepthReached = 0;
+        CollectRetained(root, 1, context);
+        context.TotalCount = context.CollectedNodes.Count;
+    }
+
+    private static bool LimitNodeText(UiNodeDto node)
+    {
+        bool trimmed = false;
+        string? Limit(string? text)
+        {
+            if (text == null || text.Length <= 256) return text;
+            trimmed = true;
+            return text[..256];
+        }
+        node.Name = Limit(node.Name);
+        node.AutomationId = Limit(node.AutomationId);
+        node.ClassName = Limit(node.ClassName);
+        node.ControlType = Limit(node.ControlType);
+        foreach (var child in node.Children) trimmed |= LimitNodeText(child);
+        return trimmed;
+    }
+
+    private static void CollectRetained(UiNodeDto node, int depth, TraversalContext context)
+    {
+        context.CollectedNodes.Add(node);
+        context.MaxDepthReached = Math.Max(context.MaxDepthReached, depth);
+        foreach (var child in node.Children) CollectRetained(child, depth + 1, context);
+    }
+
+    private static void PruneAtDepth(UiNodeDto node, int targetDepth, int depth = 1)
+    {
+        if (depth == targetDepth - 1)
+        {
+            node.Children.Clear();
+            return;
+        }
+        foreach (var child in node.Children)
+        {
+            PruneAtDepth(child, targetDepth, depth + 1);
+        }
     }
 
     private static IntPtr ResolveTargetWindow(
@@ -706,6 +836,11 @@ public class InspectResponse
     public string? Hwnd { get; set; }
     public RectDto? CaptureOrigin { get; set; }
     public string? CaptureMethod { get; set; }
+    public int? ImageWidth { get; set; }
+    public int? ImageHeight { get; set; }
+    public double? ImageScale { get; set; }
+    public bool? ImageOmitted { get; set; }
+    public string? ImageOmittedReason { get; set; }
     public UiNodeDto? Tree { get; set; }
     public int? TotalNodes { get; set; }
     public int? MaxDepthReached { get; set; }

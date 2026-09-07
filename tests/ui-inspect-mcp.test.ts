@@ -331,4 +331,126 @@ describe('WinCode MCP UI Inspect Protocol & End-to-End Suite', () => {
     assert.strictEqual(data1.pid, wpfPid);
     assert.strictEqual(data2.pid, wpfPid);
   });
+
+  it('13. real MCP client cancellation propagates signal, aborts helper, and next inspect succeeds', async () => {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 20);
+    let threw = false;
+    try {
+      await client.callTool(
+        {
+          name: 'wincode_ui_inspect',
+          arguments: { pid: wpfPid, capture: 'annotated', maxDepth: 6 },
+        },
+        undefined,
+        { signal: ac.signal }
+      );
+    } catch (err: any) {
+      threw = true;
+      assert.ok(
+        err.message.includes('aborted') || err.message.includes('AbortError'),
+        `Expected abort error, got: ${err.message}`
+      );
+    }
+    assert.strictEqual(threw, true, 'client.callTool with aborted signal must reject');
+
+    // Wait briefly for server cancel notification to reap helper
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual((router.flaui as any).activeProcess, null, 'Helper process must not linger after MCP cancellation');
+
+    // Subsequent normal inspect must succeed without leftover process
+    const nextRes = await client.callTool({
+      name: 'wincode_ui_inspect',
+      arguments: { pid: wpfPid, capture: 'none', maxDepth: 2 },
+    });
+    assert.ok(!nextRes.isError);
+    const nextData = JSON.parse(getContent(nextRes)[0].text!);
+    assert.strictEqual(nextData.success, true);
+  });
+
+  it('14. cross-workspace switch to external project still resolves helper and executes inspect successfully', async () => {
+    const tempWs = path.resolve(root, 'test-tmp/external_wpf_target');
+    await fsPromises.mkdir(tempWs, { recursive: true });
+
+    // Switch workspace to external directory which has NO tools/ directory
+    const switchRes = await client.callTool({
+      name: 'workspace_open',
+      arguments: { path: tempWs },
+    });
+    assert.ok(!switchRes.isError);
+
+    // Now inspect target application from this external workspace
+    const res = await client.callTool({
+      name: 'wincode_ui_inspect',
+      arguments: { pid: wpfPid, capture: 'none', maxDepth: 2 },
+    });
+    assert.ok(!res.isError);
+    const data = JSON.parse(getContent(res)[0].text!);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.pid, wpfPid);
+
+    // Switch back to root workspace
+    await client.callTool({
+      name: 'workspace_open',
+      arguments: { path: root },
+    });
+  });
+
+  it('15. inspect returns image scale and dimension metadata preserving coordinate alignment', async () => {
+    const res = await client.callTool({
+      name: 'wincode_ui_inspect',
+      arguments: { pid: wpfPid, capture: 'original', maxDepth: 2 },
+    });
+    assert.ok(!res.isError);
+    const data = JSON.parse(getContent(res)[0].text!);
+    assert.strictEqual(data.success, true);
+    assert.ok(typeof data.imageWidth === 'number' && data.imageWidth > 0);
+    assert.ok(typeof data.imageHeight === 'number' && data.imageHeight > 0);
+    assert.ok(typeof data.imageScale === 'number' && data.imageScale > 0);
+  });
+
+  it('budget pruning returns bounded text and accurate retained node counts on a real WPF tree', async () => {
+    const exe = path.resolve(root, 'tests/fixtures/wpf-ui-review/bin/Release/net10.0-windows/win-x64/publish/wpf-ui-review.exe');
+    const target = spawn(exe, ['--budget-fixture', '--auto-close=20000'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      const pid = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Budget fixture did not become ready')), 8000);
+        let output = '';
+        target.stdout!.on('data', chunk => {
+          output += chunk.toString();
+          const ready = output.match(/READY\s+(\d+)/);
+          if (ready) { clearTimeout(timer); resolve(Number(ready[1])); }
+        });
+        target.on('error', err => { clearTimeout(timer); reject(err); });
+      });
+      const result = await client.callTool({ name: 'wincode_ui_inspect', arguments: { pid, capture: 'annotated', maxDepth: 20, maxNodes: 1000 } });
+      assert.ok(!result.isError);
+      const text = getContent(result)[0].text!;
+      assert.ok(Buffer.byteLength(text, 'utf8') <= 128 * 1024);
+      const data = JSON.parse(text);
+      assert.equal(data.truncated, true);
+      assert.equal(data.truncateReason, 'budgetLimit');
+      let count = 0;
+      const visit = (node: any) => { count++; assert.ok((node.automationId?.length ?? 0) <= 256); node.children.forEach(visit); };
+      visit(data.tree);
+      assert.equal(data.totalNodes, count);
+      assert.ok(count < 350, 'Oversized tree should actually have been pruned');
+    } finally { await killProcessTree(target); }
+  });
+
+  it('16. disabled flaui adapter rejects MCP call at entry with HOST_UNAVAILABLE', async () => {
+    (router.flaui as any).config.adapters.flaui.enabled = false;
+    try {
+      const res = await client.callTool({
+        name: 'wincode_ui_inspect',
+        arguments: { pid: wpfPid },
+      });
+      assert.strictEqual(res.isError, true);
+      const data = JSON.parse(getContent(res)[0].text!);
+      assert.strictEqual(data.errorCode, 'HOST_UNAVAILABLE');
+      assert.ok(data.errorMessage?.includes('disabled'));
+    } finally {
+      (router.flaui as any).config.adapters.flaui.enabled = true;
+    }
+  });
 });

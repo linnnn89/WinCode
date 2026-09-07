@@ -215,7 +215,7 @@ Add WinCode to your MCP client configuration (`claude_desktop_config.json`):
     "wincode": {
       "command": "node",
       "args": [
-        "D:/CODEX PROJECT/WinCode MCP/dist/index.js",
+        "C:/path/to/WinCode/dist/index.js",
         "--workspace",
         "C:/path/to/your/target-project"
       ]
@@ -421,7 +421,7 @@ npm test
     "wincode": {
       "command": "node",
       "args": [
-        "D:/CODEX PROJECT/WinCode MCP/dist/index.js",
+        "C:/path/to/WinCode/dist/index.js",
         "--workspace",
         "C:/path/to/your/target-project"
       ]

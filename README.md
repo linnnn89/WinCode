@@ -1,7 +1,7 @@
 # WinCode
 
 <p align="center">
-  <strong>A Windows-first MCP gateway that gives coding agents a small set of high-level tools: workspace graph, evidence-bounded context, and change-impact reports that stay honest when analysis is incomplete.</strong>
+  <strong>A Windows-first MCP gateway that gives coding agents a small set of high-level tools: workspace graph, evidence-bounded context, change-impact reports, and desktop UI inspection that stay honest when analysis is incomplete.</strong>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 ### 🌟 Project Vision
 **WinCode** is not just a tool wrapper; it is an **engineering capability gateway built specifically for Windows development environments**.
 
-Instead of forcing AI coding agents (such as Codex, Claude Code, etc.) to master dozens of low-level tools, WinCode exposes a curated set of **high-level MCP tools**. Agents connect to one endpoint for workspace graphs, file-backed context, and change-impact reports. Serena and Repomix are optional upstreams; when they are missing or incomplete, WinCode keeps running and **labels the gap**. v0.5 keeps that contract and makes the gateway safe to leave running: one owner for child processes, workspace sessions, byte-capped cache, and bounded timeouts.
+Instead of forcing AI coding agents (such as Codex, Claude Code, etc.) to master dozens of low-level tools, WinCode exposes a curated set of **high-level MCP tools**. Agents connect to one endpoint for workspace graphs, file-backed context, change-impact reports, and **Windows desktop runtime UI inspection**. Serena and Repomix are optional upstreams; when they are missing or incomplete, WinCode keeps running and **labels the gap**. With v0.5 stability hygiene (one owner for child processes, workspace sessions, byte-capped cache, bounded timeouts) and v0.6 desktop UI inspection (out-of-process FlaUI.UIA3 host, bounded control trees, coordinate-aware badge captures, and strict helper-only process killing), the gateway provides trustworthy, evidence-bounded intelligence for both code and running desktop applications.
 
 ```
 Coding Agent (Codex / Claude Code / Cursor / Windsurf)
@@ -33,14 +33,14 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
                     ▼  (Single High-Level MCP Gateway)
 ┌────────────────────────────────────────────────────────────────────────┐
 │                       WinCode MCP Agent Gateway                        │
-├───────────────────────────────────┬────────────────────────────────────┤
-│         🟢 Current (v0.5)         │         🟡 Planned (not started)   │
-├─────────────────┬─────────────────┼──────────────────┬─────────────────┤
-│ .NET sln/csproj │ Evidence-bounded│Desktop Automation│ Diagnostics &   │
-│ graph + impact  │ context + health│   (FlaUI)        │ Performance     │
-│ + process/session│ + byte-capped  │                  │ (Snoop/PerfView)│
-│ lifecycle        │ cache/timeouts │                  │                 │
-└─────────────────┴─────────────────┴──────────────────┴─────────────────┘
+├──────────────────────────────────────────────────────┬─────────────────┤
+│                  🟢 Current (v0.6)                   │   🟡 Planned    │
+├──────────────────┬──────────────────┬────────────────┼─────────────────┤
+│ .NET sln/csproj  │ Evidence-bounded │ Desktop UI     │ Diagnostics &   │
+│ graph + impact   │ context + health │ Inspection     │ Performance     │
+│ + process/session│ + byte-capped    │ (FlaUI.UIA3)   │ (Snoop/PerfView)│
+│ lifecycle        │ cache/timeouts   │ +Bounded/Badge │ + UiSourceMapper│
+└──────────────────┴──────────────────┴────────────────┴─────────────────┘
 ```
 
 ### 🏛️ Key Principles
@@ -51,6 +51,7 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 5. **Caching**: Fingerprints (git HEAD / dirty mtime) avoid repeat scans. Incomplete Serena queries are not cached. Memory/disk caches have **byte** caps, not only entry counts. Consecutive tool calls reuse a few-second fingerprint memo; workspace switch changes the cache namespace.
 6. **Source ≠ confidence**: `source` is the provider. Confidence for impact analysis requires unique resolution and a complete query. Zero references, ambiguity, or incomplete queries return `UNKNOWN` — never "safe to delete". Local regex fallback does not guarantee symbol identity, overloads, or complete cross-file references.
 7. **Long-running hygiene**: Every child process, timer, and MCP transport has an owner (`ResourceManager`). `SIGINT`/`SIGTERM` run an idempotent graceful shutdown. Adapter timeouts become structured `{ status: failed, reason: timeout, recoverable: true }` results — they do not crash the gateway.
+8. **Runtime UI Inspection & Process Safety**: Desktop UI inspection executes out-of-process via an isolated `FlaUI.UIA3` helper host (`tools/WinCode.UIA.Host`) over stdin/stdout JSON streaming. Queries are non-invasive and read-only. Bounded tree traversal (`maxDepth`, `maxNodes`) prevents deep visual trees from overflowing agent token contexts; offscreen or micro-sized nodes are filtered from badge rendering. Process-tree cleanup strictly terminates only the helper process; target application PIDs are immune. Screenshots with numbered badges map to control node IDs with DPI-aware relative coordinates.
 
 ---
 
@@ -60,7 +61,7 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 - [x] MCP `stdio` server, `workspace_open`, safe `trash/` policy, fingerprint cache.
 - [x] Serena MCP adapter **when handshake succeeds**; otherwise labeled text fallback (not an AST/Roslyn engine).
 - [x] Repomix CLI packing **when installed**; otherwise a capped builtin file packer (not Tree-sitter compression unless the CLI `--compress` path runs).
-- [x] `analyze_change_impact` with risk levels; `wincode_plan_refactoring` is a checklist on top of impact, not an automated refactorer.
+- [x] `analyze_change_impact` with risk levels; `wincode_plan_refactoring` is a checklist on top of impact, not an automated refactor engine.
 
 #### v0.4 (Delivered)
 - [x] Layered adapter status: `commandFound` / `handshakeOk` / `projectActive` / `semanticQueryUsable` / `mode`. `available: true` + fallback means local tools work, not "Serena connected".
@@ -85,8 +86,19 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 - [x] Oversized Repomix/context snapshots spill to disk; heap keeps a preview.
 - [x] Mock Serena stdio fixture for handshake tests without a live Serena install.
 
-#### Later (not in v0.5)
-- [ ] FlaUI / Snoop / PerfView.
+#### v0.6 (Delivered)
+- [x] **C# FlaUI.UIA3 Host** (`tools/WinCode.UIA.Host`): Out-of-process stdin/stdout JSON host targeting Windows desktop apps via HWND or PID with Per-Monitor V2 DPI awareness.
+- [x] **Resilient Capture Pipeline**: 3-tier window screenshot fallback: `PrintWindow(PW_RENDERFULLCONTENT)` -> `BitBlt` -> GDI+ `CopyFromScreen(Format32bppRgb)`.
+- [x] **Bounded UI Control Tree**: Hierarchical traversal bounded by `maxDepth` and `maxNodes` with explicit `TruncateReason` flags (`maxDepth`, `maxNodes`, while timeout maps to structured `errorCode: TIMEOUT`).
+- [x] **Numbered Badge Overlay**: Relative coordinate transformation and high-contrast numbered badges matching `UiNode.id` for multimodal visual inspection (offscreen or tiny elements safely skipped).
+- [x] **Isolated WPF Review Fixture** (`tests/fixtures/wpf-ui-review`): Deterministic multi-control WPF fixture for testing layout, visibility, and UIA hierarchy.
+- [x] **TypeScript Adapter & Contracts** (`src/Adapters/FlaUiAdapter.ts`, `src/Core/UiContracts.ts`): Non-invasive health probe, Mutex-serialized execution, and strict helper-only process killing (target app PID is immune).
+- [x] **MCP Tool `wincode_ui_inspect`**: Clean content separation: bounded JSON text in `content[0]` (Base64 stripped to prevent token bloat) and PNG image block appended in `content[1]` only when capture is requested. Supports `capture` modes: `none` (default, zero image token overhead), `original`, and `annotated`.
+- [x] **Automatic PID Resolution**: Resolves owner PID automatically when queried with HWND only.
+
+#### Later (v0.7+)
+- [ ] v0.7 `UiSourceMapper` (mapping UIA runtime elements to XAML source files and line numbers).
+- [ ] Snoop / PerfView integration and diagnostic triggers.
 - [ ] Extra Roslyn host (only after measuring Serena gaps on real C# repos).
 - [ ] Removing existing tool names.
 
@@ -106,6 +118,7 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf)
 | `wincode_diagnose_project` | Windows / SDK / git / Serena status plus a `runtime` snapshot. | `dotnet --version` ≠ semantic references. |
 | `wincode_plan_refactoring` | Checklist derived from impact + trash policy. | Not an automated refactor engine. |
 | `wincode_safe_move_to_trash` | Move a relative in-workspace path to `trash/` with metadata. | Absolute / `..` / symlink escape rejected. |
+| `wincode_ui_inspect` | Inspect Windows desktop application UI via UIA. Returns bounded control tree JSON in `content[0]` and optional screenshot in `content[1]` as MCP image block. | Target by `pid` or `hwnd`. Screenshot base64 stripped from text JSON. `capture` modes: `none` (default), `original`, or `annotated`. |
 
 ---
 
@@ -117,7 +130,7 @@ WinCode/
 │   ├── index.ts                      # MCP CLI Entrypoint (stdio)
 │   ├── Gateway/
 │   │   ├── McpServer.ts              # MCP Server instance & handlers
-│   │   └── Protocol.ts               # MCP Tool schemas & contract
+│   │   └── Protocol.ts               # MCP Tool schemas & contract (includes wincode_ui_inspect)
 │   ├── Core/
 │   │   ├── Config.ts                 # Workspace, timeouts, cache byte limits
 │   │   ├── ResourceManager.ts        # Child processes / timers / idempotent dispose
@@ -127,9 +140,11 @@ WinCode/
 │   │   ├── Cache.ts                  # Byte-capped memory/disk cache + fingerprint memo
 │   │   ├── DotNetGraph.ts            # sln/csproj ProjectReference graph
 │   │   ├── Context.ts                # Evidence-bounded context (budget + snippets)
-│   │   └── ToolRouter.ts             # Router, session switch, runtime health
+│   │   ├── ToolRouter.ts             # Router, session switch, runtime health
+│   │   └── UiContracts.ts            # UI inspection types, interfaces, & schemas
 │   ├── Adapters/
 │   │   ├── IAdapter.ts               # Adapter contract + layered upstream status
+│   │   ├── FlaUiAdapter.ts           # FlaUI UIA3 host adapter & process manager
 │   │   ├── RepomixAdapter.ts         # Repomix CLI or closed-set builtin packer
 │   │   └── SerenaAdapter.ts          # Serena MCP client or regex fallback
 │   ├── CompositeTools/
@@ -138,9 +153,15 @@ WinCode/
 │   │   ├── ProjectDiagnostics.ts     # SDK/git/Serena status (no overclaim)
 │   │   └── RefactorAssistant.ts      # Impact-based checklist + trash policy
 │   └── Extensions/
-│       └── ExtensionManager.ts       # Reserved; no FlaUI/Snoop plugins yet
+│       └── ExtensionManager.ts       # Reserved; no Snoop/PerfView plugins yet
+├── tools/
+│   └── WinCode.UIA.Host/             # C# FlaUI.UIA3 out-of-process UI automation host (.NET 10)
 ├── tests/
-│   ├── fixtures/dotnet-mini/         # Portable MiniDesk .NET fixture (3 projects)
+│   ├── fixtures/
+│   │   ├── dotnet-mini/              # Portable MiniDesk .NET fixture (3 projects)
+│   │   └── wpf-ui-review/            # Isolated WPF UI review test application
+│   ├── flaui-adapter.test.ts         # FlaUI host adapter & lifecycle unit tests
+│   ├── ui-inspect-mcp.test.ts        # wincode_ui_inspect MCP protocol end-to-end tests
 │   ├── tdd-suite.test.ts             # Default CI suite (v0.4 contract + e2e)
 │   ├── v05-stability.test.ts         # Lifecycle / cache bytes / timeouts
 │   └── verify.ts                     # Smoke verification
@@ -154,7 +175,7 @@ WinCode/
 #### Prerequisites
 - Windows 10/11
 - Node.js >= 18.0.0
-- .NET SDK (recommended for C#/.NET projects)
+- .NET SDK (Required: .NET SDK 10 for building `WinCode.UIA.Host` and running WPF test fixture)
 
 #### 1. Installation & Build
 ```bash
@@ -162,16 +183,21 @@ git clone https://github.com/linnnn89/WinCode.git
 cd WinCode
 npm install
 npm run build
+# Publish the C# FlaUI.UIA3 host and the WPF test fixture
+dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-x64 --no-self-contained
+dotnet publish tests/fixtures/wpf-ui-review/wpf-ui-review.csproj -c Release -r win-x64 --no-self-contained
 ```
 
 #### 2. Tests
 ```bash
 npm run build
 npm test
+npx tsx --test tests/ui-inspect-mcp.test.ts
 npm run test:verify
 ```
 
-`npm test` runs the v0.4 contract suite and `tests/v05-stability.test.ts`. End-to-end MCP cases spawn `dist/index.js`, so build first.
+`npm test` runs the standard test suites (`tdd-suite.test.ts`, `v05-stability.test.ts`, `stage1-cleanup.test.ts`, and `flaui-adapter.test.ts`). End-to-end MCP cases spawn `dist/index.js`, so build first.
+`tests/ui-inspect-mcp.test.ts` executes end-to-end MCP UI inspection tests against a live WPF fixture.
 
 Default tests use `tests/fixtures/dotnet-mini`. To optionally exercise a local live solution:
 
@@ -206,7 +232,7 @@ Add WinCode to your MCP client configuration (`claude_desktop_config.json`):
 ### 🌟 项目愿景
 **WinCode** 不是简单的底层工具转发器，而是专为 **Windows 桌面与工程环境打造的 Agent 开发能力网关**。
 
-核心理念：**不要让 Agent 学习几十个低层工具，而是给少量高语义接口。** 当前 v0.5 在 v0.4 可证伪查询链之上，把网关做成可长期驻留的进程：统一资源释放、工作区会话、按字节封顶的缓存、外部调用超时。Serena / Repomix 是可选上游；缺失或不完整时继续运行，并**标明缺口**，而不是写成“已连接”。
+核心理念：**不要让 Agent 学习几十个低层工具，而是给少量高语义接口。** 统一提供工作区依赖图、预算内代码证据、变更影响面分析以及 **Windows 桌面运行时 UI 取证**。Serena / Repomix 是可选上游；缺失或不完整时继续运行，并**标明缺口**，而不是夸大连接。在 v0.5 长期驻留稳定性（统一资源管控、会话隔离、字节级缓存封顶、超时熔断）与 v0.6 桌面 UI 取证（进程外 FlaUI.UIA3 宿主、有界控件树、带编号标注截图、严格仅终止辅助进程且目标应用 PID 绝对免疫）的加持下，网关为 AI Agent 提供兼顾代码静态语义与桌面运行时取证的高可靠工程底座。
 
 ```
 Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
@@ -214,13 +240,13 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
                     ▼  (统一 MCP 网关入口)
 ┌────────────────────────────────────────────────────────────────────────┐
 │                       WinCode MCP Agent Gateway                        │
-├───────────────────────────────────┬────────────────────────────────────┤
-│         🟢 Current (v0.5)         │         🟡 规划（尚未开工）        │
-├─────────────────┬─────────────────┼──────────────────┬─────────────────┤
-│ .NET sln/csproj │ 预算内证据上下文 │  Windows 自动化  │ 深度诊断与调优  │
-│ 图 + 影响面     │ + 分层健康状态  │   (FlaUI)        │(Snoop/PerfView) │
-│ + 进程/会话生命周期 │ + 字节上限缓存 │                  │                 │
-└─────────────────┴─────────────────┴──────────────────┴─────────────────┘
+├──────────────────────────────────────────────────────┬─────────────────┤
+│                  🟢 当前版本 (v0.6)                  │    🟡 后续规划  │
+├──────────────────┬──────────────────┬────────────────┼─────────────────┤
+│ .NET sln/csproj  │ 预算内证据上下文 │ 桌面 UI 取证   │ 深度诊断与调优  │
+│ 图 + 影响面分析  │ + 分层健康状态   │ (FlaUI.UIA3)   │(Snoop/PerfView) │
+│ 进程与会话生命期 │ + 字节上限缓存   │+有界树/标注徽章│ + UiSourceMapper│
+└──────────────────┴──────────────────┴────────────────┴─────────────────┘
 ```
 
 ### 🏛️ 核心架构原则
@@ -231,6 +257,7 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 5. **指纹缓存**：基于 git HEAD / dirty mtime。不完整的 Serena 查询不入库。内存/磁盘缓存有**字节**上限，不只是条数。连续工具调用复用数秒级指纹 memo；切换工作区会更换 cache namespace。
 6. **source 不能决定 confidence**：`source` 只说明供应方。影响分析的可信度看目标是否唯一解析、查询是否完整。0 引用、同名歧义、查询不完整必须返回 `UNKNOWN`，不得写成可安全删除。本地正则降级不保证符号身份、重载区分或跨文件引用完整性。
 7. **长期驻留卫生**：子进程、定时器、MCP transport 都有明确 owner（`ResourceManager`）。`SIGINT`/`SIGTERM` 做可重复的 graceful shutdown。适配器超时变成结构化 `{ status: failed, reason: timeout, recoverable: true }`，不得把网关打崩。
+8. **运行时 UI 取证与进程安全**：桌面 UI 取证通过独立的 `FlaUI.UIA3` 辅助进程（`tools/WinCode.UIA.Host`）在进程外执行，采用标准 stdin/stdout JSON 通信，坚持只读与非侵入原则。有界控件树遍历（`maxDepth`、`maxNodes`）防止深层视觉树耗尽 Agent 的 Token 上下文；屏幕外或极小尺寸节点在 Badge 渲染时会被自动过滤。进程树清理严格仅终止辅助取证进程，被测目标应用 PID 绝对免疫。带编号 Badge 的标注截图与控件节点 ID 一一对应，并基于 DPI 感知的高精度相对坐标渲染。
 
 ---
 
@@ -265,9 +292,20 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 - [x] 超大 snapshot 落盘，堆上只留预览。
 - [x] mock Serena stdio 夹具，无需安装 Serena 也能测 handshake。
 
-#### 之后（不在 v0.5）
-- [ ] FlaUI / Snoop / PerfView。
-- [ ] 额外 Roslyn 宿主（须先在真实 C# 仓库上量 Serena 缺口）。
+#### v0.6（已交付）
+- [x] **C# FlaUI.UIA3 独立宿主**（`tools/WinCode.UIA.Host`）：基于 stdin/stdout JSON 的进程外辅助宿主，支持通过 HWND 或 PID 探测 Windows 桌面应用，具备 Per-Monitor V2 高 DPI 感知能力。
+- [x] **高韧性截图管线**：三级截图降级策略：`PrintWindow(PW_RENDERFULLCONTENT)` -> `BitBlt` -> GDI+ `CopyFromScreen(Format32bppRgb)`。
+- [x] **有界 UI 控件树**：受 `maxDepth` 和 `maxNodes` 严格约束的层级遍历，包含显式截断标记 `TruncateReason`（`maxDepth`、`maxNodes`，超时则走 `errorCode: TIMEOUT`）。
+- [x] **编号 Badge 标注图**：物理坐标到窗口相对坐标转换，渲染与 `UiNode.id` 严格一一对应的高对比度数字标注徽章（屏幕外或极小尺寸元素安全跳过），供多模态 Agent 视觉分析。
+- [x] **独立 WPF 测试夹具**（`tests/fixtures/wpf-ui-review`）：确定性多控件 WPF 测试应用，覆盖布局、可见性与 UIA 层级自动化回归验证。
+- [x] **TypeScript 适配器与契约**（`src/Adapters/FlaUiAdapter.ts`、`src/Core/UiContracts.ts`）：非侵入式健康探测、Mutex 串行化执行保护、以及严格仅终止辅助进程的生命周期管理（目标应用 PID 绝对免疫不受影响）。
+- [x] **MCP 工具 `wincode_ui_inspect`**：内容完全分离：`content[0]` 为干净的有界 JSON 文本（剥离 Base64 避免 Token 膨胀），仅在请求截图时将 PNG 图片追加为 `content[1]` 的 MCP `image` 内容块。支持 `capture` 模式：`none`（默认，无额外图片 Token 消耗）、`original` 与 `annotated`。
+- [x] **自动 PID 解析**：支持仅传 HWND 时自动解析宿主窗口归属进程 PID。
+
+#### 之后（v0.7+）
+- [ ] v0.7 `UiSourceMapper`（将运行时 UIA 元素映射至 XAML 源码文件及行号）。
+- [ ] Snoop / PerfView 深度诊断与触发联动。
+- [ ] 额外 Roslyn 宿主（须先在真实 C# 仓库上量化 Serena 缺口）。
 - [ ] 删除现有工具名。
 
 ---
@@ -286,6 +324,7 @@ Coding Agent (Codex / Claude Code / Cursor / Windsurf 等)
 | `wincode_diagnose_project` | Windows / SDK / git / Serena 状态，外加 `runtime` 快照 | `dotnet --version` ≠ 语义引用能力。 |
 | `wincode_plan_refactoring` | 基于 impact 的检查清单 + trash 策略 | 不是自动重构引擎。 |
 | `wincode_safe_move_to_trash` | 将工作区内相对路径移入 `trash/` 并写元数据 | 拒绝绝对路径 / `..` / 符号链接逃逸。 |
+| `wincode_ui_inspect` | 基于 UIA 检查 Windows 桌面应用 UI。返回 `content[0]` 有界控件树 JSON 与可选 `content[1]` 截图（MCP image 内容块） | 通过 `pid` 或 `hwnd` 定位。截图 Base64 从文本 JSON 中剥离。`capture` 模式支持 `none`（默认）、`original`、`annotated`。 |
 
 ---
 
@@ -297,19 +336,21 @@ WinCode/
 │   ├── index.ts                      # MCP 服务启动入口 (stdio)
 │   ├── Gateway/
 │   │   ├── McpServer.ts              # MCP 服务端核心实现
-│   │   └── Protocol.ts               # MCP 高层工具契约定义
+│   │   └── Protocol.ts               # MCP 高层工具契约定义（含 wincode_ui_inspect）
 │   ├── Core/
 │   │   ├── Config.ts                 # 工作区、超时、缓存字节上限
 │   │   ├── ResourceManager.ts        # 子进程 / 定时器 / 可重复 dispose
 │   │   ├── SessionManager.ts         # 当前工作区会话与 cache namespace
 │   │   ├── WorkspaceWatch.ts         # 去抖 fs.watch，用于丢掉过期指纹 memo
-│   │   ├── Workspace.ts              # 工作区检测与安全 trash
+│   │   ├── Workspace.ts              # 项目检测与安全 trash
 │   │   ├── Cache.ts                  # 按字节封顶的内存/磁盘缓存 + 指纹 memo
 │   │   ├── DotNetGraph.ts            # sln/csproj ProjectReference 图
 │   │   ├── Context.ts                # 预算内证据上下文
-│   │   └── ToolRouter.ts             # 调度、会话切换、runtime health
+│   │   ├── ToolRouter.ts             # 调度、会话切换、runtime health
+│   │   └── UiContracts.ts            # UI 取证类型、接口与 Schema 定义
 │   ├── Adapters/
 │   │   ├── IAdapter.ts               # 适配器契约 + 分层上游状态
+│   │   ├── FlaUiAdapter.ts           # FlaUI UIA3 宿主适配器与进程生命周期管理
 │   │   ├── RepomixAdapter.ts         # Repomix CLI 或闭集内置打包
 │   │   └── SerenaAdapter.ts          # Serena MCP 客户端或正则降级
 │   ├── CompositeTools/
@@ -318,9 +359,15 @@ WinCode/
 │   │   ├── ProjectDiagnostics.ts     # SDK/git/Serena 状态（不夸大）
 │   │   └── RefactorAssistant.ts      # 基于 impact 的清单 + trash 策略
 │   └── Extensions/
-│       └── ExtensionManager.ts       # 预留；尚无 FlaUI/Snoop 插件
+│       └── ExtensionManager.ts       # 预留；尚无 Snoop/PerfView 插件
+├── tools/
+│   └── WinCode.UIA.Host/             # C# FlaUI.UIA3 进程外 UI 取证宿主 (.NET 10)
 ├── tests/
-│   ├── fixtures/dotnet-mini/         # 可移植 MiniDesk .NET 夹具（3 个项目）
+│   ├── fixtures/
+│   │   ├── dotnet-mini/              # 可移植 MiniDesk .NET 夹具（3 个项目）
+│   │   └── wpf-ui-review/            # 独立 WPF UI 评审自动化测试应用
+│   ├── flaui-adapter.test.ts         # FlaUI 宿主适配器与生命周期单元测试
+│   ├── ui-inspect-mcp.test.ts        # wincode_ui_inspect MCP 协议端到端测试
 │   ├── tdd-suite.test.ts             # 默认 CI 套件（v0.4 契约 + e2e）
 │   ├── v05-stability.test.ts         # 生命周期 / 缓存字节 / 超时
 │   └── verify.ts                     # 冒烟验证
@@ -334,7 +381,7 @@ WinCode/
 #### 环境要求
 - Windows 10/11
 - Node.js >= 18.0.0
-- .NET SDK（推荐，用于 C#/.NET 解决方案）
+- .NET SDK（构建 `WinCode.UIA.Host` 及运行 WPF 自动化测试夹具需要 .NET SDK 10）
 
 #### 1. 安装与编译构建
 ```bash
@@ -342,16 +389,21 @@ git clone https://github.com/linnnn89/WinCode.git
 cd WinCode
 npm install
 npm run build
+# 发布 C# FlaUI.UIA3 宿主程序及 WPF 测试夹具
+dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-x64 --no-self-contained
+dotnet publish tests/fixtures/wpf-ui-review/wpf-ui-review.csproj -c Release -r win-x64 --no-self-contained
 ```
 
 #### 2. 测试
 ```bash
 npm run build
 npm test
+npx tsx --test tests/ui-inspect-mcp.test.ts
 npm run test:verify
 ```
 
-`npm test` 会跑 v0.4 契约套件和 `tests/v05-stability.test.ts`。端到端 MCP 用例会拉起 `dist/index.js`，所以要先 build。
+`npm test` 会跑标准回归测试套件（`tdd-suite.test.ts`、`v05-stability.test.ts`、`stage1-cleanup.test.ts` 以及 `flaui-adapter.test.ts`）。端到端 MCP 用例会拉起 `dist/index.js`，所以要先 build。
+`tests/ui-inspect-mcp.test.ts` 会拉起真实 WPF 测试夹具并执行 MCP UI 取证全链路端到端测试。
 
 默认测试使用 `tests/fixtures/dotnet-mini`。若要可选跑本地真实解决方案：
 

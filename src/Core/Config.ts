@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const WINCODE_VERSION = '0.5.1';
+export const WINCODE_VERSION = '0.6.0';
 
 /**
  * Bounded waits for every external process/RPC. None of these may be Infinity.
@@ -17,6 +17,7 @@ export interface WinCodeTimeouts {
   fileScanMs: number;
   shutdownMs: number;
   healthProbeMs: number;
+  flauiInspectMs: number;
 }
 
 export interface WinCodeCacheLimits {
@@ -49,6 +50,13 @@ export interface WinCodeConfig {
       /** Extra argv when customCommand is an executable (e.g. node + mock script). */
       customArgs?: string[];
     };
+    flaui: {
+      enabled: boolean;
+      customHostPath?: string;
+      timeoutMs?: number;
+      maxDepth?: number;
+      maxNodes?: number;
+    };
   };
   windows: {
     preferDotNetTools: boolean;
@@ -68,6 +76,7 @@ export function getDefaultTimeouts(): WinCodeTimeouts {
     fileScanMs: 20_000,
     shutdownMs: 8_000,
     healthProbeMs: 3_000,
+    flauiInspectMs: 10_000,
   };
 }
 
@@ -97,6 +106,9 @@ export function getDefaultConfig(workspaceRoot?: string): WinCodeConfig {
         useCli: true,
       },
       serena: {
+        enabled: true,
+      },
+      flaui: {
         enabled: true,
       },
     },

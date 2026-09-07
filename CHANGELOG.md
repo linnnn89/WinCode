@@ -2,6 +2,9 @@
 
 ## Unreleased — agent efficiency, round 1
 
+- Add an isolated ten-scenario agent-efficiency benchmark (`benchmark:agent`) comparing candidate-first and precise-first retrieval, with call counts, unchanged displayed-line overlap, output characters, latency and explicit evidence oracles. Document precise routing and when to stop or refresh evidence; no cross-request cache is introduced.
+- Harden benchmark schema v2: validate current file/range/body/status, retain transport/tool/response/cleanup failures in reports, and exercise ten scenarios including existing C# fixtures and trusted no-change reuse versus mandatory refresh after edits. Add fault regressions to the default test suite and synchronize bilingual README usage and measurement limits. Prior six-scenario totals are not directly comparable.
+
 - Follow-up review fixes: trim auxiliary metadata before useful source, preserve declarations at exact newline clipping boundaries, support focus paths through workspace junctions, and distinguish selected/packed/returned files using packer body spans (missing spans remain unknown).
 - Add opt-in exclusive `scopeFiles`, exact local declaration `symbol`, and bounded `lineRanges` to `wincode_prepare_context`. Known locations skip workspace symbol queries; ambiguous or missing symbols remain explicit gaps. Existing `candidateFiles` priority semantics are unchanged; scoped symbol matching is explicitly non-semantic.
 

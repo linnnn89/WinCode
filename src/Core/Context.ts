@@ -6,8 +6,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WinCodeConfig } from './Config.js';
 import { WorkspaceManager, ProjectIdentity } from './Workspace.js';
-import { RepomixAdapter, RepomixPackOptions } from '../Adapters/RepomixAdapter.js';
-import { SerenaAdapter, CodeSymbol } from '../Adapters/SerenaAdapter.js';
+import { ContextPacker, RepomixPackOptions } from './ContextPacking.js';
+import { ContextCodeQuery, CodeSymbol } from './CodeQueries.js';
 
 export interface PreparedContextOptions {
   task: string;
@@ -131,6 +131,31 @@ export function validateContextOptions(value: unknown): asserts value is Prepare
   }
 }
 
+function normalizeContextPath(filePath: string, root: string): string {
+  if (!filePath) return '';
+  const resolved = path.isAbsolute(filePath) ? filePath : path.join(root, filePath);
+  const rel = path.relative(root, resolved);
+  if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) throw new Error('Path is outside-workspace.');
+  return rel.replace(/\\/g, '/') || '.';
+}
+
+/** Pure path and cross-field checks, shared by admission and execution. No filesystem reads. */
+export function validateContextScope(opts: PreparedContextOptions, workspaceRoot: string) {
+  validateContextOptions(opts);
+  for (const file of [...(opts.candidateFiles || []), ...(opts.focusAreas || [])]) normalizeContextPath(file, workspaceRoot);
+  const scope = opts.scopeFiles ? [...new Set(opts.scopeFiles.map(file => normalizeContextPath(file, workspaceRoot)))] : undefined;
+  const ranges = new Map<string, { startLine: number; endLine: number }>();
+  for (const range of opts.lineRanges || []) {
+    const file = normalizeContextPath(range.file, workspaceRoot);
+    if (ranges.has(file)) throw new Error('lineRanges supports one range per file.');
+    ranges.set(file, range);
+  }
+  if (scope && [...(opts.candidateFiles || []).map(file => normalizeContextPath(file, workspaceRoot)), ...ranges.keys()].some(file => !scope.includes(file))) {
+    throw new Error('candidateFiles and lineRanges must stay inside scopeFiles.');
+  }
+  return { scope, ranges };
+}
+
 /** Budget UTF-16 characters without cutting a surrogate pair. */
 export function clipContextText(text: string, limit: number): string {
   let end = Math.max(0, Math.min(text.length, Math.floor(limit)));
@@ -161,14 +186,14 @@ const STOPWORDS = new Set([
 export class ContextManager {
   private config: WinCodeConfig;
   private workspace: WorkspaceManager;
-  private repomix: RepomixAdapter;
-  private serena: SerenaAdapter;
+  private repomix: ContextPacker;
+  private serena: ContextCodeQuery;
 
   constructor(
     config: WinCodeConfig,
     workspace: WorkspaceManager,
-    repomix: RepomixAdapter,
-    serena: SerenaAdapter
+    repomix: ContextPacker,
+    serena: ContextCodeQuery
   ) {
     this.config = config;
     this.workspace = workspace;
@@ -179,18 +204,7 @@ export class ContextManager {
   async prepareContext(options: PreparedContextOptions | string): Promise<PreparedContextResult> {
     const opts: PreparedContextOptions =
       typeof options === 'string' ? { task: options } : options;
-    validateContextOptions(opts);
-    for (const file of [...(opts.candidateFiles || []), ...(opts.focusAreas || [])]) this.normalizeRel(file);
-    const scope = opts.scopeFiles ? [...new Set(opts.scopeFiles.map(file => this.normalizeRel(file)))] : undefined;
-    const ranges = new Map<string, { startLine: number; endLine: number }>();
-    for (const range of opts.lineRanges || []) {
-      const file = this.normalizeRel(range.file);
-      if (ranges.has(file)) throw new Error('lineRanges supports one range per file.');
-      ranges.set(file, range);
-    }
-    if (scope && [...(opts.candidateFiles || []).map(file => this.normalizeRel(file)), ...ranges.keys()].some(file => !scope.includes(file))) {
-      throw new Error('candidateFiles and lineRanges must stay inside scopeFiles.');
-    }
+    const { scope, ranges } = validateContextScope(opts, this.workspace.root);
     const task = opts.task;
     const includeFullText = Boolean(opts.includeFullText);
     const budgetTokens = Math.max(512, opts.maxTokens ?? 8000);
@@ -232,7 +246,7 @@ export class ContextManager {
     }
     for (const kw of keywords.slice(0, 4)) {
       const detailed =
-        typeof (this.serena as any).findSymbolsDetailed === 'function'
+        typeof this.serena.findSymbolsDetailed === 'function'
           ? await this.serena.findSymbolsDetailed(kw)
           : { symbols: await this.serena.findSymbols(kw), source: 'serena-adapter-fallback' as const };
       if ('limitations' in detailed && Array.isArray(detailed.limitations)) {
@@ -512,12 +526,7 @@ export class ContextManager {
   }
 
   private normalizeRel(filePath: string): string {
-    if (!filePath) return '';
-    const root = this.workspace.root;
-    const resolved = path.isAbsolute(filePath) ? filePath : path.join(root, filePath);
-    const rel = path.relative(root, resolved);
-    if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) throw new Error('Path is outside-workspace.');
-    return rel.replace(/\\/g, '/') || '.';
+    return normalizeContextPath(filePath, this.workspace.root);
   }
 
   private async resolveFile(file: string): Promise<string> {

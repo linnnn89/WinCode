@@ -1,5 +1,5 @@
 import { WorkspaceManager, ProjectIdentity, WorkspaceTreeItem } from '../Core/Workspace.js';
-import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
+import { CodeSymbolQuery } from '../Core/CodeQueries.js';
 import { DotNetProjectGraph, loadDotNetProjectGraph } from '../Core/DotNetGraph.js';
 
 export interface ArchitectureReport {
@@ -22,12 +22,9 @@ export interface ArchitectureReport {
 /** Directory folder names are hints. For .NET, prefer projectGraph from sln/csproj files. */
 export class ArchitectureAnalyzer {
   private workspace: WorkspaceManager;
-  private serena: SerenaAdapter;
 
-  constructor(workspace: WorkspaceManager, serena: SerenaAdapter) {
+  constructor(workspace: WorkspaceManager, _queries: CodeSymbolQuery) {
     this.workspace = workspace;
-    this.serena = serena;
-    void this.serena;
   }
 
   async analyze(maxDepth = 2): Promise<ArchitectureReport> {

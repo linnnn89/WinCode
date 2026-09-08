@@ -106,6 +106,57 @@ export interface WorkspaceOpenResult {
   outputOmissions: string[];
 }
 
+function isWorkspacePathInside(parentDir: string, targetPath: string, allowEqual = false): boolean {
+  const resolvedParent = path.resolve(parentDir);
+  const resolvedTarget = path.resolve(targetPath);
+  const normalizedParent = process.platform === 'win32' ? resolvedParent.toLowerCase() : resolvedParent;
+  const normalizedTarget = process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
+  const rel = path.relative(normalizedParent, normalizedTarget);
+  return (!rel && allowEqual) || Boolean(rel && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return value;
+}
+
+
+/** Pure admission checks; execution separately resolves filesystem links. */
+export function validateWorkspaceDirectoryOptions(options: WorkspaceDirectoryOptions, workspaceRoot: string) {
+  const maxDepth = boundedInteger(options.maxDepth, 1, 1, 5, 'maxDepth');
+  const maxEntries = boundedInteger(options.maxEntries, 100, 1, 500, 'maxEntries');
+  const maxOutputChars = boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
+  if (options.includeIgnored !== undefined && typeof options.includeIgnored !== 'boolean') throw new Error('includeIgnored must be a boolean.');
+  const requested = options.path ?? '.';
+  if (typeof requested !== 'string' || !requested.trim() || requested.length > 4096 || requested.includes('\0') ||
+    requested.split(/[\\/]/).includes('..') || path.isAbsolute(requested) || /^[a-z]:/i.test(requested) || /^(\/\/|\\\\)/.test(requested)) {
+    throw new Error('Directory path must be a non-empty relative path inside the workspace.');
+  }
+  const full = path.resolve(workspaceRoot, requested);
+  if (!isWorkspacePathInside(workspaceRoot, full, true)) throw new Error('Directory path is outside the workspace.');
+  return { requested, full, maxDepth, maxEntries, maxOutputChars };
+}
+
+/** Preserve the safe-trash lexical policy and its user-facing failure messages. */
+export function validateTrashPath(relativeFilePath: string, workspaceRoot: string, trashDir: string): void {
+  if (typeof relativeFilePath !== 'string' || !relativeFilePath.trim()) {
+    throw new Error('Failed to move file to trash: Path cannot be empty.');
+  }
+  if (path.isAbsolute(relativeFilePath) || /^[a-zA-Z]:/.test(relativeFilePath) || /^(\/\/|\\\\)/.test(relativeFilePath)) {
+    throw new Error(`Failed to move file to trash: Only non-empty relative paths within the workspace are accepted. Received: "${relativeFilePath}".`);
+  }
+  const targetPath = path.resolve(workspaceRoot, relativeFilePath);
+  if (!isWorkspacePathInside(workspaceRoot, targetPath)) {
+    throw new Error(`Failed to move file to trash: Path "${relativeFilePath}" is outside the workspace boundary.`);
+  }
+  if (isWorkspacePathInside(trashDir, targetPath, true)) {
+    throw new Error('Failed to move file to trash: Cannot move items from or within the trash directory.');
+  }
+}
+
 export class WorkspaceManager {
   private config: WinCodeConfig;
   private defaultIgnores = new Set([
@@ -155,38 +206,11 @@ export class WorkspaceManager {
    * Checks if targetPath is strictly inside parentDir (not parentDir itself, and not outside)
    */
   private isPathInside(parentDir: string, targetPath: string): boolean {
-    const resolvedParent = path.resolve(parentDir);
-    const resolvedTarget = path.resolve(targetPath);
-
-    const normalizedParent = process.platform === 'win32' ? resolvedParent.toLowerCase() : resolvedParent;
-    const normalizedTarget = process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
-
-    const rel = path.relative(normalizedParent, normalizedTarget);
-    if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
-      return false;
-    }
-    return true;
+    return isWorkspacePathInside(parentDir, targetPath);
   }
 
-  /**
-   * Checks if targetPath is parentDir itself or strictly inside parentDir
-   */
   private isPathInsideOrEqual(parentDir: string, targetPath: string): boolean {
-    const resolvedParent = path.resolve(parentDir);
-    const resolvedTarget = path.resolve(targetPath);
-
-    const normalizedParent = process.platform === 'win32' ? resolvedParent.toLowerCase() : resolvedParent;
-    const normalizedTarget = process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
-
-    if (normalizedParent === normalizedTarget) {
-      return true;
-    }
-
-    const rel = path.relative(normalizedParent, normalizedTarget);
-    if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
-      return false;
-    }
-    return true;
+    return isWorkspacePathInside(parentDir, targetPath, true);
   }
 
   /**
@@ -562,14 +586,6 @@ export class WorkspaceManager {
     };
   }
 
-  private boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number, name: string): number {
-    if (value === undefined) return fallback;
-    if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum || value > maximum) {
-      throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
-    }
-    return value;
-  }
-
   /** Extra preview filters do not affect symbol discovery, cache keys, or explicit legacy scans. */
   private async previewOmission(dir: string): Promise<string | null> {
     const existing = await this.directoryOmission(dir);
@@ -753,17 +769,7 @@ export class WorkspaceManager {
 
   /** Directory browsing is stateless and bounds enumeration as well as final serialization. */
   async listDirectory(options: WorkspaceDirectoryOptions = {}): Promise<WorkspaceDirectoryResult> {
-    const maxDepth = this.boundedInteger(options.maxDepth, 1, 1, 5, 'maxDepth');
-    const maxEntries = this.boundedInteger(options.maxEntries, 100, 1, 500, 'maxEntries');
-    const maxOutputChars = this.boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
-    if (options.includeIgnored !== undefined && typeof options.includeIgnored !== 'boolean') throw new Error('includeIgnored must be a boolean.');
-    const requested = options.path ?? '.';
-    if (typeof requested !== 'string' || !requested.trim() || requested.length > 4096 || requested.includes('\0') ||
-      requested.split(/[\\/]/).includes('..') || path.isAbsolute(requested) || /^[a-z]:/i.test(requested) || /^(\/\/|\\\\)/.test(requested)) {
-      throw new Error('Directory path must be a non-empty relative path inside the workspace.');
-    }
-    const full = path.resolve(this.root, requested);
-    if (!this.isPathInsideOrEqual(this.root, full)) throw new Error('Directory path is outside the workspace.');
+    const { full, maxDepth, maxEntries, maxOutputChars } = validateWorkspaceDirectoryOptions(options, this.root);
     const realRoot = await fs.realpath(this.root);
     const realTarget = await fs.realpath(full);
     if (!this.isPathInsideOrEqual(realRoot, realTarget)) throw new Error('Directory path resolves outside the workspace.');
@@ -837,7 +843,7 @@ export class WorkspaceManager {
    * Phase 2: Opens and analyzes any target workspace directory.
    */
   async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}): Promise<WorkspaceOpenResult> {
-    const maxOutputChars = this.boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
+    const maxOutputChars = boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
     if (options.includeTree !== undefined && typeof options.includeTree !== 'boolean') throw new Error('includeTree must be a boolean.');
     const resolvedPath = path.resolve(targetPath);
 
@@ -935,47 +941,11 @@ export class WorkspaceManager {
    * Only accepts non-empty relative paths strictly within the workspace.
    */
   async moveToTrash(relativeFilePath: string, reason?: string): Promise<{ success: boolean; trashPath: string; message: string }> {
-    // 1. Validate non-empty input
-    if (!relativeFilePath || !relativeFilePath.trim()) {
-      return {
-        success: false,
-        trashPath: '',
-        message: 'Failed to move file to trash: Path cannot be empty.',
-      };
+    try { validateTrashPath(relativeFilePath, this.root, this.config.trashDir); }
+    catch (error) {
+      return { success: false, trashPath: '', message: error instanceof Error ? error.message : String(error) };
     }
-
-    // 2. Reject absolute paths, Windows drive-relative paths (e.g. C:foo), and UNC paths
-    if (
-      path.isAbsolute(relativeFilePath) ||
-      /^[a-zA-Z]:/.test(relativeFilePath) ||
-      /^(\/\/|\\\\)/.test(relativeFilePath)
-    ) {
-      return {
-        success: false,
-        trashPath: '',
-        message: `Failed to move file to trash: Only non-empty relative paths within the workspace are accepted. Received: "${relativeFilePath}".`,
-      };
-    }
-
     const targetPath = path.resolve(this.root, relativeFilePath);
-
-    // 3. Lexical boundary check: must be strictly inside workspace root (reject root itself and parent traversal)
-    if (!this.isPathInside(this.root, targetPath)) {
-      return {
-        success: false,
-        trashPath: '',
-        message: `Failed to move file to trash: Path "${relativeFilePath}" is outside the workspace boundary.`,
-      };
-    }
-
-    // 4. Lexical trash directory & sub-tree check: cannot move trash root or anything inside trash
-    if (this.isPathInsideOrEqual(this.config.trashDir, targetPath)) {
-      return {
-        success: false,
-        trashPath: '',
-        message: 'Failed to move file to trash: Cannot move items from or within the trash directory.',
-      };
-    }
 
     // 5. Realpath boundary check: resolve symlinks and Windows junctions to prevent escaping via links
     const realRoot = await this.getRealPath(this.root);

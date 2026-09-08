@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { WinCodeConfig, WINCODE_VERSION } from './Config.js';
 import { CacheManager, CacheStats } from './Cache.js';
-import { WorkspaceManager, WorkspaceOpenOptions } from './Workspace.js';
-import { ContextManager } from './Context.js';
+import { WorkspaceManager, WorkspaceOpenOptions, WorkspaceDirectoryOptions } from './Workspace.js';
+import { ContextManager, PreparedContextOptions } from './Context.js';
 import { RepomixAdapter } from '../Adapters/RepomixAdapter.js';
 import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
 import { FlaUiAdapter } from '../Adapters/FlaUiAdapter.js';
@@ -16,7 +16,7 @@ import { ExtensionManager } from '../Extensions/ExtensionManager.js';
 import { Mutex, ResourceManager, AbortError } from './ResourceManager.js';
 import { SessionManager, WorkspaceSession } from './SessionManager.js';
 import { WorkspaceWatch } from './WorkspaceWatch.js';
-import { AdapterLastError } from '../Adapters/IAdapter.js';
+import { AdapterLastError } from './AdapterStatus.js';
 
 export interface RuntimeHealth {
   version: string;
@@ -113,6 +113,44 @@ export class ToolRouter {
 
   get isSwitchingWorkspace(): boolean {
     return this.switchingPromise !== null;
+  }
+
+  findCodeSymbols(query: string, kind?: string) {
+    return this.serena.findSymbolsDetailed(query, kind);
+  }
+
+  findCodeReferences(symbolName: string, relativePath?: string) {
+    return this.serena.findReferencesDetailed(symbolName, relativePath);
+  }
+
+  prepareContext(options: PreparedContextOptions) {
+    return this.context.prepareContext(options);
+  }
+
+  analyzeWorkspace(maxDepth?: number) {
+    return this.architecture.analyze(maxDepth);
+  }
+
+  analyzeChangeImpact(target: string) {
+    return this.impact.analyzeImpact(target);
+  }
+
+  async diagnoseProject() {
+    const diagnostics = await this.diagnostics.runDiagnostics();
+    const runtime = await this.getRuntimeHealth();
+    return { ...diagnostics, runtime };
+  }
+
+  planRefactoring(target: string, goal: string) {
+    return this.refactor.planRefactoring(target, goal);
+  }
+
+  moveToTrash(filePath: string, reason?: string) {
+    return this.workspace.moveToTrash(filePath, reason);
+  }
+
+  listDirectory(options: WorkspaceDirectoryOptions = {}) {
+    return this.workspace.listDirectory(options);
   }
 
   async acquireRequestSlot(signal?: AbortSignal): Promise<void> {

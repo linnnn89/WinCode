@@ -1,4 +1,4 @@
-import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
+import { CodeSymbolQuery } from '../Core/CodeQueries.js';
 import { WorkspaceManager } from '../Core/Workspace.js';
 import { ImpactAnalyzer, ImpactReport } from './ImpactAnalyzer.js';
 
@@ -17,12 +17,10 @@ export interface RefactorPlan {
 
 export class RefactorAssistant {
   private workspace: WorkspaceManager;
-  private serena: SerenaAdapter;
   private impact: ImpactAnalyzer;
 
-  constructor(workspace: WorkspaceManager, serena: SerenaAdapter, impact: ImpactAnalyzer) {
+  constructor(workspace: WorkspaceManager, _queries: CodeSymbolQuery, impact: ImpactAnalyzer) {
     this.workspace = workspace;
-    this.serena = serena;
     this.impact = impact;
   }
 

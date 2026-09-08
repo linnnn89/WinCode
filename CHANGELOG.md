@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0
+
+- Register each tool's schema, aliases, validation and execution together; `tools/list`, runtime schema hashes and input validation use the same instance snapshot.
+- Keep unknown-field compatibility: ignore undeclared fields, including nested fields, while validating declared types and required/range constraints before request admission. Do not convert objects into search strings or numeric strings into PIDs or numeric UI limits.
+- Route Gateway calls through explicit ToolRouter use cases. Context and composite tools depend on small query/packing contracts; existing Adapter type exports remain compatible.
+- Document canonical request fields, types, aliases and examples in the existing Skill manuals. Tolerating a field does not mean the connected version supports it.
+
 ## 0.11.3
 
 - Bound local Serena fallback across directories, bytes, matches and time; scoped symbol queries read only their requested file, and partial scans report their stop reason instead of claiming completeness.

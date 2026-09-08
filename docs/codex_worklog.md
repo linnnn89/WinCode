@@ -409,3 +409,15 @@
 - GitHub 借鉴：[Node watcher](https://github.com/nodejs/node/blob/main/lib/internal/fs/watchers.js) 的真实 close 事件和 [VS Code lifecycle](https://github.com/microsoft/vscode/blob/main/src/vs/base/common/lifecycle.ts) 的 owner/幂等/错误语义，落实到既有机制，没有新增框架或依赖。
 - 边界：截止检查仍为协作式，不能中断已经提交 OS 的单次 I/O；端到端取消留 WP3。恰好达到结果上限保守标截断。未运行本轮真实 Serena/交互 GUI，不把 mock 通过视为 WP5 完成。远端 Node 20/24 与 PR/合并结果随后增订。
 - 远端首轮 PR #22 / CI 34219091516：Node 20/24 各 266 pass、1 fail、1 skip、0 cancelled。唯一失败为新 scoped-file 测试将 TEMP 的 RUNNER~1 短路径与 scanner 的 runneradmin realpath 直接计算相对路径。生产读取只有目标文件，测试改成比较唯一打开路径与目标 realpath，保持零额外文件读取断言；定向 19/19 通过。两版各 10 次顺序+10 次并发生命周期均通过，原 EBUSY 未出现；CodeQL 通过。未据此跳过整套复测。失败日志 test-tmp/wp1-ci-first-failure.log。
+- WP1 最终提交 202e3bd：CI 34219393246 的 Node 20.20.2 / 24.19.0 均 267 pass、1 skip、0 fail、0 cancelled，生产 stdio 与 CodeQL 通过；各版 10 顺序+10 并发生命周期关闭证据确认。2026-09-08 19:14 按精确 head 合并 PR #22，main=31b7dd1fb4d93cf13897ae68498f1fbd52e7e55e。远端日志 test-tmp/wp1-ci-passed.log；未修改分支保护。
+
+## 2026-09-08 19:15（北京时间）— WP2 / 0.12.0 工具契约与模块边界
+
+- 基于已合并 WP1 开始 codex/wp2-tool-contracts。用户选择容忍未知字段，要求 Skill 明确规范字段；因此统一允许额外字段但不转发生效，已声明字段仍类型/必填/范围校验，保留合法旧调用与别名。
+- 范围：按工作区/代码/UI 静态分组的工具权威定义与执行；复用既有 SDK Ajv；Gateway 仅访问 ToolRouter 用例。业务查询/打包/健康类型放在小型 Core 契约，Adapter 路径兼容导出，保留原有降级与旧数组查询兼容；不引入插件框架或新依赖。
+- Skill 在原有四份手册内补规范字段表、类型、约束和示例，强调 candidateFiles 优先但不排他、scopeFiles 排他、relativePath 为引用定义文件、未知字段不代表功能已生效。
+- 新安全事实：用户截图中的 code scanning #1 经 GitHub API 核对，在 main=31b7dd1 仍 open/medium，规则 js/shell-command-injection-from-environment，Repomix 的 cmd 启动入口尚未修复。CodeQL job 成功不等于告警清零；已向用户明确说明。单独只读调查无 shell 启动方案，未关闭/忽略告警，未用 WP1 的禁用 CLI 修复冒称解决启用路径问题。
+- 验证完成：Node 24.19.0 下 typecheck/build 通过；默认回归 278 项（277 pass、1 个既有可选 TavernDesk skip、0 fail、0 cancelled）；生产 stdio 验证 15 工具、schema/hash 同源、精准行正文、未知字段忽略与已知类型拒绝。受控真实 WPF / MCP UI 测试 34/34 通过，包含图片独立 block、串行并发、客户端取消后下一请求恢复、跨工作区与实际 helper 退出。没有操作个人应用数据库。日志 test-tmp/wp2-regression.log、wp2-stdio.log、wp2-ui.log。
+- 独立审查发现契约矩阵以基准调用自身作比较可能漏掉错误路由，已改为独立列明 16 个名称的期望方法和实参；主代理复核最终矩阵、共享路径校验及既有 realpath/junction 防护，定向 19/19 通过。原测试中三个“未知字段应报错”的旧断言按用户决定改为验证忽略且不改变行为；错误类型与路径边界断言保留。早期集成的 type-only 导出错误已修复，没有将其冒称用户政策反例。
+- 构建 buildId=471ba757156a69a8e89d1a7cc2d3d8f6ca4aa4739c71ea5fc90034ff09620063，schemaHash=417b9ad1deafe21006e10ffdc4d17f1d325630b3ddcee9bedf7e1fdd2e5908d3。这是提交前新进程验证，不证明当前 Codex 旧连接已更新。未运行真实 Serena；资源关闭错误保留/端到端代码取消仍属于 WP3；CodeQL #1 仍 open，未修改启动兼容策略。
+- 用户补充偏好：尽量避免分出子 agents。现有协作已经收尾，后续默认主代理直接实施和复核，避免额外代理调用；独立审查与自审证据分别记录。

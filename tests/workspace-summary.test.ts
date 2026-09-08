@@ -119,13 +119,18 @@ it('ignored directories are recoverable explicitly and outside junctions are nev
 it('invalid workspace and directory options fail without switching workspace', async () => fixture(async (root, router, call) => {
   const next = path.join(root, 'next');
   await fs.mkdir(next);
-  for (const args of [{ maxOutputChars: 1 }, { maxOutputChars: 8000.5 }, { includeTree: 'yes' }, { unsupported: true }]) {
+  for (const args of [{ maxOutputChars: 1 }, { maxOutputChars: 8000.5 }, { includeTree: 'yes' }]) {
     assert.equal((await call('workspace_open', { path: next, ...args })).isError, true, JSON.stringify(args));
     assert.equal(router.workspace.root, root);
   }
-  for (const args of [{ path: '..' }, { path: 'src/../src' }, { path: 'C:relative' }, { path: 'a'.repeat(4097) }, { maxDepth: 0 }, { maxDepth: 6 }, { maxEntries: 501 }, { includeIgnored: 'yes' }, { maxOutputChars: 200 }, { unsupported: true }]) {
+  for (const args of [{ path: '..' }, { path: 'src/../src' }, { path: 'C:relative' }, { path: 'a'.repeat(4097) }, { maxDepth: 0 }, { maxDepth: 6 }, { maxEntries: 501 }, { includeIgnored: 'yes' }, { maxOutputChars: 200 }]) {
     assert.equal((await call('wincode_list_directory', args)).isError, true, JSON.stringify(args));
   }
+  const baseline = payload(await call('wincode_list_directory', { path: '.', maxDepth: 1 }));
+  const extended = payload(await call('wincode_list_directory', { path: '.', maxDepth: 1, unsupported: true }));
+  assert.deepEqual(extended.entries, baseline.entries, 'unknown fields cannot alter the directory scope');
+  assert.notEqual((await call('workspace_open', { path: next, unsupported: true })).isError, true);
+  assert.equal(router.workspace.root, next, 'the declared workspace path still applies');
 }));
 
 it('the opt-in tree is bounded and does not change the default summary contract', async () => fixture(async (root, _router, call) => {

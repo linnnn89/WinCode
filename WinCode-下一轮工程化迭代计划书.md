@@ -228,5 +228,7 @@ ToolRouter 是允许知道具体实现的组装位置；Gateway 不再访问适�
 - D1：用户明确同意 Node 升级。WP1 先保留 Node 20/24 故障复测，WP4 同步 Node 24 主支持、22 兼容及最低版本政策。
 - D2：用户明确选择保持容忍模式。WP2 校验已声明字段，容忍额外字段；Skill 手册必须写清规范字段、类型、必填/可选、互斥与示例，未声明字段不保证生效。该决定取代第 7 节的严格未知字段推荐。
 - D3：GitHub 分支保护仍待确认，不将 Node 升级或字段政策决定扩大解释为修改 GitHub 设置的授权。
-- WP1：本地扫描、禁用 CLI、监听器关闭已建立失败反例；独立审查进一步发现旧关闭失败提前结束等待，以及配置异步切换污染缓存，均按原工作包修复。验证和 PR 结果持续记录在 [工作日志](docs/codex_worklog.md)。
+- WP1 已完成：0.11.3 / [PR #22](https://github.com/linnnn89/WinCode/pull/22) 于 2026-09-08 合并，main=`31b7dd1`。最终 Node 20/24 CI 与 CodeQL 通过，各版回归 267 pass、1 skip，10 顺序+10 并发生命周期通过。失败反例、独立审查及短路径测试修正见 [工作日志](docs/codex_worklog.md)。
+- WP2 正在实施：0.12.0，按用户 D2 决定保留额外字段容忍、校验已声明字段，并在现有 Skill 文件明确规范字段，不新增验证依赖。
+- 新发现 F12：GitHub [code scanning #1](https://github.com/linnnn89/WinCode/security/code-scanning/1) 在 `31b7dd1` 仍为 open/medium，Repomix 启用路径经 cmd 处理环境路径。只读方案为 Node 直启已安装 JS 入口、移除 shell 链；涉及 npx 缓存/PATH 包装脚本兼容变化，已单独请求决定，未擅自实施或关闭告警。
 - GitHub 经验落实：参考 [Node watcher 实现](https://github.com/nodejs/node/blob/main/lib/internal/fs/watchers.js) 与 [VS Code 生命周期管理](https://github.com/microsoft/vscode/blob/main/src/vs/base/common/lifecycle.ts) 的 owner、幂等及失败语义；复用现有 ResourceManager，未引入新的管理框架。

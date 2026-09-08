@@ -1,13 +1,13 @@
 import path from 'path';
 import {
-  SerenaAdapter,
+  CodeReferenceQuery,
   CodeSymbol,
   SymbolReference,
   SERENA_DEGRADED_LIMITATIONS,
   computeTypeMatchStats,
   FindSymbolsResult,
   FindReferencesResult,
-} from '../Adapters/SerenaAdapter.js';
+} from '../Core/CodeQueries.js';
 import { WinCodeConfig } from '../Core/Config.js';
 
 export interface AffectedComponent {
@@ -55,10 +55,10 @@ interface QueryAssessment {
 }
 
 export class ImpactAnalyzer {
-  private serena: SerenaAdapter;
+  private serena: CodeReferenceQuery;
   private config?: WinCodeConfig;
 
-  constructor(serena: SerenaAdapter, config?: WinCodeConfig) {
+  constructor(serena: CodeReferenceQuery, config?: WinCodeConfig) {
     this.serena = serena;
     this.config = config;
   }
@@ -98,8 +98,8 @@ export class ImpactAnalyzer {
       limitations: [],
     };
 
-    if (typeof (this.serena as any).findSymbolsDetailed === 'function') {
-      const symRes: FindSymbolsResult = await (this.serena as any).findSymbolsDetailed(symbolName);
+    if (typeof this.serena.findSymbolsDetailed === 'function') {
+      const symRes: FindSymbolsResult = await this.serena.findSymbolsDetailed(symbolName);
       symbols = symRes.symbols || [];
       assessment.source = symRes.source || 'serena-adapter-fallback';
       assessment.queryComplete = symRes.queryComplete !== false;
@@ -205,8 +205,8 @@ export class ImpactAnalyzer {
 
     let refs: SymbolReference[] = [];
     if (assessment.unique && assessment.queryComplete && !assessment.truncated &&
-        typeof (this.serena as any).findReferencesDetailed === 'function') {
-      const refRes: FindReferencesResult = await (this.serena as any).findReferencesDetailed(
+        typeof this.serena.findReferencesDetailed === 'function') {
+      const refRes: FindReferencesResult = await this.serena.findReferencesDetailed(
         matchedSymbol?.namePath ?? symbolName,
         matchedSymbol?.file
       );

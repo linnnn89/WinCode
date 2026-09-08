@@ -54,14 +54,18 @@ await server.start();
     assert.ok(symbol.evidence.some((item: any) => item.file === 'Target.ts' && item.line === 50 && item.snippet.includes('RUNTIME_TARGET_BODY')));
     const range = await call('wincode_prepare_context', { task: 'Inspect runtime target', lineRanges: [{ file: 'Target.ts', startLine: 50, endLine: 50 }] });
     assert.ok(range.evidence.some((item: any) => item.startLine === 50 && item.endLine === 50 && item.snippet === lines[49]));
-    const invalid = await client.callTool({ name: 'wincode_prepare_context', arguments: { task: 'Inspect target', scopeFile: ['Target.ts'] } });
+    const tolerant = await call('wincode_prepare_context', { task: 'Inspect target',
+      lineRanges: [{ file: 'Target.ts', startLine: 50, endLine: 50, futureMetadata: 'ignored' }], scopeFile: ['DoesNotExist.ts'] });
+    assert.ok(tolerant.evidence.some((item: any) => item.startLine === 50 && item.endLine === 50 && item.snippet === lines[49]),
+      'unknown fields do not alter the declared exact range');
+    const invalid = await client.callTool({ name: 'wincode_prepare_context', arguments: { task: 'Inspect target', scopeFiles: 'Target.ts' } });
     assert.equal(invalid.isError, true);
     const after = await call('wincode_hello_world');
     assert.deepEqual(after.runtime, hello.runtime);
     console.log(JSON.stringify({ status: 'passed', transport: 'stdio', productionHandlers: true,
       upstreams: false, gui: false, codexConnectionVerified: false, version: hello.version,
       runtime: hello.runtime, schemaHash: hello.toolContract.schemaHash, toolCount: tools.length,
-      checks: ['initialize', 'tools/list', 'hello schema agreement', 'symbol body at line 50', 'exact range body', 'unknown parameter rejected', 'stable instance'] }, null, 2));
+      checks: ['initialize', 'tools/list', 'hello schema agreement', 'symbol body at line 50', 'exact range body', 'unknown fields ignored', 'known field type rejected', 'stable instance'] }, null, 2));
   } finally {
     try { await client.close(); } finally {
       try { await transport?.close(); } finally {

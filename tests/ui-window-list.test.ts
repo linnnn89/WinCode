@@ -87,8 +87,7 @@ it('real stdio MCP discovers duplicate Chinese windows, filters, caps and reject
       return JSON.parse(blocks[0].text);
     };
     assert.equal((await call({ maxWindows: 0 })).errorCode, 'INVALID_ARGUMENT');
-    assert.equal((await call({ unexpected: true })).errorCode, 'INVALID_ARGUMENT');
-    const result = await call({ processName: 'WPF-UI-REVIEW', titleContains: '窗口发现夹具' });
+    const result = await call({ processName: 'WPF-UI-REVIEW', titleContains: '窗口发现夹具', unexpected: true });
     assert.equal(result.success, true); assert.equal(result.enumerationComplete, true);
     assert.ok(Number.isFinite(Date.parse(result.capturedAt!)));
     const own = result.windows!.filter(w => fixtures.some(p => p.pid === w.pid));

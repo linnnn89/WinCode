@@ -1,5 +1,25 @@
 # 窗口与 UI 取证
 
+## 规范字段
+
+参数名称区分大小写；额外字段仅被容忍和忽略，不会被当成筛选条件。不能把 `automationID`、`AutomationId` 或 `title` 当作下面的规范字段。数字、布尔值必须使用真正的 JSON 类型。
+
+| 工具/字段 | 类型与约束 |
+| --- | --- |
+| `wincode_ui_list_windows` | 所有字段可选：`pid` 为整数 1–2147483647；`processName`、`titleContains` 为非空字符串、最长 128；`maxWindows` 为整数 1–100，默认 30。筛选同时满足，`processName` 不带 `.exe` |
+| `wincode_ui_inspect.pid` | 可选正整数；与 `hwnd` 至少提供一个 |
+| `hwnd` | 可选非空字符串，十六进制如 `"0x123ABC"` 或十进制字符串；不能传 JSON 数字 |
+| `capture` | 可选字符串 `none/original/annotated`，默认 `none` |
+| `maxDepth` / `maxNodes` | 可选整数，分别为 1–50（默认 6）、1–5000（默认 300） |
+| `backgroundOnly` | 可选布尔值，默认 `false`；为 `true` 时必须同时提供 `pid` 和 `hwnd` |
+| `readStates` | 可选布尔值，默认 `false`；只读状态，不执行动作或读取输入值 |
+| `query` | 可选对象；至少有一个规范定位字段 `automationId/name/controlType`，每个为非空白字符串、最长 256；可选 `maxSearchNodes` 整数 1–5000、默认 1000，`maxMatches` 整数 1–20、默认 10。仅有未知字段不构成有效查询 |
+| `wincode_ui_review` | 接受上述 inspect 的全部规范字段，另必填 `candidateFiles`：1–16 个相对 `.xaml` 路径、每项最长 512；可选 `candidateCodeFiles`：1–8 个相对 `.cs` 路径、每项最长 512；可选 `textQueries`：最多 5 个非空字面字符串、每项最长 80 |
+
+候选路径必须在工作区内，不得包含通配符或父目录逃逸；参数合法不保证文件存在或运行窗口与源码对应，仍检查结果中的缺口。`query:{automationId:"SaveButton",maxSearchNodes:1000}` 是规范示例；`query:{automationID:"SaveButton"}` 缺少规范定位条件，仍会报错。没有未列出的 UI 工具别名。
+
+## 选择目标与取证
+
 已知准确 PID/HWND 就直接使用；未知时调用 wincode_ui_list_windows，以 processName（不带 .exe）、pid 或 titleContains 缩小范围，maxWindows 建议 10。筛选同时满足。候选歧义时先确认目标，标题不证明源码归属；失效句柄才重新发现。
 
 对用户指定窗口调用 wincode_ui_inspect，例如（编号必须替换为真实结果）：

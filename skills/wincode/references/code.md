@@ -2,6 +2,43 @@
 
 以下为 MCP 工具名和参数；以客户端实际 Schema 为准。
 
+## 规范字段
+
+兼容容忍模式允许额外字段，但会忽略它们，不能据“调用成功”判断参数已经生效。例如 `scopeFile`、`scope_files` 均不是 `scopeFiles`，`symbolName` 不能代替查符号工具的 `query`。未知字段不能补足缺失必填项；已知字段填错类型、空白必填值或违反范围规则仍会报错。下面列出的名称区分大小写，未列出的参数不应发送。
+
+| 工具 | 必填字段 | 可选字段及类型 |
+| --- | --- | --- |
+| `workspace_open` | `path`: 非空字符串，最长 4096 | `includeTree`: 布尔值；`maxOutputChars`: 整数 2048–32768，默认 8000 |
+| `wincode_list_directory` | 无 | `path`: 非空字符串，默认 `.`；`maxDepth`: 整数 1–5；`maxEntries`: 整数 1–500；`maxOutputChars`: 整数 2048–32768；`includeIgnored`: 布尔值 |
+| `wincode_analyze_workspace` | 无 | `maxDepth`: 数字，默认 2 |
+| `wincode_find_code_symbol` | `query`: 非空字符串 | `kind`: 字符串，常用 `class/interface/method/function/type/enum`；此工具未声明文件范围参数，指定文件取证改用下面的 `scopeFiles` |
+| `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 字符串，表示符号的**定义文件**，不表示只搜索该文件中的引用 |
+| `analyze_change_impact` | `target`: 非空字符串 | 无 |
+| `wincode_plan_refactoring` | `target`、`goal`: 非空字符串 | 无 |
+| `wincode_safe_move_to_trash` | `filePath`: 工作区内相对路径字符串 | `reason`: 字符串；该工具实际移动文件，须符合用户授权 |
+
+`wincode_analyze_change_impact` 是 `analyze_change_impact` 的公布别名；`wincode_workspace_open` 是 `workspace_open` 的历史兼容别名。别名共享参数和执行规则，优先使用本连接 tools/list 公布的名称。其余字段名不接受自动拼写纠正。
+
+`wincode_prepare_context` 的完整规范字段如下。路径均为工作区内的字面路径，不是 glob。
+
+| 字段 | 类型与数量 | 规则 |
+| --- | --- | --- |
+| `task` | 必填字符串，非空白，最长 8192 | 描述要核对的问题 |
+| `candidateFiles` | 可选字符串数组，最多 20，每项最长 1024 | 优先候选，**不排他**；与 `scopeFiles` 同用时须在其内 |
+| `scopeFiles` | 可选字符串数组，1–20，每项最长 1024 | 排他范围；不能与 `focusAreas` 同用 |
+| `symbol` | 可选字符串，最长 128，不含空白 | 大小写精确声明名；必须有 `scopeFiles`，不能与 `lineRanges` 同用 |
+| `lineRanges` | 可选对象数组，1–8 | 每项必填 `file`（字符串）、`startLine/endLine`（正整数）；1 起始闭区间、起点≤终点、每段≤500行，每文件仅一段；若有 scope，必须在 scope 内；不能与 `symbol` 或 `includeFullText:true` 同用 |
+| `focusAreas` | 可选字符串数组，最多 5，每项最长 1024 | 文件或目录；不支持通配符 |
+| `compress` | 可选布尔值 | 仅在全文且实际使用 CLI 时转发压缩选项；内置降级不做 AST 压缩 |
+| `outputFormat` | 可选字符串 `markdown/xml` | 默认 `markdown`，用于打包正文 |
+| `includeFullText` | 可选布尔值 | 默认 `false`；`true` 仍受总预算约束 |
+| `responseFormat` | 可选字符串 `compact/legacy` | 默认 `compact`；两种形式都计入文本预算 |
+| `maxTokens` | 可选整数 512–65536 | 默认 8000；按 UTF-16 字符÷4估算，并非精确模型 token |
+
+不要用 `"2000"` 代替 `2000`、`"false"` 代替 `false`，也不要把 `{name:"Save"}` 当作搜索字符串。额外字段容忍并不会放宽这些类型规则。返回结果中的 `coverage`、`queryComplete`、`runtime` 等是证据字段，不能作为未声明的请求参数获得相应能力。
+
+## 按任务取证
+
 怀疑源码与连接不同步时，先调用 wincode_hello_world({toolName:"wincode_prepare_context"})，对照本连接 tools/list 的参数及 schemaHash，并记录 runtime.instanceId/build.buildId。旧实例没有这些字段时明确为旧契约，不再反复尝试新参数。构建后需要客户端重连；build.status=unknown 不能当成当前源码已运行。test:e2e 只证明它自己启动的隔离 stdio 进程。
 
 lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details 中的 missingRanges/nextRequest。末行 endLineComplete=false 时从该整行补取，不能把“行号落入区间”算作完整正文。nextRequest 可能提高预算；maximum-budget-without-progress 表示不要反复提交同一请求。明细缺省还需检查 omittedItemCount。scopeFiles/symbol 的 coverage=null，taskCoverage=null；queryComplete 或非空片段均不证明整个方法覆盖。

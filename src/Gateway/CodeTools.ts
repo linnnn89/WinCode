@@ -1,0 +1,162 @@
+import { defineTool, jsonResult } from './ToolDefinition.js';
+import { contextResponse } from './ContextResponse.js';
+import { validateContextScope, type PreparedContextOptions } from '../Core/Context.js';
+
+export const CODE_TOOLS = [
+  defineTool<PreparedContextOptions>({
+    name: 'wincode_prepare_context',
+    description: 'Returns compact file evidence with actual source ranges and omission metadata. Explicit lineRanges report final complete-line coverage and recoverable missing ranges after serialization; a partial last line is not covered. Other requests do not establish full method/task coverage. maxTokens budgets ALL response text using characters/4 (not a model tokenizer). Set includeFullText for packed bodies; legacy opts into JSON plus Markdown.',
+    annotations: { readOnlyHint: true },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        task: {
+          type: 'string',
+          minLength: 1, maxLength: 8192,
+          description: 'Description of the coding task or query the agent is working on (e.g. "分析这个项目架构").',
+        },
+        candidateFiles: {
+          type: 'array',
+          maxItems: 20,
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+          description: 'Literal in-workspace file paths to prioritize, not an exclusive search scope. No glob patterns or parent traversal.',
+        },
+        scopeFiles: {
+          type: 'array', minItems: 1, maxItems: 20,
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+          description: 'Exclusive literal file scope; skips workspace symbol search. candidateFiles/lineRanges must stay inside it. Cannot combine with focusAreas.',
+        },
+        symbol: {
+          type: 'string', minLength: 1, maxLength: 128,
+          description: 'Exact case-sensitive declaration name within required scopeFiles. Local pattern matching, not semantic analysis. Ambiguous/missing targets return issues instead of file-head evidence. Cannot combine with lineRanges.',
+        },
+        lineRanges: {
+          type: 'array', minItems: 1, maxItems: 8,
+          items: {
+            type: 'object', additionalProperties: true, required: ['file', 'startLine', 'endLine'],
+            properties: {
+              file: { type: 'string', minLength: 1, maxLength: 1024 },
+              startLine: { type: 'integer', minimum: 1 },
+              endLine: { type: 'integer', minimum: 1 },
+            },
+          },
+          description: 'Inclusive 1-based ranges, one per file, at most 500 lines each. Skips symbol search; out-of-bounds ranges return issues. Cannot combine with symbol/includeFullText. Budget may truncate returned lines.',
+        },
+        focusAreas: {
+          type: 'array',
+          maxItems: 5,
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+          description: 'Literal in-workspace files or directories, e.g. ["src/Core"]. No globs. Adds at most 8 immediate code files, scanning at most 1000 entries per directory; gaps appear in fileIssues.',
+        },
+        compress: {
+          type: 'boolean',
+          description: 'Forwarded to Repomix CLI --compress when includeFullText is true and the CLI is installed. Builtin fallback does not AST-compress.',
+        },
+        outputFormat: {
+          type: 'string',
+          enum: ['markdown', 'xml'],
+          description: 'Output format of packed snapshot when includeFullText is true (default: markdown).',
+        },
+        includeFullText: {
+          type: 'boolean',
+          description: 'If true, pack related file bodies within maxTokens. Default false: snippets with locations only.',
+        },
+        responseFormat: {
+          type: 'string', enum: ['compact', 'legacy'], default: 'compact',
+          description: 'compact returns one JSON text block without repeated evidence. legacy preserves JSON plus Markdown; both blocks share maxTokens.',
+        },
+        maxTokens: {
+          type: 'integer', minimum: 512, maximum: 65536, default: 8000,
+          description: 'Total returned text budget estimated as UTF-16 characters / 4, including JSON and metadata (default 8000). Actual model tokens can differ.',
+        },
+      },
+      required: ['task'],
+    },
+  }, {
+    validate: (args, { router }) => { validateContextScope(args, router.config.workspaceRoot); },
+    execute: async (args, { router }) => contextResponse(await router.prepareContext(args), args.responseFormat),
+  }),
+  defineTool<{ query: string; kind?: string }>({
+    name: 'wincode_find_code_symbol',
+    description: 'Locates code symbols with signatures and line numbers. Uses Serena when handshake and project activation succeed; otherwise local text scan. Result includes source, queryComplete, uniqueTypeMatch, and limitations.',
+    inputSchema: {
+      type: 'object', additionalProperties: true,
+      properties: {
+        query: {
+          type: 'string', minLength: 1, pattern: '\\S',
+          description: 'Symbol name or search query.',
+        },
+        kind: {
+          type: 'string',
+          description: 'Optional filter: class, interface, method, function, type, enum.',
+        },
+      },
+      required: ['query'],
+    },
+  }, {
+    execute: async (args, { router }) => jsonResult(await router.findCodeSymbols(args.query, args.kind), true),
+  }),
+  defineTool<{ symbolName: string; relativePath?: string }>({
+    name: 'wincode_find_references',
+    description: 'Finds all call sites and usages of a specified symbol across the repository. Uses Serena semantic references when available; degrades to local text retrieval with explicit limitations annotation (text retrieval does not guarantee symbol identity or cross-file reference completeness).',
+    inputSchema: {
+      type: 'object', additionalProperties: true,
+      properties: {
+        symbolName: {
+          type: 'string', minLength: 1, pattern: '\\S',
+          description: 'Exact symbol name, or the full upstream namePath including containers and overload indices such as Service/Save[0]. Pair a full namePath with its defining relativePath. Simple names require a complete unique semantic resolution; ambiguity does not select the first result.',
+        },
+        relativePath: {
+          type: 'string',
+          description: 'Defining file relative to the workspace. Pair it with the full namePath for precise references; omitted paths are resolved only from a complete unique semantic candidate.',
+        },
+      },
+      required: ['symbolName'],
+    },
+  }, {
+    execute: async (args, { router }) => jsonResult(await router.findCodeReferences(args.symbolName, args.relativePath), true),
+  }),
+  defineTool<{ target: string }>({
+    name: 'analyze_change_impact',
+    description: 'Estimates change blast radius from uniquely resolved symbols. Confidence depends on unique resolution and query completeness, not on source=serena-mcp alone. Zero references yield UNKNOWN, never safe-to-delete.',
+    inputSchema: {
+      type: 'object', additionalProperties: true,
+      properties: {
+        target: {
+          type: 'string', minLength: 1, pattern: '\\S',
+          description: 'Name of the class, component, or file to evaluate (e.g. "MemoryService" or "MemoryService.cs").',
+        },
+      },
+      required: ['target'],
+    },
+  }, {
+    aliases: [{ name: 'wincode_analyze_change_impact', listed: true,
+      description: 'Alias for analyze_change_impact. Same unique-resolution and UNKNOWN-on-incomplete-query contract.' }],
+    validate: args => { if (!args.target) throw new Error('target is required.'); },
+    execute: async (args, { router }) => {
+      const impact = await router.analyzeChangeImpact(args.target);
+      return { content: [{ type: 'text', text: JSON.stringify(impact, null, 2) }, { type: 'text', text: impact.formattedReport }] };
+    },
+  }),
+  defineTool<{ target: string; goal: string }>({
+    name: 'wincode_plan_refactoring',
+    description: 'Provides structured refactoring guidance, step-by-step breakdown, and safety boundaries for a component.',
+    inputSchema: {
+      type: 'object', additionalProperties: true,
+      properties: {
+        target: {
+          type: 'string', minLength: 1, pattern: '\\S',
+          description: 'Component or symbol name to refactor.',
+        },
+        goal: {
+          type: 'string', minLength: 1, pattern: '\\S',
+          description: 'Goal or rationale for the refactoring.',
+        },
+      },
+      required: ['target', 'goal'],
+    },
+  }, {
+    execute: async (args, { router }) => jsonResult(await router.planRefactoring(args.target, args.goal), true),
+  }),
+];

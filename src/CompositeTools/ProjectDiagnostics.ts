@@ -2,7 +2,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { WorkspaceManager, ProjectIdentity } from '../Core/Workspace.js';
 import { WinCodeConfig } from '../Core/Config.js';
-import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
+import { AdapterHealthQuery } from '../Core/AdapterStatus.js';
 
 const execAsync = promisify(exec);
 
@@ -23,9 +23,9 @@ export interface DiagnosticsReport {
 export class ProjectDiagnostics {
   private workspace: WorkspaceManager;
   private config: WinCodeConfig;
-  private serena?: SerenaAdapter;
+  private serena?: AdapterHealthQuery;
 
-  constructor(workspace: WorkspaceManager, config: WinCodeConfig, serena?: SerenaAdapter) {
+  constructor(workspace: WorkspaceManager, config: WinCodeConfig, serena?: AdapterHealthQuery) {
     this.workspace = workspace;
     this.config = config;
     this.serena = serena;

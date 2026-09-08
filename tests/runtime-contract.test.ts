@@ -44,10 +44,12 @@ it('hello and tools/list share an immutable registered contract and runtime surv
     const switched = await client.callTool({ name: 'workspace_open', arguments: { path: path.join(root, 'other') } });
     assert.notEqual(switched.isError, true);
     assert.deepEqual((await call()).runtime, hello.runtime);
-    for (const args of [{ toolName: 'missing' }, { toolNames: [] }, { greeting: 5 }]) {
+    for (const args of [{ toolName: 'missing' }, { greeting: 5 }]) {
       assert.equal((await client.callTool({ name: 'wincode_hello_world', arguments: args })).isError, true);
     }
-    assert.equal((await client.callTool({ name: 'wincode_prepare_context', arguments: { task: 'target', scopeFile: ['Target.ts'] } })).isError, true);
+    assert.deepEqual((await call({ toolNames: [] })).runtime, hello.runtime, 'extra fields are tolerated but cannot select tools');
+    assert.notEqual((await client.callTool({ name: 'wincode_prepare_context', arguments: { task: 'target', scopeFile: ['Target.ts'] } })).isError, true);
+    assert.equal((await client.callTool({ name: 'wincode_prepare_context', arguments: { task: 'target', scopeFiles: 'Target.ts' } })).isError, true, 'known field types remain enforced');
   } finally {
     WINCODE_TOOLS[0].description = original;
     await client.close();

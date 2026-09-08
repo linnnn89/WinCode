@@ -25,9 +25,9 @@ export const WORKSPACE_TOOLS = [
   }, {
     aliases: [{ name: 'wincode_workspace_open', listed: false }], switchesWorkspace: true,
     validate: args => { if (!args.path.trim()) throw new Error('path must not be blank.'); },
-    execute: async (args, { router }) => jsonResult(await router.openWorkspace(args.path, {
+    execute: async (args, { router, signal }) => jsonResult(await router.openWorkspace(args.path, {
       includeTree: args.includeTree, maxOutputChars: args.maxOutputChars,
-    })),
+    }, signal)),
   }),
   defineTool<WorkspaceDirectoryOptions>({
     name: 'wincode_list_directory',
@@ -49,7 +49,7 @@ export const WORKSPACE_TOOLS = [
   }),
   defineTool<{ greeting?: string; toolName?: string }>({
     name: 'wincode_hello_world',
-    description: 'Heartbeat plus layered adapter status and lightweight runtime health (uptime, cache bytes, managed child processes, Node memory, last adapter error). Reports whether Serena command exists, handshake succeeded, project is active, and semantic query is usable. available/fallback does not mean Serena is connected.',
+    description: 'Passive heartbeat: current instance version, tool contracts and known adapter state, without starting probes. healthObservation includes observation time; unknown/null means not probed, and known state may be stale. Use wincode_diagnose_project for active checks. available/fallback does not mean Serena is connected.',
     inputSchema: {
       type: 'object',
       additionalProperties: true,

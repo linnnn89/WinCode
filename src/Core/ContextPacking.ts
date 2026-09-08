@@ -1,3 +1,4 @@
+import type { OperationContext } from './OperationContext.js';
 export interface RepomixPackOptions {
   include?: string[];
   exclude?: string[];
@@ -21,5 +22,5 @@ export interface RepomixPackResult {
 }
 
 export interface ContextPacker {
-  packWorkspace(options?: RepomixPackOptions): Promise<RepomixPackResult>;
+  packWorkspace(options?: RepomixPackOptions, operation?: OperationContext): Promise<RepomixPackResult>;
 }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.1
+
+- Make hello passive: report instance identity, capabilities and known adapter observations without spawning probes. Unknown state is explicit; diagnose_project retains active checks.
+- Carry client cancellation and a bounded internal deadline through code queries, context packing and upstream RPC. Stop follow-on work and retain request ownership through cleanup; a cancelled pack does not cancel another caller's pack.
+- Preserve shutdown failures and bounded per-owner cleanup outcomes, finish other owners and late registrations, clean failed initialization, and verify owned process exit after termination.
+- Retain resource-close failures across repeated calls while starting a new close lifetime for a newly connected Serena process. Add real mock-upstream cancellation/reconnect and controlled process-exit regressions.
+- Limitations: OS I/O cancellation is cooperative; resetting shared Serena transport can affect other upstream calls. Workspace switch cancellation has a commit boundary. Real Serena semantics remain a separate integration check; Repomix CodeQL alert #1 is not resolved here.
+
 ## 0.12.0
 
 - Register each tool's schema, aliases, validation and execution together; `tools/list`, runtime schema hashes and input validation use the same instance snapshot.

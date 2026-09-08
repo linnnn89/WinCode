@@ -217,6 +217,7 @@ it('ImpactAnalyzer forwards the located full name path instead of its display na
     forwarded = args;
     return { references: [], source: 'serena-mcp', queryComplete: true, limitations: [] } as any;
   };
-  await new ImpactAnalyzer(adapter).analyzeImpact('Item');
-  assert.deepEqual(forwarded, ['Namespace/Item', 'src/Item.cs']);
+  const operation = { signal: new AbortController().signal };
+  await new ImpactAnalyzer(adapter).analyzeImpact('Item', operation);
+  assert.deepEqual(forwarded, ['Namespace/Item', 'src/Item.cs', operation]);
 });

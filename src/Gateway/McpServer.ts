@@ -66,14 +66,15 @@ export class WinCodeMcpServer {
   async stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     this.stopPromise = this.stopOnce();
-    try { await this.stopPromise; }
-    finally { this.stopPromise = Promise.resolve(); }
+    return this.stopPromise;
   }
 
   private async stopOnce(): Promise<void> {
+    const failures: unknown[] = [];
     try { await this.router.dispose(); }
-    catch (error) { console.error('[WinCode Gateway] Error disposing router:', error); }
+    catch (error) { failures.push(error); }
     try { await this.server.close(); }
-    catch { /* The transport may already be gone after stdin closes. */ }
+    catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, 'Gateway shutdown failed.');
   }
 }

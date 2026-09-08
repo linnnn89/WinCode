@@ -232,3 +232,4 @@ ToolRouter 是允许知道具体实现的组装位置；Gateway 不再访问适�
 - WP2 正在实施：0.12.0，按用户 D2 决定保留额外字段容忍、校验已声明字段，并在现有 Skill 文件明确规范字段，不新增验证依赖。
 - 新发现 F12：GitHub [code scanning #1](https://github.com/linnnn89/WinCode/security/code-scanning/1) 在 `31b7dd1` 仍为 open/medium，Repomix 启用路径经 cmd 处理环境路径。只读方案为 Node 直启已安装 JS 入口、移除 shell 链；涉及 npx 缓存/PATH 包装脚本兼容变化，已单独请求决定，未擅自实施或关闭告警。
 - GitHub 经验落实：参考 [Node watcher 实现](https://github.com/nodejs/node/blob/main/lib/internal/fs/watchers.js) 与 [VS Code 生命周期管理](https://github.com/microsoft/vscode/blob/main/src/vs/base/common/lifecycle.ts) 的 owner、幂等及失败语义；复用现有 ResourceManager，未引入新的管理框架。
+- 2026-09-08 更新：WP2 / 0.12.0 已按精确 head CI 合并 PR #23（main=39d2b20）。WP3 / 0.12.1 实施中，用户已确认 hello 被动、diagnose 主动；后续默认由主代理推进，独立审核与自审分别记载。

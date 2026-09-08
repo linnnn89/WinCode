@@ -1,4 +1,5 @@
 import path from 'path';
+import type { OperationContext } from '../Core/OperationContext.js';
 import {
   CodeReferenceQuery,
   CodeSymbol,
@@ -68,7 +69,7 @@ export class ImpactAnalyzer {
    * Confidence is not derived from source alone. Zero refs / ambiguity / incomplete
    * queries return UNKNOWN and must not be treated as safe to delete.
    */
-  async analyzeImpact(target: string): Promise<ImpactReport> {
+  async analyzeImpact(target: string, operation?: OperationContext): Promise<ImpactReport> {
     const rawTarget = target.trim();
     if (!rawTarget) {
       throw new Error('Target parameter is required for impact analysis.');
@@ -99,7 +100,7 @@ export class ImpactAnalyzer {
     };
 
     if (typeof this.serena.findSymbolsDetailed === 'function') {
-      const symRes: FindSymbolsResult = await this.serena.findSymbolsDetailed(symbolName);
+      const symRes: FindSymbolsResult = await this.serena.findSymbolsDetailed(symbolName, undefined, undefined, operation);
       symbols = symRes.symbols || [];
       assessment.source = symRes.source || 'serena-adapter-fallback';
       assessment.queryComplete = symRes.queryComplete !== false;
@@ -110,7 +111,7 @@ export class ImpactAnalyzer {
       assessment.typeMatchCount = stats.typeMatchCount;
       assessment.unique = stats.uniqueTypeMatch;
     } else {
-      symbols = await this.serena.findSymbols(symbolName);
+      symbols = await this.serena.findSymbols(symbolName, undefined, operation);
       assessment.source = 'serena-adapter-fallback';
       const stats = computeTypeMatchStats(symbols, symbolName);
       assessment.typeMatchCount = stats.typeMatchCount;
@@ -208,7 +209,7 @@ export class ImpactAnalyzer {
         typeof this.serena.findReferencesDetailed === 'function') {
       const refRes: FindReferencesResult = await this.serena.findReferencesDetailed(
         matchedSymbol?.namePath ?? symbolName,
-        matchedSymbol?.file
+        matchedSymbol?.file, operation
       );
       refs = refRes.references || [];
       if (refRes.source) assessment.source = refRes.source;
@@ -224,7 +225,7 @@ export class ImpactAnalyzer {
         assessment.limitations.push(...refRes.limitations);
       }
     } else if (assessment.unique && assessment.queryComplete && !assessment.truncated) {
-      refs = await this.serena.findReferences(symbolName);
+      refs = await this.serena.findReferences(symbolName, undefined, operation);
     }
 
     const referencesCount = refs.length;

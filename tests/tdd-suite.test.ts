@@ -525,7 +525,7 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
     it('Lifecycle safety: repeated openWorkspace on ToolRouter must close old Serena instances', async () => {
       const testRouter = new ToolRouter(config);
       await testRouter.initialize();
-
+      try {
       let closeClient1Calls = 0;
       let closeTransport1Calls = 0;
 
@@ -552,9 +552,10 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       assert.strictEqual(closeClient1Calls, 1, 'Old Serena client must be closed when opening new workspace');
       assert.strictEqual(closeTransport1Calls, 1, 'Old Serena transport must be closed when opening new workspace');
 
-      // Clean up router
-      await testRouter.dispose();
-      testRouter.workspace.setRoot(root);
+      } finally {
+        await testRouter.dispose();
+        testRouter.workspace.setRoot(root);
+      }
     });
 
     it('Lifecycle safety: failed Serena connection must close newly created transport and client', async () => {

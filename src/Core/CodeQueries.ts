@@ -1,3 +1,4 @@
+import type { OperationContext } from './OperationContext.js';
 export const SERENA_DEGRADED_LIMITATIONS: string[] = [
   '本地正则扫描仅作为文本检索降级方案，不保证符号身份、重载区分、跨文件引用完整性或安全重命名。',
   '本地正则扫描无法替代完整 Roslyn/TypeScript LSP 语义层面的跨文件重命名与重载解析。',
@@ -76,13 +77,13 @@ export function computeTypeMatchStats(
 
 /** Legacy array methods remain required; detailed results are optional for older consumers. */
 export interface CodeSymbolQuery {
-  findSymbols(query: string, kindFilter?: string): Promise<CodeSymbol[]>;
-  findSymbolsDetailed?(query: string, kindFilter?: string, relativePath?: string): Promise<FindSymbolsResult>;
+  findSymbols(query: string, kindFilter?: string, operation?: OperationContext): Promise<CodeSymbol[]>;
+  findSymbolsDetailed?(query: string, kindFilter?: string, relativePath?: string, operation?: OperationContext): Promise<FindSymbolsResult>;
 }
 
 export interface CodeReferenceQuery extends CodeSymbolQuery {
-  findReferences(symbolName: string, relativePath?: string): Promise<SymbolReference[]>;
-  findReferencesDetailed?(symbolName: string, relativePath?: string): Promise<FindReferencesResult>;
+  findReferences(symbolName: string, relativePath?: string, operation?: OperationContext): Promise<SymbolReference[]>;
+  findReferencesDetailed?(symbolName: string, relativePath?: string, operation?: OperationContext): Promise<FindReferencesResult>;
 }
 
 export interface ContextCodeQuery extends CodeSymbolQuery {

@@ -27,8 +27,8 @@ export class RefactorAssistant {
   /**
    * Checklist derived from impact analysis. Not an automated refactor engine.
    */
-  async planRefactoring(componentName: string, refactorGoal: string): Promise<RefactorPlan> {
-    const impactReport = await this.impact.analyzeImpact(componentName);
+  async planRefactoring(componentName: string, refactorGoal: string, operation?: import('../Core/OperationContext.js').OperationContext): Promise<RefactorPlan> {
+    const impactReport = await this.impact.analyzeImpact(componentName, operation);
 
     const steps: string[] = [];
     if (!impactReport.uniqueResolution) {

@@ -20,7 +20,7 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.12.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.12.1**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
@@ -124,7 +124,7 @@ The 2026-09-08 check of the current Codex connection against TavernDesk source p
 | `wincode_ui_list_windows` | Enumerate visible top-level windows with title/process filters and count limits. |
 | `wincode_ui_inspect` | Inspect UI control subtrees, interactive states, and optional numbered screenshots. |
 | `wincode_ui_review` | Return explicit XAML/C# source candidates, lines, hashes and scoped next requests from one UI snapshot. |
-| `wincode_hello_world` | Probe gateway status, active cache volume, and adapter connection layers. |
+| `wincode_hello_world` | Read instance identity and known adapter state without spawning probes; use diagnose_project for active checks. |
 | `wincode_diagnose_project` | Check local SDKs, Git, and Windows environment health non-invasively. |
 
 `wincode_analyze_change_impact` is an alias of `analyze_change_impact`. Detailed workflows: [code intelligence](skills/wincode/references/code.md), [UI inspection](skills/wincode/references/ui.md), [diagnostics](skills/wincode/references/diagnostics.md).
@@ -213,7 +213,7 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.12.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.12.1**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
@@ -317,7 +317,7 @@ Serena 结果保留完整 `namePath`（容器及重载索引）；将其作为 `
 | `wincode_ui_list_windows` | 列出系统可见顶层窗口，支持按标题/进程名筛选与数量硬截断。 |
 | `wincode_ui_inspect` | 定向抓取控件子树、交互状态与可选的高对比度数字标注截图。 |
 | `wincode_ui_review` | 从一次 UI 快照提供显式 XAML/C# 源码候选、行号、哈希和下一步限定读取请求。 |
-| `wincode_hello_world` | 网关状态心跳，检查缓存体积与适配器分层连接状态。 |
+| `wincode_hello_world` | 被动读取版本、能力及已知状态，不启动探测；主动检查使用 diagnose_project。 |
 | `wincode_diagnose_project` | 无侵入检查本地 .NET SDK、Git 与运行环境健康度。 |
 
 `wincode_analyze_change_impact` 是 `analyze_change_impact` 的别名。详细参数与工作流请参考对应手册：[代码分析](skills/wincode/references/code.md)、[UI 取证](skills/wincode/references/ui.md)、[系统诊断](skills/wincode/references/diagnostics.md)。

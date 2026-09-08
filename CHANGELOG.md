@@ -1,5 +1,10 @@
 # Changelog
 
+## Maintenance after 0.11.1
+
+- Add Windows PR/main regression checks for Node.js 20/24, .NET 10 native/console builds and the production stdio contract; interactive UI acceptance remains separate.
+- Refine retrieval guidance after a small paired TavernDesk source audit: use bounded native file reads for known methods requiring error/cancellation branches, retaining scoped symbols for declaration previews. No gateway API or runtime version change.
+
 ## 0.11.1
 
 - Clarify displayed-snippet versus packed-file completeness. Symbol windows explicitly retain unknown method coverage and offer bounded following-line requests based on the final serialized tail and observed EOF.

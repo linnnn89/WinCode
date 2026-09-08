@@ -370,3 +370,14 @@
 - 版本与文档：package/lock/WINCODE_VERSION 为 0.11.1；README 中英文、Skill、CHANGELOG 及路线图最新状态已同步，原路线图历史章节保留。没有新增依赖或修改全局 MCP 配置。
 - 验证：typecheck、Gateway build、Host publish --no-restore 通过；默认非交互回归 234 项，233 pass、1 skip、0 fail；UI/协议 34/34 通过；生产新 stdio initialize/list/契约/目标正文/未知参数拒绝/同实例核对通过；TavernDesk 只读源码 8 场景通过。全量回归在最后 .bak 备份后缀调整前完成，该调整后仅重跑相应同步专项。日志 test-tmp/evidence-*.log，源码报告 test-tmp/r3/acceptance-1788828481850.json，均按既有规则排除。
 - 运行边界：本任务现有连接 hello 仍返回 0.11.0（实例 6e7b45f6-2662-43cf-a75c-f0884b1e72d7），没有把新 stdio 的 0.11.1 验证冒称为旧连接升级；后续客户端重连后加载新构建。截图提示修复不等于所有应用的空白截图已消除，computer use 窗口归属及真实 Serena LSP 仍未验收。
+
+## 2026-09-08（北京时间）— PR 自动回归与真实源码审查对照
+
+- 授权：用户同意执行重新评估建议。基线 main@57d6d68 / 0.11.1，工作区干净，建立 codex/ci-real-task-baseline；范围为 CI、升级验收及小规模真实源码审查，据实测调整取证手册。无网关公共接口、运行版本或依赖升级；R7–R9 未启动。
+- 当前连接验收：本任务实际 hello 返回 0.11.1、verified，实例 690efd0b-200e-4b15-bd08-a3d608a777cf，启动于 09:17:46（北京时间）；buildId=483b15166ff2f1bb1905d8d6eec2a360c9aee39b82a669be41f7831d008aaea1、revision=57d6d682b6141c72171df176fb57bc5ce5d44efe，与磁盘产物一致。本轮没有重启客户端或修改 MCP 配置。真实连接正文同时验证 bodyStatusScope、symbolCoverage 和 nextRequest，Serena 仍降级。
+- CI：Windows 2025、Node.js 20/24 小矩阵、.NET 10；固定 GitHub Actions 提交，contents:read，禁用保留凭据，15 分钟超时并取消同分支旧运行。先发布原生 Host、预构建两个控制台夹具，再运行 npm test 与生产 stdio 契约。沿用现有检查且没有降低断言；交互 UI 不进入无桌面验收。分支保护未修改，远端结果以实际 PR 检查为准。
+- 对照设计：四项实际 TavernDesk 源码维护问题，起始信息均为明确文件及声明名。原生路径先用 rg 获取前 8/后 79 行；MCP 路径先按旧 Skill 使用 scopeFiles+symbol、4000 估计 token 预算，缺少分支后执行有界补读。数据根任务两侧继续读复制实现；导入任务两侧增加字段赋值搜索，MCP 路径此步转用原生工具。原始结果、参数、耗时、源码哈希见 test-tmp/maintenance-source-study-20260908.json（按既有规则忽略，不上传 TavernDesk 正文）。四份文件哈希未变化，所有 MCP 正文逐行等于源码。
+- 对照结果（调用数 / UTF-16 返回字符）：导入错误条件：原生 2 / 3929，MCP 起步 3 / 7797；回复取消：1 / 3979 对 2 / 7531；数据根迁移：2 / 11397 对 3 / 16135；固定测试根复用：1 / 4430 对 2 / 8121。任务取证共 6 / 23735 对 10 / 39584，MCP 起步一侧含一次原生回退；身份核对与打开/恢复工作区另计。四次初始 24 行窗口均未包含问题关键分支。该结果是同一 Agent 的非盲源码审查、固定窗口策略对照，不是独立模型实验、完整开发任务完成率、真实 Token 或总任务耗时比较；不计算通用提速百分比。
+- 审查结论：ImportAsync catch 仅在会话引用未变时写状态，页面离开/书架切换到会话变更的完整生命周期仍未核实，此项保留部分验收。ExecuteAsync 中 Interrupted 和空正文分支均先于持久化；数据库复制/发布先于配置保存，路径修复是独立入口，配置保存失败后的跨文件系统事务回滚不能由本方法保证；测试根需显式 reuse、匹配非链接标记，并拒绝祖先/子项链接。均为源码结论，不冒称 GUI、真实取消或数据迁移运行通过。
+- 最小修正：README 中英文与 Skill 明确区分声明预览和异常/取消/释放分支审核；后者有现成文件工具时优先有界原生读取，小文件可按预算取完整正文。保留 MCP 证据边界，没有为长方法增加解析器、工具或配置。
+- 本地验证：typecheck、build、默认回归 234 项（233 pass、1 skip、0 fail，28.5 秒）、新生产 stdio 契约通过。日志 test-tmp/ci-regression.log、test-tmp/ci-stdio.log。未重复运行交互 UI；Node.js 20 和全新 Windows runner 的结果待本 PR 实际 CI。

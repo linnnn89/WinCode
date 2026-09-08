@@ -1,3 +1,4 @@
+import { type OperationContext, checkOperation, rethrowOperationError } from '../Core/OperationContext.js';
 import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -37,6 +38,14 @@ export class RepomixAdapter implements IAdapter {
   async initialize(): Promise<void> {
     const health = await this.checkHealth();
     this.isCliAvailable = health.available && health.source === 'installed';
+  }
+
+  getKnownHealth(): { observedAt: string | null; health: AdapterHealth | null } {
+    if (!this.config.adapters.repomix.useCli) return { observedAt: null, health: {
+      available: true, source: 'fallback' as const, details: 'Repomix CLI disabled by configuration; builtin packer available.',
+    } };
+    return { observedAt: this.healthCache ? new Date(this.healthCache.at).toISOString() : null,
+      health: this.healthCache ? { ...this.healthCache.value, lastError: this.lastError ?? this.healthCache.value.lastError } : null };
   }
 
   async checkHealth(timeoutMs?: number): Promise<AdapterHealth> {
@@ -130,9 +139,7 @@ export class RepomixAdapter implements IAdapter {
       });
     });
 
-    if (timeoutMs === undefined) {
-      this.healthCache = { at: Date.now(), value: health };
-    }
+    this.healthCache = { at: Date.now(), value: health };
     return health;
   }
 
@@ -148,7 +155,8 @@ export class RepomixAdapter implements IAdapter {
   /**
    * Packs workspace into a structured AI context snapshot
    */
-  async packWorkspace(options?: RepomixPackOptions): Promise<RepomixPackResult> {
+  async packWorkspace(options?: RepomixPackOptions, operation?: OperationContext): Promise<RepomixPackResult> {
+    checkOperation(operation);
     // A disabled request must neither read a CLI snapshot nor join an enabled CLI pack.
     const allowCli = this.config.adapters.repomix.useCli;
     const policy = allowCli ? 'cli-enabled' : 'builtin-only';
@@ -156,39 +164,43 @@ export class RepomixAdapter implements IAdapter {
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<RepomixPackResult>(cacheKey, fingerprint);
+    checkOperation(operation);
     if (cached) {
       return { ...cached, fromCache: true };
     }
 
     const inflightKey = `${cacheKey}:${fingerprint}`;
     const existing = this.inflightPacks.get(inflightKey);
-    if (existing) {
+    if (existing && !operation) {
       const shared = await existing;
       return { ...shared, fromCache: true };
     }
 
-    const pending = this.packWorkspaceUncached(options, allowCli).then(async (result) => {
+    const pending = this.packWorkspaceUncached(options, allowCli, operation).then(async (result) => {
+      checkOperation(operation);
       const spilled = await this.spillIfOversized(result);
+      checkOperation(operation);
       await this.cache.set(cacheKey, spilled, { fingerprint, ttlMs: 1000 * 60 * 10 });
       return spilled;
     });
-    this.inflightPacks.set(inflightKey, pending);
+    if (!operation) this.inflightPacks.set(inflightKey, pending);
     try {
       return await pending;
     } finally {
-      this.inflightPacks.delete(inflightKey);
+      if (!operation) this.inflightPacks.delete(inflightKey);
     }
   }
 
-  private async packWorkspaceUncached(options: RepomixPackOptions | undefined, allowCli: boolean): Promise<RepomixPackResult> {
+  private async packWorkspaceUncached(options: RepomixPackOptions | undefined, allowCli: boolean, operation?: OperationContext): Promise<RepomixPackResult> {
     // Explicit candidate list is a closed set — never fall through to a full-repo CLI pack.
     if (Array.isArray(options?.candidateFiles)) {
-      return this.packWithFallback(options);
+      return this.packWithFallback(options, operation);
     }
     if (allowCli && this.config.adapters.repomix.useCli && this.isCliAvailable) {
       try {
-        return await this.packWithCli(options);
+        return await this.packWithCli(options, operation);
       } catch (err) {
+        rethrowOperationError(err, operation);
         const failure = toExternalOpFailure(err, 'repomix');
         this.lastError = {
           at: new Date().toISOString(),
@@ -197,22 +209,23 @@ export class RepomixAdapter implements IAdapter {
           recoverable: true,
         };
         console.warn('[RepomixAdapter] CLI packing failed, falling back to built-in packer:', failure.message);
-        return this.packWithFallback(options);
+        return this.packWithFallback(options, operation);
       }
     }
-    return this.packWithFallback(options);
+    return this.packWithFallback(options, operation);
   }
 
   /**
    * Invokes official Repomix CLI to generate a repository snapshot
    */
-  private async packWithCli(options?: RepomixPackOptions): Promise<RepomixPackResult> {
+  private async packWithCli(options?: RepomixPackOptions, operation?: OperationContext): Promise<RepomixPackResult> {
     const root = this.config.workspaceRoot;
     const style = options?.outputFormat || 'markdown';
     const tempOutputDir = path.join(this.config.cacheDir, 'repomix_tmp');
     await fs.mkdir(tempOutputDir, { recursive: true });
+    checkOperation(operation);
     // Disabling during the preceding await must still prevent the process launch.
-    if (!this.config.adapters.repomix.useCli) return this.packWithFallback(options);
+    if (!this.config.adapters.repomix.useCli) return this.packWithFallback(options, operation);
 
     const ext = style === 'xml' ? 'xml' : 'md';
     const tempOutputFile = path.join(tempOutputDir, `repomix_${Date.now()}.${ext}`);
@@ -251,6 +264,18 @@ export class RepomixAdapter implements IAdapter {
       proc.stderr?.on('data', (d) => (stderr += d.toString()));
 
       const packTimeoutMs = this.config.timeouts?.repomixPackMs ?? 30_000;
+      const cancel = async () => {
+        if (isSettled) return;
+        isSettled = true;
+        clearTimeout(timeout);
+        operation?.signal?.removeEventListener('abort', cancel);
+        try {
+          await killProcessTree(proc);
+          this.untrackProcess(proc);
+          await fs.unlink(tempOutputFile).catch(() => {});
+          checkOperation(operation);
+        } catch (error) { reject(error); }
+      };
       const timeout = setTimeout(async () => {
         if (isSettled) return;
         isSettled = true;
@@ -258,11 +283,14 @@ export class RepomixAdapter implements IAdapter {
         await killProcessTree(proc).catch(() => {});
         reject(new TimeoutError('repomix', packTimeoutMs));
       }, packTimeoutMs);
+      operation?.signal?.addEventListener('abort', cancel, { once: true });
+      if (operation?.signal?.aborted) void cancel();
 
       proc.on('close', async (code) => {
         if (isSettled) return;
         isSettled = true;
         clearTimeout(timeout);
+        operation?.signal?.removeEventListener('abort', cancel);
         this.untrackProcess(proc);
 
         try {
@@ -294,6 +322,7 @@ export class RepomixAdapter implements IAdapter {
         if (isSettled) return;
         isSettled = true;
         clearTimeout(timeout);
+        operation?.signal?.removeEventListener('abort', cancel);
         this.untrackProcess(proc);
         reject(err);
       });
@@ -303,7 +332,7 @@ export class RepomixAdapter implements IAdapter {
   /**
    * Resilient built-in context packer when Repomix CLI is not present or fails
    */
-  private async packWithFallback(options?: RepomixPackOptions): Promise<RepomixPackResult> {
+  private async packWithFallback(options?: RepomixPackOptions, operation?: OperationContext): Promise<RepomixPackResult> {
     const root = this.config.workspaceRoot;
     const maxFiles = options?.maxFiles ?? 50;
     const collectedFiles: { relPath: string; content: string }[] = [];
@@ -311,19 +340,22 @@ export class RepomixAdapter implements IAdapter {
     // Closed candidate set: even an empty array means "only these files", never the whole tree.
     if (Array.isArray(options?.candidateFiles)) {
       for (const cand of options.candidateFiles) {
+        checkOperation(operation);
         if (collectedFiles.length >= maxFiles) break;
         const fullPath = path.isAbsolute(cand) ? cand : path.join(root, cand);
         try {
           const stat = await fs.stat(fullPath);
           if (stat.isFile() && stat.size < 500_000) {
             const relPath = path.relative(root, fullPath).replace(/\\/g, '/');
-            const content = await fs.readFile(fullPath, 'utf-8');
+            const content = await fs.readFile(fullPath, { encoding: 'utf8', signal: operation?.signal });
             collectedFiles.push({ relPath, content });
           }
-        } catch {
+        } catch (error) {
+          rethrowOperationError(error, operation);
           // Ignore non-existent candidate files
         }
       }
+      checkOperation(operation);
       return this.formatPackedResult(collectedFiles, root, options?.outputFormat);
     }
 
@@ -352,10 +384,12 @@ export class RepomixAdapter implements IAdapter {
     );
 
     const walk = async (dir: string): Promise<void> => {
+      checkOperation(operation);
       if (collectedFiles.length >= maxFiles) return;
 
       const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
+        checkOperation(operation);
         // [P2 Fix]: Stop walking immediately when maxFiles reached
         if (collectedFiles.length >= maxFiles) break;
 
@@ -388,12 +422,13 @@ export class RepomixAdapter implements IAdapter {
             try {
               const stat = await fs.stat(fullPath);
               if (stat.size < 250_000) {
-                const content = await fs.readFile(fullPath, 'utf-8');
+                const content = await fs.readFile(fullPath, { encoding: 'utf8', signal: operation?.signal });
                 collectedFiles.push({ relPath, content });
                 // [P2 Fix]: Stop immediately when maxFiles reached
                 if (collectedFiles.length >= maxFiles) break;
               }
-            } catch {
+            } catch (error) {
+              rethrowOperationError(error, operation);
               // Ignore unreadable
             }
           }
@@ -403,6 +438,7 @@ export class RepomixAdapter implements IAdapter {
 
     await walk(root);
 
+    checkOperation(operation);
     return this.formatPackedResult(collectedFiles, root, options?.outputFormat);
   }
 
@@ -487,7 +523,11 @@ export class RepomixAdapter implements IAdapter {
     this.healthCache = null;
     this.inflightPacks.clear();
     const procs = Array.from(this.activeProcesses);
-    this.activeProcesses.clear();
-    await Promise.all(procs.map((p) => killProcessTree(p).catch(() => {})));
+    const outcomes = await Promise.allSettled(procs.map(async proc => {
+      await killProcessTree(proc);
+      this.activeProcesses.delete(proc);
+    }));
+    const failures = outcomes.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Repomix processes failed to close.');
   }
 }

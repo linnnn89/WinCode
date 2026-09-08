@@ -1,3 +1,4 @@
+import { type OperationContext, checkOperation, rethrowOperationError } from './OperationContext.js';
 /**
  * Task context for agents: ranked file evidence (path/symbol/line/snippet) inside a token budget.
  * Does not invent architecture advice when evidence is missing. includeFullText packs only the related set.
@@ -201,7 +202,8 @@ export class ContextManager {
     this.serena = serena;
   }
 
-  async prepareContext(options: PreparedContextOptions | string): Promise<PreparedContextResult> {
+  async prepareContext(options: PreparedContextOptions | string, operation?: OperationContext): Promise<PreparedContextResult> {
+    checkOperation(operation);
     const opts: PreparedContextOptions =
       typeof options === 'string' ? { task: options } : options;
     const { scope, ranges } = validateContextScope(opts, this.workspace.root);
@@ -221,6 +223,7 @@ export class ContextManager {
     const sourceContents = new Map<string, string>();
     if (opts.symbol && scope) {
       for (const file of scope) {
+        checkOperation(operation);
         try {
           const full = await this.resolveFile(file);
           const stat = await fs.stat(full);
@@ -229,13 +232,13 @@ export class ContextManager {
           if (!['.cs', '.ts', '.js', '.py'].includes(path.extname(file).toLowerCase())) {
             fileIssues.push({ path: file, reason: 'unsupported-symbol-language' }); continue;
           }
-          const source = await fs.readFile(full, 'utf8');
+          const source = await fs.readFile(full, { encoding: 'utf8', signal: operation?.signal });
           sourceContents.set(file, source);
           const matches = this.serena.findSymbolsInContent(source, file)
             .filter(symbol => symbol.name === opts.symbol);
           if (matches.length === 1) keySymbols.push(matches[0]);
           else fileIssues.push({ path: file, reason: matches.length ? `ambiguous-symbol:${matches.length}` : 'symbol-not-found' });
-        } catch (error) { fileIssues.push({ path: file, reason: this.readIssue(error) }); }
+        } catch (error) { rethrowOperationError(error, operation); fileIssues.push({ path: file, reason: this.readIssue(error) }); }
       }
       if (keySymbols.length > 1 || fileIssues.some(issue => issue.reason.startsWith('ambiguous-symbol'))) {
         for (const match of keySymbols) fileIssues.push({ path: match.file, reason: 'ambiguous-symbol-across-files' });
@@ -245,10 +248,11 @@ export class ContextManager {
       limitations.push('Scoped symbol matching uses local declaration patterns, not semantic analysis; matches may be incomplete. Use lineRanges for exact known locations.');
     }
     for (const kw of keywords.slice(0, 4)) {
+      checkOperation(operation);
       const detailed =
         typeof this.serena.findSymbolsDetailed === 'function'
-          ? await this.serena.findSymbolsDetailed(kw)
-          : { symbols: await this.serena.findSymbols(kw), source: 'serena-adapter-fallback' as const };
+          ? await this.serena.findSymbolsDetailed(kw, undefined, undefined, operation)
+          : { symbols: await this.serena.findSymbols(kw, undefined, operation), source: 'serena-adapter-fallback' as const };
       if ('limitations' in detailed && Array.isArray(detailed.limitations)) {
         limitations.push(...detailed.limitations);
       }
@@ -289,18 +293,19 @@ export class ContextManager {
       }
     }
     if (opts.focusAreas && opts.focusAreas.length > 0) {
-      await this.addFocusAreaFiles(related, opts.focusAreas, 8, fileIssues);
+      await this.addFocusAreaFiles(related, opts.focusAreas, 8, fileIssues, operation);
     }
 
     const evidence: ContextEvidence[] = [];
     let usedChars = 0;
 
     for (const [rel, reason] of related) {
+      checkOperation(operation);
       if (opts.symbol && !selectedSymbols.has(rel)) continue;
       if (ranges.size && !ranges.has(rel)) continue;
       if (usedChars >= maxChars || evidence.length >= 20) { truncated = true; break; }
       const snippet = await this.readSnippet(rel, [...selectedSymbols.values()], includeFullText,
-        ranges.has(rel) ? maxChars - usedChars : Math.min(4000, maxChars - usedChars), fileIssues, ranges.get(rel), sourceContents.get(rel));
+        ranges.has(rel) ? maxChars - usedChars : Math.min(4000, maxChars - usedChars), fileIssues, ranges.get(rel), sourceContents.get(rel), operation);
       if (!snippet) continue;
       const symbol = snippet.symbol;
       evidence.push({
@@ -333,7 +338,7 @@ export class ContextManager {
         candidateFiles: evidence.map(item => item.file),
         maxFiles: 20,
       };
-      const snapshot = await this.repomix.packWorkspace(packOptions);
+      const snapshot = await this.repomix.packWorkspace(packOptions, operation);
       snapshotSource = snapshot.source;
       fromCache = snapshot.fromCache;
       packedContent = snapshot.content;
@@ -431,6 +436,7 @@ export class ContextManager {
       }
     }
 
+    checkOperation(operation);
     const relatedFiles = Array.from(related.entries()).map(([p, reason]) => ({
       path: p,
       included: evidence.some((e) => e.file === p),
@@ -479,12 +485,13 @@ export class ContextManager {
     related: Map<string, string>,
     focusAreas: string[],
     cap: number,
-    issues: PreparedContextResult['fileIssues']
+    issues: PreparedContextResult['fileIssues'], operation?: OperationContext
   ): Promise<void> {
     const codeExts = new Set(['.ts', '.js', '.cs', '.tsx', '.jsx', '.py', '.xaml', '.csproj', '.sln']);
 
     let added = 0;
     for (const area of focusAreas) {
+      checkOperation(operation);
       try {
         const full = await this.resolveFile(area);
         const stat = await fs.stat(full);
@@ -501,6 +508,7 @@ export class ContextManager {
         let matched = false;
         const entries = await fs.opendir(full);
         for await (const entry of entries) {
+          checkOperation(operation);
           if (++scanned > 1000) { issues.push({ path: area, reason: 'selection-limit' }); break; }
           if (!entry.isFile()) continue;
           const ext = path.extname(entry.name).toLowerCase();
@@ -513,6 +521,7 @@ export class ContextManager {
         }
         if (!matched) issues.push({ path: area, reason: 'no-matching-files' });
       } catch (error) {
+        rethrowOperationError(error, operation);
         issues.push({ path: area, reason: this.readIssue(error) });
       }
     }
@@ -549,14 +558,14 @@ export class ContextManager {
     maxChars: number,
     issues: PreparedContextResult['fileIssues'],
     range?: { startLine: number; endLine: number },
-    sourceContent?: string
+    sourceContent?: string, operation?: OperationContext
   ): Promise<{ text: string; startLine: number; endLine: number; endLineComplete: boolean; fileLineCount: number; truncated: boolean; symbol?: CodeSymbol } | null> {
     try {
       const fullPath = await this.resolveFile(rel);
       const stat = await fs.stat(fullPath);
       if (!stat.isFile()) { issues.push({ path: rel, reason: 'not-file' }); return null; }
       if (stat.size >= 500_000) { issues.push({ path: rel, reason: 'file-too-large' }); return null; }
-      const content = sourceContent ?? await fs.readFile(fullPath, 'utf-8');
+      const content = sourceContent ?? await fs.readFile(fullPath, { encoding: 'utf8', signal: operation?.signal });
       const lines = content.split(/\r?\n/);
       if (range && range.endLine > lines.length) { issues.push({ path: rel, reason: 'line-range-out-of-bounds' }); return null; }
       const symbol = symbols.find((s) => this.normalizeRel(s.file) === this.normalizeRel(rel) &&
@@ -581,6 +590,7 @@ export class ContextManager {
         truncated: Boolean(skippedPrefix) || text.length < slice.length,
         symbol: symbol && symbol.line! >= start + 1 && symbol.line! <= endLine ? symbol : undefined };
     } catch (error) {
+      rethrowOperationError(error, operation);
       issues.push({ path: rel, reason: this.readIssue(error) });
       return null;
     }

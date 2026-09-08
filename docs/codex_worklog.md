@@ -421,3 +421,15 @@
 - 独立审查发现契约矩阵以基准调用自身作比较可能漏掉错误路由，已改为独立列明 16 个名称的期望方法和实参；主代理复核最终矩阵、共享路径校验及既有 realpath/junction 防护，定向 19/19 通过。原测试中三个“未知字段应报错”的旧断言按用户决定改为验证忽略且不改变行为；错误类型与路径边界断言保留。早期集成的 type-only 导出错误已修复，没有将其冒称用户政策反例。
 - 构建 buildId=471ba757156a69a8e89d1a7cc2d3d8f6ca4aa4739c71ea5fc90034ff09620063，schemaHash=417b9ad1deafe21006e10ffdc4d17f1d325630b3ddcee9bedf7e1fdd2e5908d3。这是提交前新进程验证，不证明当前 Codex 旧连接已更新。未运行真实 Serena；资源关闭错误保留/端到端代码取消仍属于 WP3；CodeQL #1 仍 open，未修改启动兼容策略。
 - 用户补充偏好：尽量避免分出子 agents。现有协作已经收尾，后续默认主代理直接实施和复核，避免额外代理调用；独立审查与自审证据分别记录。
+
+## 2026-09-08 — WP2 合并与 WP3 / 0.12.1
+
+- WP2 最终 head fac36dd8a4bd2ec377ab690926c14d558e9f1688 的 Node 20/24 与 CodeQL 全部通过，PR #23 于北京时间 19:45 合并，main=39d2b20c52ba70ffc9770a5e841107b37c1c17f4。
+- 用户明确选择降低健康查询开销：hello 返回被动身份/已知状态；diagnose_project 主动探测。实现 healthObservation 的 known/unknown 与 observedAt，未探测 available/commandFound 为 null，配置禁用保持已知。强制诊断不复用 Repomix/FlaUI 的短时健康缓存，Serena 检查复用现有诊断调用，避免重复。
+- 代码操作使用内部 signal/deadline，覆盖符号/引用/上下文/影响/重构和打包。Serena RPC、握手接收 SDK 取消参数；本地读文件及扫描循环协作取消，打包的取消归属不共享。工作区排队/排空及提交前可取消；提交开始后完成一致性收尾。Shutdown 中止活动代码操作并保留排空失败。
+- ResourceManager 保留关闭失败、最多 100 条 owner/kind/outcome 与 1024 字符错误、历史省略数；释放期间新登记资源也等清理结束。失败不跳过其他 owner，重复关闭不伪报成功。Gateway 仍尝试关闭传输，初始化失败释放已获取资源。Windows taskkill 使用独立 argv，并核对自有 PID 退出。
+- Debug：实际上游取消测试先发现已完成 reset 结果误用于新连接；修正按新连接开启关闭生命周期。完整回归又暴露旧测试断言失败后漏关 watcher、共享 config 未恢复导致连带失败，改 finally 清理而不削弱断言；仅终止了已核对属于本轮的测试进程树。ImpactAnalyzer 的旧双参数断言改为同时验证完整 namePath、定义文件及 operation 转发。
+- 更早握手取消测试证实 SDK 关闭过程中清空 transport.pid，进程尚存；现于 transport.start 返回 Promise 后立即记录真实 PID，在握手取消路径回收。曾试验固定 legacy 握手，单独不能解决问题，已撤回该试验、保持默认协议协商；没有改变上游协议兼容政策。定向最终 14/14 通过，包括真实 mock 上游挂起握手/RPC 的 PID 退出与重新连接；fixture 不代表真实 Serena C# 语义。
+- 方法依据：[MCP cancellation](https://modelcontextprotocol.io/specification/2024-11-05/basic/utilities/cancellation)、[Node fs](https://nodejs.org/api/fs.html) 与已安装 SDK 2.0.0 的 public ConnectOptions/CallToolRequestOptions/StdioClientTransport 源码。没有新增依赖、全局配置或真实应用数据操作。
+- 边界：不能中断已经提交 OS 的单次 I/O；Serena 共用连接重置可影响其他上游请求；不把进程计数归零视为退出。UI 测试 34/34 通过，stdio 通过；最终源码全套结果和 PR 检查随后增订。按用户减少子 agents 的偏好，本包由主代理实施与反证自审，未宣称完成独立模型审核。F12 shell 启动兼容变化与 D3 分支保护仍未获单独确认。
+- WP3 本地最终验收：Node 24.19.0，typecheck/build 通过；默认回归 292 项（291 pass、1 个既有可选 TavernDesk skip、0 fail、0 cancelled，36.98 秒），生产 stdio 通过；UI 34/34 通过，后续修正只涉及 Serena 握手。buildId=6a79eb1cf16d42f635b69155b48520559b8e4f22690be87a42a9a74fc1fbd16a，schemaHash=feffc1d2bd2c898d3d339b14b3287da0192a52d7b29741cc577cd029f3211b3a。日志：test-tmp/wp3-final-check.log、wp3-stdio-release.log、wp3-ui.log。PID 提前登记引起旧稳定性测试的活动 PID 残留断言失败，已在真实退出后清空并注销；相关 50/50 复测通过。

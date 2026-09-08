@@ -98,9 +98,17 @@ export class FlaUiAdapter implements IAdapter {
       shuttingDown: this.shuttingDown, lastError: this.lastError };
   }
 
+  getKnownHealth(): { observedAt: string | null; health: AdapterHealth | null } {
+    if (!this.config.adapters.flaui.enabled) return { observedAt: null, health: {
+      available: false, source: 'unavailable' as const, details: 'FlaUI adapter disabled by configuration.',
+    } };
+    return { observedAt: this.healthCache ? new Date(this.healthCache.at).toISOString() : null,
+      health: this.healthCache ? { ...this.healthCache.value, lastError: this.lastError ?? this.healthCache.value.lastError } : null };
+  }
+
   private async probeHealth(timeoutMs?: number): Promise<AdapterHealth> {
     if (this.shuttingDown) return { available: false, source: 'unavailable', details: 'FlaUI is shutting down.' };
-    if (this.healthCache && Date.now() - this.healthCache.at < 5_000) {
+    if (timeoutMs === undefined && this.healthCache && Date.now() - this.healthCache.at < 5_000) {
       return this.healthCache.value;
     }
 

@@ -13,12 +13,14 @@ import { ImpactAnalyzer } from '../CompositeTools/ImpactAnalyzer.js';
 import { RefactorAssistant } from '../CompositeTools/RefactorAssistant.js';
 import { ProjectDiagnostics } from '../CompositeTools/ProjectDiagnostics.js';
 import { ExtensionManager } from '../Extensions/ExtensionManager.js';
-import { Mutex, ResourceManager, AbortError } from './ResourceManager.js';
+import { Mutex, ResourceManager, AbortError, TimeoutError } from './ResourceManager.js';
 import { SessionManager, WorkspaceSession } from './SessionManager.js';
 import { WorkspaceWatch } from './WorkspaceWatch.js';
 import { AdapterLastError } from './AdapterStatus.js';
+import { type OperationContext, checkOperation } from './OperationContext.js';
 
 export interface RuntimeHealth {
+  resourceCleanup: ReturnType<ResourceManager['getCloseReport']>;
   version: string;
   status: 'online' | 'shutting_down';
   uptimeMs: number;
@@ -27,7 +29,7 @@ export interface RuntimeHealth {
   workspaceWatch: ReturnType<WorkspaceWatch['getStatus']>;
   session: WorkspaceSession | null;
   serena: {
-    commandFound: boolean;
+    commandFound: boolean | null;
     handshakeOk: boolean;
     projectActive: boolean | null;
     semanticQueryUsable: boolean;
@@ -35,14 +37,14 @@ export interface RuntimeHealth {
     lastError?: AdapterLastError;
   };
   repomix: {
-    available: boolean;
+    available: boolean | null;
     source: string;
     details?: string;
     lastError?: AdapterLastError;
   };
   flaui: {
     runtime: ReturnType<FlaUiAdapter['getRuntimeStatus']>;
-    available: boolean;
+    available: boolean | null;
     source: string;
     details?: string;
     lastError?: AdapterLastError;
@@ -52,6 +54,7 @@ export interface RuntimeHealth {
   nodeMemory: NodeJS.MemoryUsage;
   inFlightRequests: number;
   lastAdapterError: AdapterLastError & { provider: string } | null;
+  healthObservation: Record<'serena' | 'repomix' | 'flaui', { state: 'known' | 'unknown'; observedAt: string | null }>;
 }
 
 export class ToolRouter {
@@ -80,6 +83,20 @@ export class ToolRouter {
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private readonly watch = new WorkspaceWatch();
   private watchRegistered = false;
+  private readonly codeOperations = new Set<AbortController>();
+
+  private async runCode<T>(signal: AbortSignal | undefined, work: (operation: OperationContext) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    const budget = this.config.timeouts.serenaConnectMs + this.config.timeouts.serenaCallMs + this.config.timeouts.fileScanMs;
+    const operation = { signal: controller.signal, deadline: Date.now() + budget };
+    const timer = setTimeout(() => controller.abort(new TimeoutError('operation', budget)), budget);
+    this.codeOperations.add(controller);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted || this.shuttingDown) cancel();
+    try { checkOperation(operation); const result = await work(operation); checkOperation(operation); return result; }
+    finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); this.codeOperations.delete(controller); }
+  }
 
   constructor(config: WinCodeConfig) {
     this.config = config;
@@ -115,34 +132,36 @@ export class ToolRouter {
     return this.switchingPromise !== null;
   }
 
-  findCodeSymbols(query: string, kind?: string) {
-    return this.serena.findSymbolsDetailed(query, kind);
+  findCodeSymbols(query: string, kind?: string, signal?: AbortSignal) {
+    return this.runCode(signal, operation => this.serena.findSymbolsDetailed(query, kind, undefined, operation));
   }
 
-  findCodeReferences(symbolName: string, relativePath?: string) {
-    return this.serena.findReferencesDetailed(symbolName, relativePath);
+  findCodeReferences(symbolName: string, relativePath?: string, signal?: AbortSignal) {
+    return this.runCode(signal, operation => this.serena.findReferencesDetailed(symbolName, relativePath, operation));
   }
 
-  prepareContext(options: PreparedContextOptions) {
-    return this.context.prepareContext(options);
+  prepareContext(options: PreparedContextOptions, signal?: AbortSignal) {
+    return this.runCode(signal, operation => this.context.prepareContext(options, operation));
   }
 
   analyzeWorkspace(maxDepth?: number) {
     return this.architecture.analyze(maxDepth);
   }
 
-  analyzeChangeImpact(target: string) {
-    return this.impact.analyzeImpact(target);
+  analyzeChangeImpact(target: string, signal?: AbortSignal) {
+    return this.runCode(signal, operation => this.impact.analyzeImpact(target, operation));
   }
 
   async diagnoseProject() {
     const diagnostics = await this.diagnostics.runDiagnostics();
+    await this.repomix.checkHealth(this.config.timeouts.repomixHealthMs);
+    await this.flaui.checkHealth(this.config.timeouts.healthProbeMs);
     const runtime = await this.getRuntimeHealth();
     return { ...diagnostics, runtime };
   }
 
-  planRefactoring(target: string, goal: string) {
-    return this.refactor.planRefactoring(target, goal);
+  planRefactoring(target: string, goal: string, signal?: AbortSignal) {
+    return this.runCode(signal, operation => this.refactor.planRefactoring(target, goal, operation));
   }
 
   moveToTrash(filePath: string, reason?: string) {
@@ -191,6 +210,15 @@ export class ToolRouter {
   }
 
   async initialize(): Promise<void> {
+    try { await this.initializeOnce(); }
+    catch (error) {
+      try { await this.dispose(); }
+      catch (cleanup) { throw new AggregateError([error, cleanup], 'Initialization and cleanup failed.'); }
+      throw error;
+    }
+  }
+
+  private async initializeOnce(): Promise<void> {
     this.cache.setNamespace(this.config.workspaceRoot);
     this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
     await this.cache.initialize();
@@ -226,7 +254,7 @@ export class ToolRouter {
    * Switch the active workspace. Serialized so two MCP calls cannot interleave
    * Serena dispose/connect and cache namespace changes.
    */
-  async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}) {
+  async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, signal?: AbortSignal) {
     return this.workspaceLock.runExclusive(async () => {
       if (this.shuttingDown) {
         throw new Error('WinCode is shutting down; workspace_open rejected.');
@@ -241,7 +269,7 @@ export class ToolRouter {
       try {
         // Wait for existing in-flight queries on the old workspace to settle before re-binding
         const drainTimeout = this.config.timeouts?.shutdownMs ?? 8_000;
-        const drained = await this.waitForIdle(drainTimeout);
+        const drained = await this.waitForIdle(drainTimeout, signal);
         if (!drained) {
           throw new Error(
             `Workspace switch rejected: in-flight queries failed to drain within ${drainTimeout}ms (in-flight: ${this.inFlight}).`
@@ -254,6 +282,7 @@ export class ToolRouter {
           Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
 
         const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
+        checkOperation({ signal });
         const result = await this.workspace.openWorkspace(targetPath, options);
 
         if (sameWorkspace) {
@@ -289,7 +318,7 @@ export class ToolRouter {
         this.resolveSwitching = null;
         resolve?.();
       }
-    });
+    }, signal);
   }
 
   private bindCompositeTools(): void {
@@ -300,9 +329,10 @@ export class ToolRouter {
     this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.serena);
   }
 
-  async waitForIdle(timeoutMs: number): Promise<boolean> {
+  async waitForIdle(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
     const start = Date.now();
     while (this.inFlight > 0) {
+      checkOperation({ signal });
       if (Date.now() - start >= timeoutMs) {
         return false;
       }
@@ -312,13 +342,15 @@ export class ToolRouter {
   }
 
   async getRuntimeHealth(): Promise<RuntimeHealth> {
-    const serenaHealth = await this.serena.checkHealth();
-    const repomixHealth = await this.repomix.checkHealth();
-    const flauiHealth = await this.flaui.checkHealth();
+    const snapshots = { serena: this.serena.getKnownHealth(), repomix: this.repomix.getKnownHealth(), flaui: this.flaui.getKnownHealth() };
+    const unknown = { available: null, source: 'unknown', details: 'Not probed; use wincode_diagnose_project for an active check.', lastError: undefined };
+    const serenaHealth = snapshots.serena.health;
+    const repomixHealth = snapshots.repomix.health ?? unknown;
+    const flauiHealth = snapshots.flaui.health ?? unknown;
     const cache = await this.cache.getStats();
-    const up = serenaHealth.upstream;
+    const up = serenaHealth?.upstream;
     const lastAdapterError = this.pickLastError(
-      { error: serenaHealth.lastError, provider: 'serena' },
+      { error: serenaHealth?.lastError, provider: 'serena' },
       { error: repomixHealth.lastError, provider: 'repomix' },
       { error: flauiHealth.lastError, provider: 'flaui' }
     );
@@ -332,12 +364,12 @@ export class ToolRouter {
       workspaceWatch: this.watch.getStatus(),
       session: this.session.current,
       serena: {
-        commandFound: up?.commandFound ?? false,
+        commandFound: up?.commandFound ?? null,
         handshakeOk: up?.handshakeOk ?? false,
         projectActive: up?.projectActive ?? null,
         semanticQueryUsable: up?.semanticQueryUsable ?? false,
         mode: up?.mode ?? 'degraded',
-        lastError: serenaHealth.lastError,
+        lastError: serenaHealth?.lastError,
       },
       repomix: {
         available: repomixHealth.available,
@@ -357,6 +389,9 @@ export class ToolRouter {
       nodeMemory: process.memoryUsage(),
       inFlightRequests: this.inFlight,
       lastAdapterError,
+      healthObservation: Object.fromEntries(Object.entries(snapshots).map(([name, snapshot]) =>
+        [name, { state: snapshot.health ? 'known' : 'unknown', observedAt: snapshot.observedAt }])) as RuntimeHealth['healthObservation'],
+      resourceCleanup: this.resources.getCloseReport(),
     };
   }
 
@@ -391,6 +426,7 @@ export class ToolRouter {
   async dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.shuttingDown = true;
+    for (const controller of this.codeOperations) controller.abort();
     this.disposePromise = this.disposeOnce();
     // Retain the settled result: repeated callers must not see success after failed cleanup.
     return this.disposePromise;
@@ -401,12 +437,13 @@ export class ToolRouter {
     // Let any active switch finish before disposing the resources it binds.
     return this.workspaceLock.runExclusive(async () => {
       const drainMs = Math.min(3_000, this.config.timeouts?.shutdownMs ?? 8_000);
-      await this.waitForIdle(drainMs);
+      const drained = await this.waitForIdle(drainMs);
       if (this.pruneTimer) {
         clearInterval(this.pruneTimer);
         this.pruneTimer = null;
       }
       const failures: unknown[] = [];
+      if (!drained) failures.push(new Error(`Requests did not settle within shutdown drain (${drainMs}ms).`));
       // Every owner gets a cleanup attempt even if a previous adapter failed.
       // Keep ordering: adapters stop producing work before queued cache writes drain.
       for (const cleanup of [

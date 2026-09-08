@@ -1,4 +1,4 @@
-import { ChildProcess, exec } from 'node:child_process';
+import { ChildProcess, execFile } from 'node:child_process';
 
 export type ResourceKind = 'process' | 'timer' | 'interval' | 'disposable' | 'tempfile';
 
@@ -157,8 +157,21 @@ export class Mutex {
 
 function taskkillTree(pid: number): Promise<void> {
   return new Promise((resolve) => {
-    exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true, timeout: 2000 }, () => resolve());
+    execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, timeout: 2000 }, () => resolve());
   });
+}
+
+function processExists(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (processExists(pid)) {
+    if (Date.now() >= deadline) throw new Error(`Owned process ${pid} did not exit after termination.`);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
 }
 
 /**
@@ -179,6 +192,8 @@ export async function killProcessTree(
     }
     return;
   }
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid owned process PID.');
+  if (!processExists(pid)) return;
 
   if (process.platform === 'win32') {
     await taskkillTree(pid);
@@ -187,6 +202,7 @@ export async function killProcessTree(
     } catch {
       // already reaped by taskkill
     }
+    await waitForProcessExit(pid);
     return;
   }
 
@@ -212,6 +228,12 @@ export async function killProcessTree(
       // ignore
     }
   }
+  await waitForProcessExit(pid);
+}
+
+export interface ResourceCloseResult extends ManagedResourceInfo {
+  outcome: 'closed' | 'failed';
+  error?: string;
 }
 
 /**
@@ -223,6 +245,26 @@ export class ResourceManager {
   private seq = 0;
   private disposePromise: Promise<void> | null = null;
   private disposed = false;
+  private closeResults: ResourceCloseResult[] = [];
+  private omittedCloseResults = 0;
+  private readonly lateCleanups = new Set<Promise<void>>();
+  private readonly lateFailures: Error[] = [];
+
+  getCloseReport() {
+    return { results: this.closeResults.map(result => ({ ...result })), omitted: this.omittedCloseResults };
+  }
+
+  private recordClose(item: ManagedResourceInfo, error?: unknown, failed = false): void {
+    if (this.closeResults.length === 100) { this.closeResults.shift(); this.omittedCloseResults++; }
+    this.closeResults.push({ id: item.id, kind: item.kind, owner: item.owner,
+      outcome: failed ? 'failed' : 'closed',
+      ...(failed ? { error: (error instanceof Error ? error.message : String(error)).slice(0, 1024) } : {}) });
+  }
+
+  private async drainLateCleanups(): Promise<void> {
+    while (this.lateCleanups.size) await Promise.all([...this.lateCleanups]);
+    if (this.lateFailures.length) throw new AggregateError(this.lateFailures, 'Late resource cleanup failed.');
+  }
 
   get isDisposed(): boolean {
     return this.disposed;
@@ -242,8 +284,13 @@ export class ResourceManager {
 
   register(kind: ResourceKind, owner: string, dispose: () => Promise<void> | void): string {
     if (this.disposed) {
-      void Promise.resolve().then(() => dispose()).catch(() => {});
-      return `dropped_${kind}`;
+      const item = { id: `${owner}:${kind}:${++this.seq}`, kind, owner };
+      const pending = Promise.resolve().then(() => dispose()).then(() => this.recordClose(item), error => {
+        this.recordClose(item, error, true);
+        if (this.lateFailures.length < 100) this.lateFailures.push(new Error(`${owner}/${kind}: cleanup failed`));
+      }).finally(() => this.lateCleanups.delete(pending));
+      this.lateCleanups.add(pending);
+      return item.id;
     }
     const id = `${owner}:${kind}:${++this.seq}`;
     this.resources.set(id, { id, kind, owner, dispose });
@@ -273,25 +320,26 @@ export class ResourceManager {
    * Safe to call twice. Concurrent callers share the same in-flight dispose.
    */
   async dispose(): Promise<void> {
-    if (this.disposePromise) return this.disposePromise;
+    if (this.disposePromise) { await this.disposePromise; await this.drainLateCleanups(); return; }
     this.disposed = true;
     this.disposePromise = this.disposeOnce();
-    try {
-      await this.disposePromise;
-    } finally {
-      this.disposePromise = Promise.resolve();
-    }
+    return this.disposePromise;
   }
 
   private async disposeOnce(): Promise<void> {
     const items = Array.from(this.resources.values()).reverse();
-    this.resources.clear();
+    const failures: Error[] = [];
     for (const item of items) {
       try {
         await item.dispose();
-      } catch {
-        // never fail shutdown because one handle is already gone
+        this.resources.delete(item.id);
+        this.recordClose(item);
+      } catch (error) {
+        this.recordClose(item, error, true);
+        if (failures.length < 100) failures.push(new Error(`${item.owner}/${item.kind}: ${(error instanceof Error ? error.message : String(error)).slice(0, 1024)}`));
       }
     }
+    try { await this.drainLateCleanups(); } catch (error) { failures.push(error as Error); }
+    if (failures.length) throw new AggregateError(failures, 'Resource cleanup failed; inspect getCloseReport().');
   }
 }

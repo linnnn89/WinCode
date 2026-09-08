@@ -75,7 +75,7 @@ export const CODE_TOOLS = [
     },
   }, {
     validate: (args, { router }) => { validateContextScope(args, router.config.workspaceRoot); },
-    execute: async (args, { router }) => contextResponse(await router.prepareContext(args), args.responseFormat),
+    execute: async (args, { router, signal }) => contextResponse(await router.prepareContext(args, signal), args.responseFormat),
   }),
   defineTool<{ query: string; kind?: string }>({
     name: 'wincode_find_code_symbol',
@@ -95,7 +95,7 @@ export const CODE_TOOLS = [
       required: ['query'],
     },
   }, {
-    execute: async (args, { router }) => jsonResult(await router.findCodeSymbols(args.query, args.kind), true),
+    execute: async (args, { router, signal }) => jsonResult(await router.findCodeSymbols(args.query, args.kind, signal), true),
   }),
   defineTool<{ symbolName: string; relativePath?: string }>({
     name: 'wincode_find_references',
@@ -115,7 +115,7 @@ export const CODE_TOOLS = [
       required: ['symbolName'],
     },
   }, {
-    execute: async (args, { router }) => jsonResult(await router.findCodeReferences(args.symbolName, args.relativePath), true),
+    execute: async (args, { router, signal }) => jsonResult(await router.findCodeReferences(args.symbolName, args.relativePath, signal), true),
   }),
   defineTool<{ target: string }>({
     name: 'analyze_change_impact',
@@ -134,8 +134,8 @@ export const CODE_TOOLS = [
     aliases: [{ name: 'wincode_analyze_change_impact', listed: true,
       description: 'Alias for analyze_change_impact. Same unique-resolution and UNKNOWN-on-incomplete-query contract.' }],
     validate: args => { if (!args.target) throw new Error('target is required.'); },
-    execute: async (args, { router }) => {
-      const impact = await router.analyzeChangeImpact(args.target);
+    execute: async (args, { router, signal }) => {
+      const impact = await router.analyzeChangeImpact(args.target, signal);
       return { content: [{ type: 'text', text: JSON.stringify(impact, null, 2) }, { type: 'text', text: impact.formattedReport }] };
     },
   }),
@@ -157,6 +157,6 @@ export const CODE_TOOLS = [
       required: ['target', 'goal'],
     },
   }, {
-    execute: async (args, { router }) => jsonResult(await router.planRefactoring(args.target, args.goal), true),
+    execute: async (args, { router, signal }) => jsonResult(await router.planRefactoring(args.target, args.goal, signal), true),
   }),
 ];

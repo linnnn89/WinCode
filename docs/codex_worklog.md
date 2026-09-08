@@ -386,3 +386,26 @@
 - 范围更新：CI 发现的问题直接阻碍本轮验收，按既有授权修复两个运行时局部缺口，版本增至 0.11.2；无新依赖或公共参数变化。前述 0.11.1 实际连接验收仍有效，但不能冒称该连接已加载随后新增的 0.11.2 修复。
 - 补充计量：两条取证路径的跨调用重复非空源码行均为 0；本样本中的额外调用来自窗口分片和逐次元数据，不据此引入缓存。MCP 身份核对及工作区打开/恢复共 4 次另外记录。安装 Skill 在首次文档修正后同步一致，最终 0.11.2 版本待交付前再核对。
 - 修复后本地验证：两个新增回归 2/2、typecheck、0.11.2 build、新生产 stdio 契约通过；默认回归 236 项（235 pass、1 skip、0 fail、0 cancelled，27.6 秒）。日志 ci-deadline-red.log / ci-watch-red.log 保留修复前反例，ci-regression-fixed.log / ci-stdio-fixed.log 保留修复后结果。最终远端验证与合并记录统一见 PR #21 对应提交的 CI/CodeQL 检查，不用本地通过推断远端成功。
+
+## 2026-09-08（北京时间）— 下一轮整体工程化审查与计划
+
+- 用户要求读取「WinCode迭代路线图」最后一次分析，重新审视整体软件工程设计并交付明确计划。实际读取该对话最新分析；当前本地与远端 main 均为 3be2c49 / 0.11.2，开始时工作区干净。本轮是方案编制，没有沿用旧迭代授权直接修改实现或推送。
+- 远端复核：CI 34177655445 的 Node 20 在 runtime-contract.test.ts 清理 other 目录时报 EBUSY，234 pass、1 fail、1 skip，stdio 跳过；Node 24 通过，CodeQL 通过。GitHub main protected=false、required checks 为空、branch rules=[]。未修改分支规则；不把 CodeQL 或本地通过当作 CI 全绿，也没有将 EBUSY 直接归因于永久 watcher 泄漏。
+- 隔离复现：直接调用当前 Serena 实现，三个目录各 210 处引用返回 202 条却 queryComplete=true/truncated=false；指定 a/Uses.cs 仍读取 a/b/c 三份源码。有效 JSON 的源码包含中英文“未激活”文字均触发错误降级。Repomix useCli=false 在受控 spawn 替身下仍请求 CLI 版本探测，并在模拟成功后进入 CLI packing；没有真正启动外部 CLI。
+- 新契约反例：通过实际 SDK InMemoryTransport 调用 find_code_symbol，query 对象未报错，底层收到 "[object Object]"；当前 schema 要求 string。核对已安装 SDK 的公开 AjvJsonSchemaValidator，可直接拒绝错误类型和 schema 明确禁止的未知字段，无新增依赖。探针、结果及日志位于 test-tmp/engineering-review-20260908/，采用专用临时源码且正常清理，没有读取个人数据库或运行真实上游。
+- 整体审查覆盖 Gateway/ToolRouter/Adapter 依赖、查询完成/覆盖状态、取消与资源所有权、TS/.NET 构建、CI/测试入口、运行 Host 身份、README/SECURITY 与历史记录。新增计划不是通用插件或大型框架改造；冻结已完成的 R1–R6 和当前不具备进入证据的 R7–R9。
+- 交付：[WinCode-下一轮工程化迭代计划书.md](../WinCode-下一轮工程化迭代计划书.md)，并在原路线图增加入口。五个工作包依次为稳定性、工具契约、资源/取消、构建交付规范、真实集成；包含证据表、目标依赖图、修改边界、版本 PR、验收/回退和 9–15 工程日的非承诺估计。Node 支持、严格未知字段政策、分支保护及缺失上游资源均明确为待决定项。
+- 本轮未运行完整回归、Windows GUI、Node 20 本机复现或真实 Serena，不宣称这些已经完成。只新增/更新三份 Markdown 与忽略目录内的分析探针；没有修改生产代码、安装依赖、改全局配置、提交或推送。
+
+## 2026-09-08 19:08（北京时间）— WP1 / 0.11.3 稳定性与降级可信度
+
+- 授权：用户要求根据计划逐级实施，延续每版本复测/Debug/独立审查/PR/合并。D1 已同意 Node 升级，先保留 20/24 修复证据，WP4 改 24 主支持与 22 兼容；D2 明确保持未知字段容忍模式，WP2 必须在 Skill 列明规范字段；D3 分支设置仍待决定。
+- 实现：Serena 流式目录遍历、有界 UTF-8 文件读取，全局 200 引用/500 符号/5000 遍历项/8 MiB、单文件 256 KiB，限定文件提前生效；超限、截止、读错、编码和跳过链接均不报告完整，v3 缓存隔离旧结果。合法 JSON 中的中英文未激活文字不再触发协议错误。
+- Repomix：禁用优先健康缓存、pack 缓存和进行中请求；冻结入口策略防异步变更污染缓存，进程启动前再次检查配置。8 项受控回归不启动真实 npx。
+- Watcher：stop 等待 close 事件并有 2 秒故障上限，旧 owner 事件不污染新 owner；Router 切换和释放显式等待。所有关闭用 allSettled 收齐后保留失败。此次没有给 runtime-contract 的 fs.rm 增加重试，没有将 EBUSY 预设为永久泄漏。
+- 反例与独立审查：Serena 首轮 12 例有 10 失败，原引用 202、符号 510；关闭首轮 3/3 失败。独立审查找到“旧关闭失败导致新关闭提前结束”和“false→true 配置切换污染 builtin 缓存”，均补测试先红后绿；另修 mkdir 异步边界后禁用仍启动 CLI。复审无未解决实质问题；引用 JSON 测试改为已支持的 preview 字段，没有扩展生产解析器迎合错误 fixture。
+- 本地验证：Node 24.19.0，typecheck、build、默认回归 268 项（267 pass、1 skip、0 fail、0 cancelled，28.8 秒），生产 stdio 契约通过。skip 为既有可选 TavernDesk 集成项。10 次顺序及 10 次并发完整 Router 初始化/切换/停止/清理均通过，实际 native watcher close 全部确认，spawn 边界观察为 0。现有实际 Windows 子进程 PID 清理测试也通过。日志：test-tmp/wp1-regression.log、wp1-stdio.log。
+- 构建身份：本地 buildId=238d4a12a6a702feb3d422a988567556b2cd33842a5c2e3181f2b3342d9a0a5e，schemaHash=751b916ea659b888da414f2f0696b853962ef38b7570c5b80a992716211af9c7（本包无 schema 修改）。这是提交前源码构建，revision 仍记录基线；最终 PR 按精确提交 CI 验证。
+- GitHub 借鉴：[Node watcher](https://github.com/nodejs/node/blob/main/lib/internal/fs/watchers.js) 的真实 close 事件和 [VS Code lifecycle](https://github.com/microsoft/vscode/blob/main/src/vs/base/common/lifecycle.ts) 的 owner/幂等/错误语义，落实到既有机制，没有新增框架或依赖。
+- 边界：截止检查仍为协作式，不能中断已经提交 OS 的单次 I/O；端到端取消留 WP3。恰好达到结果上限保守标截断。未运行本轮真实 Serena/交互 GUI，不把 mock 通过视为 WP5 完成。远端 Node 20/24 与 PR/合并结果随后增订。
+- 远端首轮 PR #22 / CI 34219091516：Node 20/24 各 266 pass、1 fail、1 skip、0 cancelled。唯一失败为新 scoped-file 测试将 TEMP 的 RUNNER~1 短路径与 scanner 的 runneradmin realpath 直接计算相对路径。生产读取只有目标文件，测试改成比较唯一打开路径与目标 realpath，保持零额外文件读取断言；定向 19/19 通过。两版各 10 次顺序+10 次并发生命周期均通过，原 EBUSY 未出现；CodeQL 通过。未据此跳过整套复测。失败日志 test-tmp/wp1-ci-first-failure.log。

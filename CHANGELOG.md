@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.3
+
+- Add an opt-in six-task TavernDesk acceptance entry point. Discover candidate files with bounded native searches, locate unique live navigation controls, and verify command assignments and method declaration snippets against current source hashes.
+- Count native and MCP calls, UTF-16 response characters, elapsed call time and repeated displayed lines. Keep failures and cleanup errors in local reports; this is neither a native-only comparison nor proof of whole-method or runtime binding correctness.
+- Validate real isolated WPF repair, fixed-profile TavernDesk UI/source evidence and explicit line coverage. Real Serena remains unverified because no usable local command was found; no upstream or language-server installation was performed.
+- An existing Codex connection was confirmed to retain Gateway 0.11.2 while a freshly launched Host reported 0.12.3. A new stdio probe does not establish that the user's existing connection has reloaded.
+
 ## 0.12.2
 
 - Support Node 24 as primary and 22 as compatibility runtime; require Node >=22. Pin .NET SDK 10.0.303 and lock native Host/fixture restores without changing declared dependencies.

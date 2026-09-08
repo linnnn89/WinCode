@@ -13,6 +13,8 @@ npm run delivery:verify
 
 Reports and bounded stage logs are under `test-tmp/check/<run>/`. CI uploads only the compact report, including failures; it does not upload local workspaces or screenshots. A passing core check does not establish desktop or real-upstream acceptance.
 
+For opt-in fixed-profile TavernDesk acceptance, use `npm run test:tavern-context -- <repository> --ui-pid=<PID> --ui-hwnd=<HWND>` and `npm run test:product -- <repository> <PID> <HWND>`. The latter checks the fixed profile receipt and performs six navigation-to-source tasks without source filenames supplied in advance. Native candidate discovery is counted, source reads used only as the oracle are separate, and all returned bodies are checked against current file hashes. Source candidates remain distinct from verified runtime bindings. The scripts do not install Serena, activate a language server, launch the target application or use personal databases.
+
 The delivery manifest covers Gateway JavaScript, all published Host files including dependency sidecars, four managed Skill documents, and package/SDK/Host lock configuration. It records the Git revision and toolchains. Timestamps and checkout paths do not participate in content identity. Hashes detect local mismatches; they are not signatures. Run a complete check after changing delivery inputs. Keep a complete previous checkout/artifact set for rollback; do not mix old DLLs with a new Gateway.
 
 Production startup uses `npm start` and the published Release Host. `npm run dev` explicitly enables Debug/dotnet-run fallback. `customHostPath` remains an explicit configuration override; an old helper must not be mistaken for a verified current release. Rebuilds do not replace a running client's MCP connection.

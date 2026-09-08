@@ -12,6 +12,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="MIT license"></a>
 </p>
 
+文档导航 / Documentation: [架构与数据流](WinCode-架构与数据流说明.md) · [当前路线图](WinCode-迭代路线图.md) · [待实施计划](WinCode-下一轮工程化迭代计划书.md) · [Skill 与 MCP 配置](WinCode-Skill制作与MCP配置指南.md) · [工作记录](docs/codex_worklog.md)
+
 ## English
 
 WinCode is a local MCP server built for Windows and .NET engineering. It bridges project architecture analysis with non-invasive desktop UI inspection, enabling coding agents to debug desktop applications across source declarations, runtime control hierarchies, and annotated screenshots in a unified workflow.
@@ -30,10 +32,10 @@ Current source version: **0.12.5**. All UI tools are strictly read-only and non-
 git clone https://github.com/linnnn89/WinCode.git
 cd WinCode
 npm ci
-npm run build
+npm run check
 
-# Build the native Windows UI helper
-dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-x64 --no-self-contained
+# Verify the complete Gateway / Release Host / Skill delivery
+npm run delivery:verify
 ```
 
 Add WinCode as a stdio MCP server in your agent client configuration:
@@ -131,6 +133,8 @@ The 2026-09-08 check of the current Codex connection against TavernDesk source p
 
 ### Architecture and resource control
 
+See the [architecture, data-flow and verification-gate guide](WinCode-架构与数据流说明.md) for the current component boundaries, request sequences, storage lifecycle and delivery checks (Chinese).
+
 ```text
 Coding agent ── stdio MCP ── WinCode
                               ├─ Code adapters: Serena / Repomix / Built-in text fallbacks
@@ -139,7 +143,7 @@ Coding agent ── stdio MCP ── WinCode
                                                                        └─ Window tree + screenshot
 ```
 
-- **Target PID Absolute Immunity:** UI inspection executes out-of-process via an isolated helper (`tools/WinCode.UIA.Host`). All process cleanups target only the owned helper process tree via Windows `taskkill /T`; the inspected target application is never terminated or injected.
+- **Owned-process cleanup:** UI inspection executes out-of-process via an isolated helper (`tools/WinCode.UIA.Host`). All process cleanups target only the owned helper process tree via Windows `taskkill /T`; the inspected target application is never terminated or injected.
 - **Concurrency Protection:** UI inspection and health checks share a serial execution mutex to prevent native UIA message pump deadlocks. Workspace switches safely drain in-flight calls before changing cache namespaces.
 - **Byte-Bounded Cache:** Memory and disk caches enforce strict byte caps (default 32 MiB serialized memory, 128 MiB disk quota including disk-spilled overflow snapshots). Debounced file watching (150 ms) and index probing invalidate the ~2.5s fingerprint memo upon disk changes.
 
@@ -183,7 +187,7 @@ The default `compact` response contains one JSON text block; `responseFormat: "l
 
 ### Development and validation
 
-The [CI workflow](.github/workflows/ci.yml) runs `npm run check` on pull requests and main pushes using Windows, Node.js 22/24 and .NET SDK 10.0.303. It performs locked builds, core regression, production stdio and delivery verification, and uploads bounded reports even on failure. Interactive desktop/UI and real Serena acceptance remain separate. Check the actual run result; adding a workflow does not configure branch protection or establish a passing build.
+The [CI workflow](.github/workflows/ci.yml) runs `npm run check` on pull requests and main pushes using Windows, Node.js 22/24 and .NET SDK 10.0.303. It performs locked builds, core regression, production stdio and delivery verification, and uploads bounded reports even on failure. Interactive desktop/UI and real Serena acceptance remain separate. Check the actual run result. Main protection was verified on 2026-09-08 with required Node 22/24 and three CodeQL checks; approvals are zero under the single-maintainer policy. See [CONTRIBUTING](CONTRIBUTING.md) for enforcement and evidence boundaries.
 
 ```powershell
 npm ci
@@ -221,10 +225,10 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 git clone https://github.com/linnnn89/WinCode.git
 cd WinCode
 npm ci
-npm run build
+npm run check
 
-# 编译 C# 原生 UI 取证宿主
-dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-x64 --no-self-contained
+# 核对 Gateway / Release Host / Skill 完整交付物
+npm run delivery:verify
 ```
 
 在 Agent 客户端配置文件中添加 stdio MCP 服务（以支持 `mcpServers` 的客户端为例）：
@@ -374,7 +378,7 @@ Coding Agent ── stdio MCP ── WinCode
 
 ### 本地开发与测试验证
 
-[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 22/24 与 .NET SDK 10.0.303 执行 `npm run check`，覆盖锁定构建、核心回归、生产 stdio 和交付校验，失败时也上传有界报告。交互桌面/UI 和真实 Serena 验收仍单独执行。通过与否以实际运行结果为准；添加工作流不会自动配置分支保护。
+[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 22/24 与 .NET SDK 10.0.303 执行 `npm run check`，覆盖锁定构建、核心回归、生产 stdio 和交付校验，失败时也上传有界报告。交互桌面/UI 和真实 Serena 验收仍单独执行。通过与否以实际运行结果为准。2026-09-08 已核对 main 保护要求 Node 22/24 和三项 CodeQL 检查；单维护者策略要求 approval=0，不代表已获独立审核。详见 [贡献指南](CONTRIBUTING.md)。
 
 ```powershell
 npm ci

@@ -110,13 +110,13 @@
 
 ## 2026-09-07 12:12（北京时间）— 保存 v0.6 参考方案
 
-- 按用户要求在根目录新增 [WinCode v0.6运行时UI取证实施方案](../WinCode%20v0.6运行时UI取证实施方案.md)，保存完整范围、架构、协议、生命周期、截图预算、测试与后续路线。
+- 按用户要求在根目录新增 [WinCode v0.6运行时UI取证实施方案](https://github.com/linnnn89/WinCode/blob/67239e3bcdad2ed6572b7407925906f521567dba/WinCode%20v0.6%E8%BF%90%E8%A1%8C%E6%97%B6UI%E5%8F%96%E8%AF%81%E5%AE%9E%E6%96%BD%E6%96%B9%E6%A1%88.md)，保存完整范围、架构、协议、生命周期、截图预算、测试与后续路线。
 - 文档明确为参考方案，v0.6 仅 UI 取证，v0.7 源码联动后置；未实施功能、安装依赖或控制真实应用。
 - 验证：文件已生成，核对章节结构；本次仅文档变更，不运行代码测试。
 
 ## 2026-09-07 14:00（北京时间）— WinCode v0.6 运行时 UI 取证全量实施交付
 
-- 目标：按照 [WinCode v0.6运行时UI取证实施方案](../WinCode%20v0.6运行时UI取证实施方案.md)，完成 Windows 桌面应用程序 UI 自动化取证功能（C# FlaUI.UIA3 Host、TypeScript UiContracts & FlaUiAdapter、MCP 工具 `wincode_ui_inspect` 及 ToolRouter 深度集成）。
+- 目标：按照 [WinCode v0.6运行时UI取证实施方案](https://github.com/linnnn89/WinCode/blob/67239e3bcdad2ed6572b7407925906f521567dba/WinCode%20v0.6%E8%BF%90%E8%A1%8C%E6%97%B6UI%E5%8F%96%E8%AF%81%E5%AE%9E%E6%96%BD%E6%96%B9%E6%A1%88.md)，完成 Windows 桌面应用程序 UI 自动化取证功能（C# FlaUI.UIA3 Host、TypeScript UiContracts & FlaUiAdapter、MCP 工具 `wincode_ui_inspect` 及 ToolRouter 深度集成）。
 - 架构设计与关键改动：
   1. **Step 1: C# UIA Host 与独立测试夹具 (PR #2)**：
      - 新建 `tools/WinCode.UIA.Host`（.NET 10 console, `net10.0-windows`, `win-x64`, FlaUI.UIA3 5.0.0）。
@@ -505,3 +505,25 @@
 - 报告 test-tmp/serena-acceptance/1788874762075-31176/report.json 与 1788874881144-38796/report.json；每次记录真实结果、PID 退出、dispose 成败，测试 C# 源码保持一致。进一步自审加强为核对引用预览中 > 标记所在行，避免“周围文本同时有另一重载”造成假阳性；最终复测回执另存本地。查询已隔离安装目录对应 python/dotnet 进程，没有残留匹配进程。Serena 环境最终约 632 MB，复用 Python 3.13.7，无全局 PATH 修改、无全局 Serena 启用。
 - 首轮 0.12.5 全量回归和 stdio 通过，交付阶段因检查运行期间补充 package.json 维护命令触发源码/构建指纹不一致而失败；这是有效的一致性保护。冻结变更后完整重跑，不绕过交付校验。失败报告 2026-09-08T13-40-56-234Z-core。
 - 当前 Codex 旧连接仍需客户端重连；没有提供可调用的重连接口，不用结束 Codex/强杀 Gateway 冒充成功。作者自审，未新增独立审查或子代理。
+
+## 2026-09-08 21:56 — 当前架构、数据流与检查关口说明（北京时间）
+
+- 根据 0.12.5/main 10496e0 源码核对启动、Gateway/Registry、Router、Context/Response、Serena/Repomix/FlaUI、原生 Host、工作区/缓存/资源生命周期和交付脚本，新增根目录 WinCode-架构与数据流说明.md，README 增加入口。
+- 五张 Mermaid 图覆盖分层、请求时序、代码证据、桌面取证、构建到连接；配套数据存放表与 G1–G11 检查关口表。区分运行时校验、测试约束、远端保护、客户端授权，明确未知字段容忍、内部/外部 candidateFiles 语义、最终序列化覆盖、候选与运行时绑定、缓存与进程 RSS 等边界。
+- 本轮 GitHub 只读回查 main 保护仍生效：strict Node 22/24 与三项 CodeQL，对管理员生效，approval=0；未改变远端设置。架构边界以源码为据，不用历史 README 或测试总数代替实现。
+- 自审补充当前限制：Router 职责集中、错误响应尚非单一格式、不同文件路径各自校验、重构计划不执行修改、客户端需自行重连。文档为独立架构参考，不扩展生产功能。
+- 验证：文档本地链接、代码围栏及五个图块检查通过；git diff --check 通过。未运行代码回归，未安装 Mermaid 渲染器，未把文本结构检查写成视觉渲染验收。
+
+## 2026-09-08 22:12 — Markdown 当前状态同步（北京时间）
+
+- 按用户要求核对 14 份项目 Markdown，将两份根目录计划收敛为 0.12.5 基线的未完成工作；移出已实现的 R1–R6/WP1–WP5 步骤，历史留在版本记录、工作日志和 Git 中，不另建归档计划。
+- 新待办为工作区切换失败一致性、trash 部分完成恢复、有界混合负载、错误契约渐进整理。前两项是静态风险、尚待故障注入；重要恢复策略和公共接口列出待决事项，没有实施或承诺全局重构。
+- 更新双语 README 导航及锁定构建入口、Skill/MCP 安装维护指南、Host 协议和截图限制、贡献指南、架构说明与 0.12.5 验收记录。修正 Host“零副作用”和截图成功保证等过度表述。
+- 回查本地最终回执：main 10496e0、核心回归 313 通过/1 可选跳过、真实 Serena 七项通过、告警 #1 fixed、分支保护已启用。保留客户端重连、真实 Repomix 包验收及完整成本对照的证据缺口；未重新把旧宿主连接记作最新版本。
+- SECURITY 与四份规范 Skill 已符合当前版本和容忍策略，保持正文；skill:check 实测四份安装文件一致，无需重复部署。补修历史日志中两处已删除 v0.6 方案的链接，改指 Git 中已确认存在的原提交，仅修链接、不改当时事件结论。
+- 验证：14 份 Markdown 的本地链接与围栏检查、规范命令对照、旧状态扫描、git diff --check；复核既有测试报告，不将其计作本轮新回归。文档外链未做在线存活检查，Mermaid 未重新渲染；本轮没有代码、依赖、环境或远端变更。
+
+## 2026-09-08 — 文档更新上传授权（北京时间）
+
+- 用户要求上传至 linnnn89/WinCode；沿用既有 PR、必需检查通过后合并流程。本次仅提交当前九份 Markdown 变更，不变更软件版本或运行环境。
+- 上传前确认 origin 地址正确、本地 main 与 origin/main 一致、无其他打开的 PR，git diff --check 通过。实际远端检查及合并结果以该 PR 回执为准。

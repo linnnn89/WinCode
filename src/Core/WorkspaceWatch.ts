@@ -50,7 +50,10 @@ export class WorkspaceWatch {
     this.onChange = onChange;
     this.debounceMs = debounceMs;
     try {
-      this.watcher = fs.watch(this.root, { recursive: true }, (_event, filename) => {
+      // Windows short-path aliases can trigger a libuv fs-event assertion.
+      // Resolve only the native watch path; retain the caller's workspace identity.
+      const watchRoot = fs.realpathSync.native(this.root);
+      this.watcher = fs.watch(watchRoot, { recursive: true }, (_event, filename) => {
         if (!filename) return;
         const parts = String(filename).split(/[\\/]/);
         if (parts.some((p) => IGNORED.has(p))) return;

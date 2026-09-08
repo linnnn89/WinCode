@@ -381,3 +381,8 @@
 - 审查结论：ImportAsync catch 仅在会话引用未变时写状态，页面离开/书架切换到会话变更的完整生命周期仍未核实，此项保留部分验收。ExecuteAsync 中 Interrupted 和空正文分支均先于持久化；数据库复制/发布先于配置保存，路径修复是独立入口，配置保存失败后的跨文件系统事务回滚不能由本方法保证；测试根需显式 reuse、匹配非链接标记，并拒绝祖先/子项链接。均为源码结论，不冒称 GUI、真实取消或数据迁移运行通过。
 - 最小修正：README 中英文与 Skill 明确区分声明预览和异常/取消/释放分支审核；后者有现成文件工具时优先有界原生读取，小文件可按预算取完整正文。保留 MCP 证据边界，没有为长方法增加解析器、工具或配置。
 - 本地验证：typecheck、build、默认回归 234 项（233 pass、1 skip、0 fail，28.5 秒）、新生产 stdio 契约通过。日志 test-tmp/ci-regression.log、test-tmp/ci-stdio.log。未重复运行交互 UI；Node.js 20 和全新 Windows runner 的结果待本 PR 实际 CI。
+- 已推送 [PR #21](https://github.com/linnnn89/WinCode/pull/21)。首轮 [CI 34176857681](https://github.com/linnnn89/WinCode/actions/runs/34176857681) 在两个版本暴露实际失败：Node 20 在模拟上游挂起时事件循环提前结束，207 pass、26 cancelled、1 skip；Node 24 在 workspace-summary 触发 libuv fs-event 短路径断言，231 pass、1 fail、1 skip。原生 Host 与控制台夹具构建均已通过，失败不是缺少 .NET 环境；CodeQL 通过不能替代这些回归。
+- 定位与修复：withTimeout 的 unref 使孤立等待在到达期限前退出，新增真实子进程用例以退出码 13/无超时结果先复现；移除该期限定时器的 unref，保留 finally 清理，并验证已完成操作不会挂到 30 秒期限。WorkspaceWatch 将传给 fs.watch 的路径经 realpathSync.native 规范化，状态仍保留请求路径；真实 junction 写入用例核对规范路径、变化通知和关闭。两项新用例修复前失败、修复后通过。依据：[Node timers](https://nodejs.org/api/timers.html#timeoutunref)、[libuv #5010](https://github.com/libuv/libuv/issues/5010)。未修改测试数据根来隐藏短路径问题，也未放宽断言或屏蔽失败套件。
+- 范围更新：CI 发现的问题直接阻碍本轮验收，按既有授权修复两个运行时局部缺口，版本增至 0.11.2；无新依赖或公共参数变化。前述 0.11.1 实际连接验收仍有效，但不能冒称该连接已加载随后新增的 0.11.2 修复。
+- 补充计量：两条取证路径的跨调用重复非空源码行均为 0；本样本中的额外调用来自窗口分片和逐次元数据，不据此引入缓存。MCP 身份核对及工作区打开/恢复共 4 次另外记录。安装 Skill 在首次文档修正后同步一致，最终 0.11.2 版本待交付前再核对。
+- 修复后本地验证：两个新增回归 2/2、typecheck、0.11.2 build、新生产 stdio 契约通过；默认回归 236 项（235 pass、1 skip、0 fail、0 cancelled，27.6 秒）。日志 ci-deadline-red.log / ci-watch-red.log 保留修复前反例，ci-regression-fixed.log / ci-stdio-fixed.log 保留修复后结果。最终远端验证与合并记录统一见 PR #21 对应提交的 CI/CodeQL 检查，不用本地通过推断远端成功。

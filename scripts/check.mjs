@@ -43,6 +43,13 @@ if (inventoryOnly) {
     return result.stdout;
   }
   const node = (name, args) => run(name, process.execPath, args);
+  const testTotals = output => {
+    const totals = Object.fromEntries([...output.matchAll(/^# (tests|pass|fail|cancelled|skipped) (\d+)\r?$/gm)]
+      .map(match => [match[1], Number(match[2])]));
+    if (!(totals.tests > 0) || ['pass', 'fail', 'cancelled', 'skipped'].some(key => totals[key] === undefined))
+      throw new Error('Test process did not return a complete TAP summary.');
+    return totals;
+  };
   const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
   const tsx = path.join(root, 'node_modules/tsx/dist/cli.mjs');
   const native = 'tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj';
@@ -56,7 +63,7 @@ if (inventoryOnly) {
       await node('verify-delivery', ['scripts/delivery-manifest.mjs', '--verify']);
       await run('restore-wpf', 'dotnet', ['restore', wpf, '--locked-mode']);
       await run('publish-wpf', 'dotnet', ['publish', wpf, '-c', 'Release', '-r', 'win-x64', '--no-self-contained', '--no-restore', ...deterministic]);
-      await node('desktop-tests', [tsx, '--test', '--test-concurrency=1', ...groups['test:ui'], ...groups['test:ui-code']]);
+      report.tests = testTotals(await node('desktop-tests', [tsx, '--test', '--test-reporter=tap', '--test-concurrency=1', ...groups['test:ui'], ...groups['test:ui-code']]));
     } else {
       await node('typecheck', [tsc, '-p', 'tsconfig.test.json']);
       await node('build-gateway', ['scripts/build.mjs']);
@@ -65,7 +72,7 @@ if (inventoryOnly) {
       await run('publish-host', 'dotnet', ['publish', native, '-c', 'Release', '-r', 'win-x64', '--no-self-contained', '--no-restore', ...deterministic]);
       await run('build-audit', 'dotnet', ['build', audit, '-c', 'Debug', '--no-restore', ...deterministic]);
       await run('build-query', 'dotnet', ['build', query, '-c', 'Release', '--no-restore', ...deterministic]);
-      await node('regression', [tsx, '--test', ...groups.test]);
+      report.tests = testTotals(await node('regression', [tsx, '--test', '--test-reporter=tap', ...groups.test]));
       const stdio = JSON.parse(await node('stdio', [tsx, 'scripts/test-mcp-client.ts']));
       report.runtime = { build: stdio.runtime?.build, schemaHash: stdio.schemaHash, toolCount: stdio.toolCount,
         resourceCleanup: stdio.resourceCleanup, codexConnectionVerified: false };

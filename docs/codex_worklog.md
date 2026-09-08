@@ -478,3 +478,9 @@
 | 当前 Codex 重连 | 存活 0.11.2 连接 | 实际 hello | 已识别旧实例，未重载 |
 - 用户已确认新角色卡在书架中；Computer Use 的 list_windows 再次把测试 HWND=3344960（0x330A40）归给 AiPPTAddin.App.exe，get_window 报“window id 3344960 no longer belongs ... current owner ...”，刷新列表后唯一一次重试同样失败。未构造伪造窗口对象或绕过驱动注入输入，已请用户在该测试窗口打开新角色卡。WinCode 按 PID/HWND 的同窗读取和截图仍正常，故这项障碍归因 Computer Use，不归因 WinCode；真实卡显示验收继续等待界面切换。
 - 对最终隔离 WPF 修复测试补充反证检查：临时项目在仓库之外会脱离 global.json，因此现在明确复制已有 SDK 策略与 packages.lock.json，并采用 --locked-mode+原有离线源恢复。没有下载新依赖。test:ui-code 真实修复闭环单项复测通过，typecheck 通过，日志 test-tmp/wp5-locked-ui-code.log。
+- 真实角色卡补充验收：用户指明书架中的角色后，实际截图已显示其封面及名称。仅对固定 profile/data/taverndesk.db 使用 SQLite URI mode=ro 与 PRAGMA query_only，精确不区分大小写名称匹配为 1 条；原始卡片 JSON 与导入报告 JSON 可解析，描述 2896 字符、开场白 670 字符均与原卡字段一致。头像路径按 TavernDesk AppDataPaths 规则相对 data 根解析，文件存在且位于专用数据根内；未修改数据库、未公开角色卡正文/图片/原文件路径。
+- 该角色名在界面出现为两个 TextBlock，完整搜索 84 个节点后返回 ambiguous、2 matches、不展开 tree。当前连接的截图可读；另用新载入的 0.12.3 生产 Gateway/Host 经 InMemory MCP 验证相同歧义行为，结果 test-tmp/wp5-user-card.json。它不表示重复入库或查询失败，也不证明动态角色卡已有稳定唯一 AutomationId。详情页动作/聊天生成未验收，Computer Use 窗口归属错误仍存在。
+- 真实角色卡存在的书架状态下，新 stdio 六导航任务再次 6/6 通过：30 次调用、67083 UTF-16 字符、5134 ms 调用时间合计，重复显示 42 行。报告 test-tmp/product-tasks/1788872623250-36420/report.json。此证据替代上表“新卡位置未知”的当前状态，保留此前历史记录；已确认入库/书架显示，未声称聊天或全部卡片语义兼容。
+- 临时探针曾调用不存在的 connectTransport（失败日志 wp5-user-card-probe.log），核对既有 runtime-contract 测试后改为公开 SDK InMemoryTransport 与 Gateway 内已有 server.connect，复测通过；没有为测试添加生产连接 API。头像初检把相对路径误按 WinCode cwd 解析，随后查明 AppDataPaths 的 data 根规则并正确复核；初检 false 不属于应用文件丢失。
+- 为让远端检查报告直接提供实际测试数量，check 使用 Node 内置 TAP reporter 并收集 tests/pass/fail/cancelled/skipped 摘要；不只留下“命令退出 0”。缺少完整测试摘要仍报错，不把未运行套件记为通过。
+- TAP 报告补充实测：核心 check 通过，report.tests={tests:301,pass:300,fail:0,cancelled:0,skipped:1}（2026-09-08T13-05-15-874Z-core）；桌面 check 通过，report.tests={tests:35,pass:35,fail:0,cancelled:0,skipped:0}（2026-09-08T13-06-36-861Z-desktop）。更新 PR 后重新核对精确 head CI，不沿用先前 head 的成功状态。

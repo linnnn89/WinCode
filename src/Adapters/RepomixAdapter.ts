@@ -59,6 +59,16 @@ export class RepomixAdapter implements IAdapter {
   }
 
   async checkHealth(timeoutMs?: number): Promise<AdapterHealth> {
+    // Configuration is authoritative even when an earlier probe found an installed CLI.
+    if (!this.config.adapters.repomix.useCli) {
+      this.isCliAvailable = false;
+      this.healthCache = null;
+      return {
+        available: true,
+        source: 'fallback',
+        details: 'Repomix CLI disabled by configuration; using WinCode built-in resilient context packer',
+      };
+    }
     const defaultMs = this.config.timeouts?.repomixHealthMs ?? getDefaultTimeouts().repomixHealthMs;
     const waitMs = timeoutMs ?? defaultMs;
     // Explicit timeout (tests / force) bypasses the short health memo.
@@ -158,7 +168,10 @@ export class RepomixAdapter implements IAdapter {
    * Packs workspace into a structured AI context snapshot
    */
   async packWorkspace(options?: RepomixPackOptions): Promise<RepomixPackResult> {
-    const cacheKey = `repomix_pack_v2_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
+    // A disabled request must neither read a CLI snapshot nor join an enabled CLI pack.
+    const allowCli = this.config.adapters.repomix.useCli;
+    const policy = allowCli ? 'cli-enabled' : 'builtin-only';
+    const cacheKey = `repomix_pack_v3_${policy}_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<RepomixPackResult>(cacheKey, fingerprint);
@@ -173,7 +186,7 @@ export class RepomixAdapter implements IAdapter {
       return { ...shared, fromCache: true };
     }
 
-    const pending = this.packWorkspaceUncached(options).then(async (result) => {
+    const pending = this.packWorkspaceUncached(options, allowCli).then(async (result) => {
       const spilled = await this.spillIfOversized(result);
       await this.cache.set(cacheKey, spilled, { fingerprint, ttlMs: 1000 * 60 * 10 });
       return spilled;
@@ -186,12 +199,12 @@ export class RepomixAdapter implements IAdapter {
     }
   }
 
-  private async packWorkspaceUncached(options?: RepomixPackOptions): Promise<RepomixPackResult> {
+  private async packWorkspaceUncached(options: RepomixPackOptions | undefined, allowCli: boolean): Promise<RepomixPackResult> {
     // Explicit candidate list is a closed set — never fall through to a full-repo CLI pack.
     if (Array.isArray(options?.candidateFiles)) {
       return this.packWithFallback(options);
     }
-    if (this.isCliAvailable) {
+    if (allowCli && this.config.adapters.repomix.useCli && this.isCliAvailable) {
       try {
         return await this.packWithCli(options);
       } catch (err) {
@@ -217,6 +230,8 @@ export class RepomixAdapter implements IAdapter {
     const style = options?.outputFormat || 'markdown';
     const tempOutputDir = path.join(this.config.cacheDir, 'repomix_tmp');
     await fs.mkdir(tempOutputDir, { recursive: true });
+    // Disabling during the preceding await must still prevent the process launch.
+    if (!this.config.adapters.repomix.useCli) return this.packWithFallback(options);
 
     const ext = style === 'xml' ? 'xml' : 'md';
     const tempOutputFile = path.join(tempOutputDir, `repomix_${Date.now()}.${ext}`);

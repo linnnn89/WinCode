@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.3
+
+- Bound local Serena fallback across directories, bytes, matches and time; scoped symbol queries read only their requested file, and partial scans report their stop reason instead of claiming completeness.
+- Parse valid upstream JSON before recognizing legacy error text, preserving source containing inactive-project messages.
+- Enforce disabled Repomix CLI configuration before health probes, cached/in-flight requests and packing.
+- Await workspace watcher close events, isolate late events from replaced watchers, and retain cleanup failures while waiting for all owners. Add ten sequential and ten concurrent lifecycle checks to the supported CI matrix.
+
 ## 0.11.2
 
 - Keep awaited deadlines active until completion or timeout, then release their timers; an otherwise idle process no longer exits before reporting a timeout.

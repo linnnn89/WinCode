@@ -78,6 +78,19 @@ interface ParsedSerenaResult<T> {
   error?: string;
 }
 
+interface LocalScanResult<T> {
+  items: T[];
+  complete: boolean;
+  truncated: boolean;
+  error?: string;
+}
+
+function isSerenaTextError(rawText: string): boolean {
+  // Source bodies are data: error phrases inside a JSON response are not errors.
+  try { JSON.parse(rawText); return false; } catch { /* Inspect only plain text. */ }
+  return /^(?:Error:|No active project\b|没有激活项目)/.test(rawText.trim());
+}
+
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum']);
 
 function escapeRegExp(value: string): string {
@@ -391,7 +404,7 @@ export class SerenaAdapter implements IAdapter {
   }
 
   async findSymbolsDetailed(query: string, kindFilter?: string, relativePath?: string): Promise<FindSymbolsResult> {
-    const cacheKey = `serena_symbols_v2_${JSON.stringify([query, kindFilter, relativePath, this.config.workspaceRoot])}`;
+    const cacheKey = `serena_symbols_v3_${JSON.stringify([query, kindFilter, relativePath, this.config.workspaceRoot])}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<FindSymbolsResult>(cacheKey, fingerprint);
@@ -419,8 +432,7 @@ export class SerenaAdapter implements IAdapter {
         const rawText = this.serenaResultText(serenaRes);
         const isExplicitError =
           serenaRes.isError ||
-          (typeof rawText === 'string' &&
-            (rawText.startsWith('Error:') || rawText.includes('没有激活项目') || rawText.includes('No active project')));
+          isSerenaTextError(rawText);
 
         if (isExplicitError) {
           queryComplete = false;
@@ -446,11 +458,11 @@ export class SerenaAdapter implements IAdapter {
     }
 
     if (symbols.length === 0 && source === 'serena-adapter-fallback') {
-      symbols = await this.scanSymbolsLocally(query, kindFilter);
-      if (relativePath) {
-        const scopedPath = relativePath.replace(/\\/g, '/');
-        symbols = symbols.filter(s => s.file.replace(/\\/g, '/') === scopedPath);
-      }
+      const local = await this.scanSymbolsLocally(query, kindFilter, relativePath);
+      symbols = local.items;
+      queryComplete = queryComplete && local.complete;
+      truncated ||= local.truncated;
+      queryError = [queryError, local.error].filter(Boolean).join('; ') || undefined;
     }
 
     const { uniqueTypeMatch, typeMatchCount } = computeTypeMatchStats(symbols, query);
@@ -466,7 +478,7 @@ export class SerenaAdapter implements IAdapter {
           : []
         : [...SERENA_DEGRADED_LIMITATIONS];
     if (!queryComplete && queryError) {
-      limitations.unshift(`上游查询不完整: ${queryError}`);
+      limitations.unshift(`查询不完整: ${queryError}`);
     }
 
     const result: FindSymbolsResult = {
@@ -499,7 +511,7 @@ export class SerenaAdapter implements IAdapter {
   }
 
   async findReferencesDetailed(symbolName: string, relativePath?: string): Promise<FindReferencesResult> {
-    const cacheKey = `serena_refs_v2_${JSON.stringify([symbolName, relativePath, this.config.workspaceRoot])}`;
+    const cacheKey = `serena_refs_v3_${JSON.stringify([symbolName, relativePath, this.config.workspaceRoot])}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<FindReferencesResult>(cacheKey, fingerprint);
@@ -570,8 +582,7 @@ export class SerenaAdapter implements IAdapter {
           const rawText = this.serenaResultText(serenaRes);
           const isExplicitError =
             serenaRes.isError ||
-            (typeof rawText === 'string' &&
-              (rawText.startsWith('Error:') || rawText.includes('没有激活项目') || rawText.includes('No active project')));
+            isSerenaTextError(rawText);
 
           if (isExplicitError) {
             resolution = 'incomplete';
@@ -603,7 +614,11 @@ export class SerenaAdapter implements IAdapter {
 
     if (refs.length === 0 && source === 'serena-adapter-fallback' && allowFallback) {
       const displayName = symbolName.split('/').pop()!.replace(/\[\d+\]$/, '');
-      refs = await this.scanReferencesLocally(displayName);
+      const local = await this.scanReferencesLocally(displayName);
+      refs = local.items;
+      queryComplete = queryComplete && local.complete;
+      truncated ||= local.truncated;
+      queryError = [queryError, local.error].filter(Boolean).join('; ') || undefined;
     }
 
     const analysisCompleteness: FindReferencesResult['analysisCompleteness'] = !queryComplete
@@ -618,7 +633,7 @@ export class SerenaAdapter implements IAdapter {
           : []
         : [...SERENA_DEGRADED_LIMITATIONS];
     if (!queryComplete && queryError) {
-      limitations.unshift(`上游查询不完整: ${queryError}`);
+      limitations.unshift(`查询不完整: ${queryError}`);
     }
     if (refs.length === 0) {
       limitations.push('未找到引用不得直接解释为“无影响”或“低风险”。');
@@ -776,49 +791,110 @@ export class SerenaAdapter implements IAdapter {
   /**
    * Local regex symbol scan (C#, TypeScript/JS, Python). Not AST, LSP, or Roslyn.
    */
-  private async scanSymbolsLocally(query: string, kindFilter?: string): Promise<CodeSymbol[]> {
-    const root = this.config.workspaceRoot;
-    const results: CodeSymbol[] = [];
+  private async scanSymbolsLocally(query: string, kindFilter?: string, relativePath?: string): Promise<LocalScanResult<CodeSymbol>> {
     const lowerQuery = query.toLowerCase();
+    return this.scanLocalFiles(['.cs', '.ts', '.js', '.py'], 500, (content, relPath, ext) =>
+      this.parseFileSymbols(content, relPath, ext).filter(sym =>
+        sym.name.toLowerCase().includes(lowerQuery) && (!kindFilter || sym.kind.toLowerCase() === kindFilter.toLowerCase())
+      ), relativePath);
+  }
+
+  /** One budget spans all directories; only UTF-8 regular files inside the workspace are scanned. */
+  private async scanLocalFiles<T>(extensions: string[], maxResults: number,
+    extract: (content: string, relPath: string, ext: string) => Iterable<T>, relativePath?: string
+  ): Promise<LocalScanResult<T>> {
+    const root = this.config.workspaceRoot;
+    const items: T[] = [];
+    const reasons = new Set<string>();
     const deadline = Date.now() + this.timeouts.fileScanMs;
-
+    const fileLimit = 256 * 1024;
+    const totalLimit = 8 * 1024 * 1024;
+    let bytesRead = 0;
+    let entriesVisited = 0;
+    let stopped = false;
+    let truncated = false;
     const ignoredDirs = new Set(['node_modules', 'bin', 'obj', 'dist', '.git', '.vs', 'trash', '.cache', '.deps', '.packages', '.dotnet', '.dotnet_cli_home']);
-
-    const walk = async (dir: string): Promise<void> => {
-      if (Date.now() > deadline) return;
-      const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-      for (const entry of entries) {
-        if (Date.now() > deadline) return;
-        if (ignoredDirs.has(entry.name)) continue;
-        const fullPath = path.join(dir, entry.name);
-
-        if (entry.isDirectory()) {
-          await walk(fullPath);
-        } else if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          if (['.cs', '.ts', '.js', '.py'].includes(ext)) {
-            const relPath = path.relative(root, fullPath);
-            try {
-              const content = await fs.readFile(fullPath, 'utf-8');
-              const fileSymbols = this.parseFileSymbols(content, relPath, ext);
-
-              for (const sym of fileSymbols) {
-                if (sym.name.toLowerCase().includes(lowerQuery)) {
-                  if (!kindFilter || sym.kind.toLowerCase() === kindFilter.toLowerCase()) {
-                    results.push(sym);
-                  }
-                }
-              }
-            } catch {
-              // Ignore unreadable
-            }
-          }
-        }
-      }
+    const mark = (reason: string, bounded = false, stop = false): void => {
+      reasons.add(reason);
+      truncated ||= bounded;
+      stopped ||= stop;
     };
+    const canContinue = (): boolean => {
+      if (Date.now() >= deadline) mark('deadline', true, true);
+      return !stopped;
+    };
+    const isInside = (candidate: string, base: string): boolean => {
+      const rel = path.relative(base, candidate);
+      return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+    };
+    let realRoot: string;
+    try { realRoot = await fs.realpath(root); }
+    catch { return { items, complete: false, truncated: false, error: 'Local scan: read-error' }; }
 
-    await walk(root);
-    return results;
+    const read = async (fullPath: string): Promise<void> => {
+      if (!canContinue()) return;
+      const ext = path.extname(fullPath).toLowerCase();
+      if (!extensions.includes(ext)) return;
+      try {
+        // Also guards a scoped path whose intermediate directory is a junction.
+        const actualPath = await fs.realpath(fullPath);
+        if (!isInside(actualPath, realRoot)) { mark('invalid-scope'); return; }
+        if (!canContinue()) return;
+        const handle = await fs.open(actualPath, 'r');
+        try {
+          const stat = await handle.stat();
+          if (!stat.isFile()) { mark('read-error'); return; }
+          if (stat.size > fileLimit) { mark('file-byte-limit', true); return; }
+          const remaining = totalLimit - bytesRead;
+          if (remaining <= 0) { mark('total-byte-limit', true, true); return; }
+          // One extra byte detects a file growing after stat, without an unbounded readFile.
+          const buffer = Buffer.alloc(Math.min(fileLimit + 1, remaining));
+          let used = 0;
+          let eof = false;
+          while (used < buffer.length && canContinue()) {
+            const chunk = await handle.read(buffer, used, buffer.length - used, null);
+            bytesRead += chunk.bytesRead;
+            used += chunk.bytesRead;
+            if (chunk.bytesRead === 0) { eof = true; break; }
+          }
+          if (!canContinue()) return;
+          if (used > fileLimit) { mark('file-byte-limit', true); return; }
+          if (!eof && used === remaining) { mark('total-byte-limit', true, true); return; }
+          let content: string;
+          try {
+            content = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, used));
+            if (content.includes('\0')) { mark('encoding'); return; }
+          } catch { mark('encoding'); return; }
+          for (const item of extract(content, path.relative(root, fullPath), ext)) {
+            if (!canContinue()) break;
+            items.push(item);
+            if (items.length >= maxResults) { mark('result-limit', true, true); break; }
+          }
+        } finally { await handle.close(); }
+      } catch { mark('read-error'); }
+    };
+    const walk = async (dir: string): Promise<void> => {
+      if (!canContinue()) return;
+      try {
+        // Stream directory entries so an enormous directory does not allocate an unbounded array.
+        const handle = await fs.opendir(dir);
+        for await (const entry of handle) {
+          if (!canContinue()) break;
+          if (++entriesVisited > 5000) { mark('entry-limit', true, true); break; }
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory() && !ignoredDirs.has(entry.name)) await walk(fullPath);
+          else if (entry.isFile()) await read(fullPath);
+          else if (entry.isSymbolicLink()) mark('symlink-skipped');
+        }
+      } catch { mark('read-error'); }
+    };
+    if (relativePath) {
+      const scopedPath = path.resolve(root, relativePath);
+      if (path.isAbsolute(relativePath) || !isInside(scopedPath, root)) mark('invalid-scope');
+      else await read(scopedPath);
+    } else await walk(root);
+    return { items, complete: reasons.size === 0, truncated,
+      error: reasons.size ? `Local scan: ${[...reasons].join(', ')}` : undefined };
   }
 
   /** Bounded callers supply already validated file content; no workspace traversal or semantic guarantees. */
@@ -932,74 +1008,18 @@ export class SerenaAdapter implements IAdapter {
     return symbols;
   }
 
-  private async scanReferencesLocally(symbolName: string): Promise<SymbolReference[]> {
-    const root = this.config.workspaceRoot;
-    const refs: SymbolReference[] = [];
-    const ignoredDirs = new Set(['node_modules', 'bin', 'obj', 'dist', '.git', '.vs', 'trash', '.cache', '.deps', '.packages', '.dotnet', '.dotnet_cli_home']);
-    const deadline = Date.now() + this.timeouts.fileScanMs;
-
+  private async scanReferencesLocally(symbolName: string): Promise<LocalScanResult<SymbolReference>> {
     const regex = new RegExp(`\\b${escapeRegExp(symbolName)}\\b`);
-
-    const walk = async (dir: string): Promise<void> => {
-      if (Date.now() > deadline) return;
-      const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-      for (const entry of entries) {
-        if (Date.now() > deadline) return;
-        if (ignoredDirs.has(entry.name)) continue;
-        const fullPath = path.join(dir, entry.name);
-
-        if (entry.isDirectory()) {
-          await walk(fullPath);
-        } else if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          const codeExts = ['.cs', '.ts', '.tsx', '.js', '.jsx', '.py', '.xaml', '.xml', '.csproj', '.sln'];
-          if (codeExts.includes(ext)) {
-            const relPath = path.relative(root, fullPath);
-            try {
-              const content = await fs.readFile(fullPath, 'utf-8');
-              const lines = content.split(/\r?\n/);
-
-              for (let i = 0; i < lines.length; i++) {
-                const trimmed = lines[i].trim();
-                // Exclude pure comments and documentation lines
-                if (
-                  trimmed.startsWith('//') ||
-                  trimmed.startsWith('///') ||
-                  trimmed.startsWith('*') ||
-                  trimmed.startsWith('/*') ||
-                  trimmed.startsWith('#') ||
-                  trimmed.startsWith('<!--')
-                ) {
-                  continue;
-                }
-
-                const isDeclaration = new RegExp(
-                  String.raw`(^|\s)(class|interface|struct|enum)\s+${escapeRegExp(symbolName)}\b`
-                ).test(trimmed);
-                if (isDeclaration) {
-                  continue;
-                }
-
-                if (regex.test(lines[i])) {
-                  refs.push({
-                    symbolName,
-                    file: relPath,
-                    line: i + 1,
-                    preview: trimmed,
-                  });
-                  if (refs.length >= 200) return;
-                }
-              }
-            } catch {
-              // Ignore unreadable
-            }
-          }
+    const declaration = new RegExp(String.raw`(^|\s)(class|interface|struct|enum)\s+${escapeRegExp(symbolName)}\b`);
+    return this.scanLocalFiles<SymbolReference>(['.cs', '.ts', '.tsx', '.js', '.jsx', '.py', '.xaml', '.xml', '.csproj', '.sln'], 200,
+      function* (content, relPath) {
+        const lines = content.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          const trimmed = lines[i].trim();
+          if (/^(?:\/\/|\*|\/\*|#|<!--)/.test(trimmed) || declaration.test(trimmed)) continue;
+          if (regex.test(lines[i])) yield { symbolName, file: relPath, line: i + 1, preview: trimmed };
         }
-      }
-    };
-
-    await walk(root);
-    return refs;
+      });
   }
 
   async dispose(): Promise<void> {

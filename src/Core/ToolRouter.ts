@@ -162,7 +162,7 @@ export class ToolRouter {
     await this.extensions.initializeAll();
     const fp = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
     this.session.setFingerprint(fp);
-    this.bindWatch(this.config.workspaceRoot);
+    await this.bindWatch(this.config.workspaceRoot);
 
     if (!this.pruneTimer) {
       this.pruneTimer = setInterval(() => {
@@ -173,7 +173,8 @@ export class ToolRouter {
     }
   }
 
-  private bindWatch(workspaceRoot: string): void {
+  private async bindWatch(workspaceRoot: string): Promise<void> {
+    await this.watch.stop();
     this.watch.start(workspaceRoot, () => {
       this.cache.noteFilesystemChange(workspaceRoot);
     });
@@ -236,7 +237,7 @@ export class ToolRouter {
         this.cache.setNamespace(this.config.workspaceRoot);
         this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
         this.session.setFingerprint(fp);
-        this.bindWatch(this.config.workspaceRoot);
+        await this.bindWatch(this.config.workspaceRoot);
 
         await this.repomix.dispose();
         await this.serena.resetConnection();
@@ -371,6 +372,7 @@ export class ToolRouter {
       // Every owner gets a cleanup attempt even if a previous adapter failed.
       // Keep ordering: adapters stop producing work before queued cache writes drain.
       for (const cleanup of [
+        () => this.watch.stop(),
         () => this.repomix.dispose(),
         () => this.serena.dispose(),
         () => this.flaui.dispose(),

@@ -29,8 +29,8 @@ function fixture(symbols: unknown = [symbol()], references: unknown = {}) {
         return textResult(call.name === 'find_symbol' ? symbols : references);
       },
     },
-    scanSymbolsLocally: async () => { fallbacks++; return []; },
-    scanReferencesLocally: async () => { fallbacks++; return []; },
+    scanSymbolsLocally: async () => { fallbacks++; return { items: [], complete: true, truncated: false }; },
+    scanReferencesLocally: async () => { fallbacks++; return { items: [], complete: true, truncated: false }; },
   });
   return { adapter, calls, cached, fallbackCount: () => fallbacks };
 }

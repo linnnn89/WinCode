@@ -80,6 +80,7 @@ export interface UiInspectRequest {
 export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout' | 'budgetLimit' | 'maxWindows' | 'enumerationFailed';
 
 export interface UiInspectResult {
+  hostIdentity?: { version: string; informationalVersion?: string; configuration?: string; framework?: string };
   inspectionVersion?: number;
   helperPeakWorkingSetBytes?: number;
   treeComplete?: boolean;

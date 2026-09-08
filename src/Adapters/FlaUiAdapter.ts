@@ -66,8 +66,9 @@ export class FlaUiAdapter implements IAdapter {
 
     const candidateExes = [
       path.resolve(installRoot, 'tools/WinCode.UIA.Host/bin/Release/net10.0-windows/win-x64/publish/WinCode.UIA.Host.exe'),
-      path.resolve(installRoot, 'tools/WinCode.UIA.Host/bin/Debug/net10.0-windows/win-x64/WinCode.UIA.Host.exe'),
     ];
+    if (this.config.adapters.flaui.hostMode === 'development')
+      candidateExes.push(path.resolve(installRoot, 'tools/WinCode.UIA.Host/bin/Debug/net10.0-windows/win-x64/WinCode.UIA.Host.exe'));
 
     for (const cand of candidateExes) {
       if (fs.existsSync(cand)) {
@@ -77,7 +78,7 @@ export class FlaUiAdapter implements IAdapter {
 
     // Fallback: dotnet run against project file if dotnet is available
     const projPath = path.resolve(installRoot, 'tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj');
-    if (fs.existsSync(projPath)) {
+    if (this.config.adapters.flaui.hostMode === 'development' && fs.existsSync(projPath)) {
       return { command: 'dotnet', args: ['run', '--project', projPath, '--no-build', '--'] };
     }
 
@@ -95,7 +96,7 @@ export class FlaUiAdapter implements IAdapter {
 
   getRuntimeStatus() {
     return { isRunning: this.activeProcess !== null, activePid: this.activeProcess?.pid ?? null,
-      shuttingDown: this.shuttingDown, lastError: this.lastError };
+      shuttingDown: this.shuttingDown, hostMode: this.config.adapters.flaui.hostMode ?? 'release', lastError: this.lastError };
   }
 
   getKnownHealth(): { observedAt: string | null; health: AdapterHealth | null } {
@@ -196,8 +197,8 @@ export class FlaUiAdapter implements IAdapter {
           const val: AdapterHealth = {
             available: true,
             source: 'installed',
-            version: '1.0.0',
-            details: 'WinCode.UIA.Host is available and responsive.',
+            version: res.hostIdentity?.version,
+            details: `WinCode.UIA.Host is responsive; version=${res.hostIdentity?.version ?? 'unknown'}; configuration=${res.hostIdentity?.configuration ?? 'unknown'}.`,
           };
           this.healthCache = { at: Date.now(), value: val };
           return val;

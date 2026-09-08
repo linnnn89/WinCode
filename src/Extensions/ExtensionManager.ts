@@ -10,7 +10,7 @@ export interface IWinCodeExtension {
   dispose(): Promise<void>;
 }
 
-/** Reserved plugin slot. v0.5 still registers no FlaUI/Snoop/PerfView implementations. */
+/** Compatibility slot with no built-in registrations; FlaUI is a concrete Adapter. Do not expand without a real consumer. */
 export class ExtensionManager {
   private extensions: Map<string, IWinCodeExtension> = new Map();
   private config: WinCodeConfig;

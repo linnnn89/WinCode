@@ -1132,7 +1132,7 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
         arguments: {},
       });
       const data = JSON.parse(res.result?.content?.[0]?.text);
-      assert.ok(data.projectName === 'WinCode' || data.projectName === 'WinCode MCP');
+      assert.equal(data.projectName, path.basename(root), 'workspace identity follows the actual checkout directory');
       assert.ok(data.layers.length > 0);
     });
 

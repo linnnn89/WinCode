@@ -17,6 +17,7 @@ async function main() {
   }
 
   const config = getDefaultConfig(workspaceRoot);
+  if (args.includes('--development')) config.adapters.flaui.hostMode = 'development';
   const router = new ToolRouter(config);
   const server = new WinCodeMcpServer(router);
 

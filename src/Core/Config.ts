@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const WINCODE_VERSION = '0.12.1';
+export const WINCODE_VERSION = '0.12.2';
 
 /**
  * Bounded waits for every external process/RPC. None of these may be Infinity.
@@ -52,6 +52,7 @@ export interface WinCodeConfig {
     };
     flaui: {
       enabled: boolean;
+      hostMode?: 'release' | 'development';
       customHostPath?: string;
       timeoutMs?: number;
       maxDepth?: number;
@@ -110,6 +111,7 @@ export function getDefaultConfig(workspaceRoot?: string): WinCodeConfig {
       },
       flaui: {
         enabled: true,
+        hostMode: 'release',
       },
     },
     windows: {

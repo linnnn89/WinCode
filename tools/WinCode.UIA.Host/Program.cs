@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -977,8 +978,18 @@ public class InspectRequest
     public int? TimeoutMs { get; set; }
 }
 
+public sealed record HostBuildIdentity(string Version, string? InformationalVersion, string? Configuration, string Framework)
+{
+    public static HostBuildIdentity Current { get; } = new(
+        typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "unknown",
+        typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+        typeof(Program).Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration,
+        RuntimeInformation.FrameworkDescription);
+}
+
 public class InspectResponse
 {
+    public HostBuildIdentity HostIdentity { get; } = HostBuildIdentity.Current;
     public int InspectionVersion { get; set; } = 2;
     public long? HelperPeakWorkingSetBytes { get; set; }
     public QueryResultDto? QueryResult { get; set; }

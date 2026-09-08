@@ -1,14 +1,18 @@
 {
   "name": "wincode-mcp",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Windows-first MCP gateway: .NET project graph, evidence-bounded context, honest change-impact, long-running process hygiene",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
+    "check": "node scripts/check.mjs",
+    "check:desktop": "node scripts/check.mjs --desktop",
+    "test:inventory": "node scripts/check.mjs --inventory",
+    "delivery:verify": "node scripts/delivery-manifest.mjs --verify",
     "build": "node scripts/build.mjs",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts tests/agent-efficiency-benchmark.test.ts tests/workspace-summary.test.ts tests/runtime-identity.test.ts tests/runtime-contract.test.ts tests/context-coverage.test.ts tests/serena-identity.test.ts tests/ui-code-candidates.test.ts tests/skill-sync.test.ts tests/serena-fallback.test.ts tests/repomix-disabled.test.ts tests/workspace-watch-close.test.ts tests/workspace-lifecycle.test.ts tests/tool-contracts.test.ts tests/architecture-boundaries.test.ts tests/lifecycle-cancellation.test.ts",
+    "dev": "tsx src/index.ts --development",
+    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts tests/agent-efficiency-benchmark.test.ts tests/workspace-summary.test.ts tests/runtime-identity.test.ts tests/runtime-contract.test.ts tests/context-coverage.test.ts tests/serena-identity.test.ts tests/ui-code-candidates.test.ts tests/skill-sync.test.ts tests/serena-fallback.test.ts tests/repomix-disabled.test.ts tests/workspace-watch-close.test.ts tests/workspace-lifecycle.test.ts tests/tool-contracts.test.ts tests/architecture-boundaries.test.ts tests/lifecycle-cancellation.test.ts tests/delivery-contract.test.ts",
     "test:verify": "tsx tests/verify.ts",
     "benchmark:agent": "tsx scripts/benchmark-agent-efficiency.ts",
     "test:benchmark": "tsx --test tests/agent-efficiency-benchmark.test.ts",
@@ -16,7 +20,7 @@
     "test:e2e": "tsx scripts/test-mcp-client.ts",
     "typecheck": "tsc -p tsconfig.test.json",
     "test:ui": "tsx --test --test-concurrency=1 tests/flaui-adapter.test.ts tests/ui-inspect-mcp.test.ts tests/ui-window-list.test.ts",
-    "test:all": "npm test && npm run test:ui",
+    "test:all": "npm run check && npm run check:desktop",
     "test:ui-query": "tsx scripts/verify-ui-query.ts",
     "test:ui-code": "tsx --test tests/ui-code-runtime.test.ts",
     "skill:check": "node scripts/sync-skill.mjs",
@@ -43,6 +47,6 @@
     "typescript": "^5.8.2"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

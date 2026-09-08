@@ -433,3 +433,19 @@
 - 方法依据：[MCP cancellation](https://modelcontextprotocol.io/specification/2024-11-05/basic/utilities/cancellation)、[Node fs](https://nodejs.org/api/fs.html) 与已安装 SDK 2.0.0 的 public ConnectOptions/CallToolRequestOptions/StdioClientTransport 源码。没有新增依赖、全局配置或真实应用数据操作。
 - 边界：不能中断已经提交 OS 的单次 I/O；Serena 共用连接重置可影响其他上游请求；不把进程计数归零视为退出。UI 测试 34/34 通过，stdio 通过；最终源码全套结果和 PR 检查随后增订。按用户减少子 agents 的偏好，本包由主代理实施与反证自审，未宣称完成独立模型审核。F12 shell 启动兼容变化与 D3 分支保护仍未获单独确认。
 - WP3 本地最终验收：Node 24.19.0，typecheck/build 通过；默认回归 292 项（291 pass、1 个既有可选 TavernDesk skip、0 fail、0 cancelled，36.98 秒），生产 stdio 通过；UI 34/34 通过，后续修正只涉及 Serena 握手。buildId=6a79eb1cf16d42f635b69155b48520559b8e4f22690be87a42a9a74fc1fbd16a，schemaHash=feffc1d2bd2c898d3d339b14b3287da0192a52d7b29741cc577cd029f3211b3a。日志：test-tmp/wp3-final-check.log、wp3-stdio-release.log、wp3-ui.log。PID 提前登记引起旧稳定性测试的活动 PID 残留断言失败，已在真实退出后清空并注销；相关 50/50 复测通过。
+
+## 2026-09-08 — WP3 合并与 WP4 / 0.12.2 交付规范
+
+- WP3 head=0115642f82d0aeec806095599c03191065194ba3 的 Node 20/24 与 CodeQL 全部通过，PR #24 于北京时间 20:16:48 合并，main=227463ed13cacb3f6ea37f17bb560a4d5ac442cd。两版回归各 291 pass、1 skip、0 fail/取消。未增加子代理；自审不冒称独立审查。
+- 按用户已批准的 Node 升级，WP4 改为 24 主支持、22 兼容、engines >=22。此前已先修复并验证 Node 20 故障，没有靠删除失败矩阵掩盖缺陷。Host 与三个实际构建夹具加入 NuGet lock；global.json 固定本机已有 SDK 10.0.303、rollForward=disable，遵循 Microsoft 对锁文件的建议。未升级声明的 NuGet/npm 依赖、未安装全局工具。
+- 新增 check / check:desktop / test:inventory / delivery:verify。核心入口包含锁定恢复、原生/控制台构建、全部明确归类的非交互测试和新 stdio 进程；桌面入口单独运行隔离 WPF 和 UI→源码闭环。CI Node 22/24 使用同一入口并上传有界报告；不是托管 runner 桌面验收。报告记录命令、环境、构建/schema hash 和关闭前资源观察，后者不冒称进程退出证明。
+- 交付清单覆盖 Gateway JS、Host 整个发布目录（含 DLL/sidecar）、四份受管 Skill、版本/SDK/锁文件配置；校验丢失/新增/修改文件与版本不一致。时间戳和绝对检出路径不参与内容身份，Git revision 单独关联。哈希只证明本地内容一致性，不是签名，也不验证另一个 Codex 连接。
+- 原生 Host 用程序集 version/informationalVersion/configuration/framework 替代写死版本；生产只选 Release 发布文件，Debug/dotnet-run 仅在显式 --development/npm run dev 模式允许，customHostPath 显式覆盖保留。
+- 增补 CONTRIBUTING、行尾/编辑约定，修正 SECURITY 过期支持表和固定 48 小时响应承诺。GitHub private vulnerability reporting 已只读核验开启。保留未使用 ExtensionManager 兼容入口，只修正过期注释，不扩展插件架构。
+- 首轮本地核心 check 通过：301 tests，300 pass、1 既有可选 TavernDesk skip、0 fail/取消；桌面 35/35 通过，含真实 WPF 修复闭环。报告 test-tmp/check/2026-09-08T12-30-46-296Z-core/report.json、2026-09-08T12-32-57-103Z-desktop/report.json。新增交付反例 9/9 通过，覆盖 JS/源文件/Skill/SDK/Host DLL 变化、缺失 sidecar、新增 DLL、版本不一致、禁止隐式 Debug 回退。
+- 文档批量写入首次因当前 Set-Content 不接受 -NoNewline 未写入三个目标，随后改用明确补丁完成并检查差异；没有把失败写入记为完成。原生编译与锁定恢复首轮成功。后续增加报告字段及文档后仍须以干净检出复核最终版本。
+- 尚未完成：干净检出与重复内容身份、最终 CI/PR 合并。D3 分支保护与 F12 无 shell Repomix 兼容取舍仍待用户决定，不修改仓库权限、不关闭旧 CodeQL 告警。
+- 干净检出 I:/WinCode-worktrees/wp4-clean-20260908 的首次 npm ci 成功，但回归 299 pass/1 fail/1 skip：旧 tdd-suite 将项目名写死 WinCode/WinCode MCP；实际 identifyProject 按 path.basename(root) 命名，任意其他合法检出目录都会触发假失败。改为精确断言实际目录名，未更改产品行为、未重命名目录绕过。失败报告保留在该检出的 test-tmp/check/2026-09-08T12-37-31-404Z-core/。
+- 干净检出修正后完整 check 两次通过（均 300 pass、1 skip、0 fail/取消），报告 2026-09-08T12-39-02-455Z-core 与 12-39-56-230Z-core。两次 Gateway buildId=88c96147c9fc9430c5d5f39f0c27cf17d9b1a2ad5323c548c46fc817a35fe9ec；交付 contentId=5795657ffac19488b24503baf9ca2d867f5d1f24fa2a5deaa3c461783066c043，时间戳变化而内容身份相同。依赖来自该检出的 npm ci 与共享 NuGet 下载缓存，没有借用原工作区 dist/bin；这不是空机器离线构建证明。
+- 从系统 Temp（非仓库 cwd）直启该干净检出的发布 Host，health 成功，真实 version=0.12.2、configuration=Release、informationalVersion=0.12.2+b6901cd960da460fa91bb2eeba81e63eac716ae4、framework=.NET 10.0.11。生产 stdio 测试也在独立临时工作目录运行。
+- 反证自审：只覆盖 Host 主 EXE 会漏掉依赖 DLL 混用，清单实际枚举整个发布目录并用新增/缺失/替换反例验证；同版本旧内容仍通过哈希检测。未提供签名真实性证明，也未更新父 Codex 连接。最终 PR 的 Node 22/24、CodeQL 结果仍须在提交后核对。

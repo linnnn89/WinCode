@@ -193,6 +193,42 @@ it('structured content is parsed even when there is no text content', async () =
   assert.equal(found.symbols[0].namePath, 'Service/Save[0]');
 });
 
+it('unwraps the real Serena 1.7 FastMCP string envelope for symbols and references', async () => {
+  const { adapter } = fixture();
+  (adapter as any).serenaClient.callTool = async ({name}: {name:string}) => ({ content: [], structuredContent: {
+    result: JSON.stringify(name === 'find_symbol' ? [symbol()] : { 'Caller.cs': { Class: [
+      { name_path: 'Caller', body_location: {start_line: 9, end_line: 12}, content_around_reference: 'Save(7);' },
+    ] } }),
+  } });
+  const found = await adapter.findSymbolsDetailed('Save');
+  assert.equal(found.source, 'serena-mcp');
+  assert.equal(found.symbols[0].namePath, 'Service/Save[0]');
+  const refs = await adapter.findReferencesDetailed('Service/Save[0]', 'src/Service.cs');
+  assert.equal(refs.queryComplete, true);
+  assert.equal(refs.source, 'serena-mcp');
+  assert.equal(refs.references[0].line, 10);
+  assert.equal(refs.references[0].lineKind, 'containing-symbol');
+});
+
+for (const value of ['[]', 'Error: No active project.', 'The answer is too long', 'not-json']) {
+  it(`preserves envelope payload semantics: ${value}`, async () => {
+    const { adapter } = fixture();
+    (adapter as any).serenaClient.callTool = async () => ({ content: [], structuredContent: { result: value } });
+    const found = await adapter.findSymbolsDetailed('Save');
+    assert.equal(found.queryComplete, value === '[]');
+    assert.equal(found.source, value === '[]' ? 'serena-mcp' : 'serena-adapter-fallback');
+    if (value === 'Error: No active project.') assert.equal(adapter.getUpstreamStatus().projectActive, false);
+  });
+}
+
+it('does not hide extra envelope metadata or turn malformed structured content into text success', async () => {
+  const { adapter } = fixture();
+  (adapter as any).serenaClient.callTool = async () => ({ content: [{type:'text',text:JSON.stringify([symbol()])}],
+    structuredContent: { result: JSON.stringify([symbol()]), truncated: true } });
+  const found = await adapter.findSymbolsDetailed('Save');
+  assert.equal(found.queryComplete, false);
+});
+
 for (const complete of [true, false]) {
   it('ImpactAnalyzer skips reference calls for ' + (complete ? 'ambiguous' : 'incomplete') + ' identity', async () => {
     const { adapter } = fixture();

@@ -1,5 +1,7 @@
 # 诊断与审计
 
+0.12.5 已兼容 Serena 1.7/FastMCP 的 structuredContent.result 字符串包装。真实上游验收入口是维护命令 `npm run test:serena-real -- <已安装命令绝对路径> [启动器参数]`，只在用户要求验收且环境已准备时执行；它创建独立 C# 夹具，记录重载、引用、空结果、未激活、断连降级及 PID 退出。脚本不自动安装，也不把 commandFound/握手成功当作语义可用。安装在 test-tmp 的上游仅用于隔离验收，不表示 Codex 默认连接已启用 Serena。
+
 从 0.12.4 起 Repomix 健康探测和打包都由当前 Node 可执行文件直接启动已安装的 JavaScript CLI；不经过 cmd、npx 或 PATH 包装脚本，也不下载包。默认按目标工作区和 WinCode 安装目录的 Node 模块路径读取 repomix/package.json 的 bin 入口；不搜索 npx 缓存或 npm 自定义全局前缀。非标准安装需在宿主 WinCodeConfig.adapters.repomix.customCliPath 提供绝对 .js/.cjs/.mjs 路径；该字段不是 MCP 工具参数，不能传给 hello/prepare_context。显式路径无效时返回 builtin fallback，不执行另一份安装；useCli=false 仍完全禁止探测和启动。执行已安装脚本不提供沙盒或脚本可信性保证。
 
 `hello` 从 0.12.1 起只读取版本、能力和已知状态，不启动上游、CLI 或 UI Host 探测进程。`health.healthObservation` 区分 `known/unknown` 并给出 `observedAt`；`unknown`、`available:null` 或 `commandFound:null` 表示尚未探测，不能解释为不可用。配置禁用属于已知策略，但观察时间可为 null。已知健康结果可能陈旧，需要当前检查时调用现有 `wincode_diagnose_project({})`，不向 hello 添加未声明的 force/probe 字段。

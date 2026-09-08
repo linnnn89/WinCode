@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Version>0.12.2</Version>
+    <Version>0.12.3</Version>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>

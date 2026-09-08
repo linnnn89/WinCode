@@ -15,7 +15,7 @@ import type { UiReviewResult } from '../src/CompositeTools/UiReview.js';
 const runFile = promisify(execFile);
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const fixtureFiles = ['wpf-ui-review.csproj', 'App.xaml', 'App.xaml.cs', 'AssemblyInfo.cs', 'MainWindow.xaml', 'MainWindow.xaml.cs'];
+const fixtureFiles = ['wpf-ui-review.csproj', 'packages.lock.json', 'App.xaml', 'App.xaml.cs', 'AssemblyInfo.cs', 'MainWindow.xaml', 'MainWindow.xaml.cs'];
 const defect = 'return false; // R6_SOURCE_DEFECT';
 const repair = 'return true; // R6_SOURCE_FIXED';
 
@@ -88,6 +88,7 @@ it('real isolated WPF source repair closes runtime → XAML → C# → precise b
   };
   try {
     await fs.mkdir(sourceRoot);
+    await fs.copyFile(path.join(repo, 'global.json'), path.join(root, 'global.json'));
     await fs.mkdir(path.join(root, 'offline-feed'));
     for (const file of fixtureFiles) {
       const content = await fs.readFile(path.join(repo, 'tests/fixtures/wpf-ui-review', file));
@@ -99,7 +100,7 @@ it('real isolated WPF source repair closes runtime → XAML → C# → precise b
     const nugetConfig = path.join(root, 'NuGet.Config');
     await fs.writeFile(nugetConfig, '<configuration><packageSources><clear/><add key="offline" value="offline-feed"/></packageSources></configuration>');
     // All package sources are replaced by an empty local feed. Existing SDK packs/cache only.
-    await runFile('dotnet', ['restore', project, '--configfile', nugetConfig, '-p:NuGetAudit=false'], {
+    await runFile('dotnet', ['restore', project, '--locked-mode', '--configfile', nugetConfig, '-p:NuGetAudit=false'], {
       cwd: root, env: dotnetEnvironment, windowsHide: true, timeout: 60000, maxBuffer: 1024 * 1024,
     });
     await compile();

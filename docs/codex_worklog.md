@@ -449,3 +449,38 @@
 - 干净检出修正后完整 check 两次通过（均 300 pass、1 skip、0 fail/取消），报告 2026-09-08T12-39-02-455Z-core 与 12-39-56-230Z-core。两次 Gateway buildId=88c96147c9fc9430c5d5f39f0c27cf17d9b1a2ad5323c548c46fc817a35fe9ec；交付 contentId=5795657ffac19488b24503baf9ca2d867f5d1f24fa2a5deaa3c461783066c043，时间戳变化而内容身份相同。依赖来自该检出的 npm ci 与共享 NuGet 下载缓存，没有借用原工作区 dist/bin；这不是空机器离线构建证明。
 - 从系统 Temp（非仓库 cwd）直启该干净检出的发布 Host，health 成功，真实 version=0.12.2、configuration=Release、informationalVersion=0.12.2+b6901cd960da460fa91bb2eeba81e63eac716ae4、framework=.NET 10.0.11。生产 stdio 测试也在独立临时工作目录运行。
 - 反证自审：只覆盖 Host 主 EXE 会漏掉依赖 DLL 混用，清单实际枚举整个发布目录并用新增/缺失/替换反例验证；同版本旧内容仍通过哈希检测。未提供签名真实性证明，也未更新父 Codex 连接。最终 PR 的 Node 22/24、CodeQL 结果仍须在提交后核对。
+
+## 2026-09-08 — WP4 合并与 WP5 / 0.12.3 真实应用验收
+
+- WP4 PR #25 的精确 head=8d36bc7727fa5f85ba72ff44992927d760c0614d，Node 22/24、CodeQL 三语言分析及汇总均 success，于北京时间 20:44:51 合并，main=ba94c003a1b4ed130cbd0bd73389506f3f348481。CI 34227530379、CodeQL 34227527264，日志 test-tmp/wp4-ci-passed.log。强制 Host Rebuild 后再次验证，完整交付哈希保持相同；不仅依赖增量构建跳过。
+- WP5 增加显式 test:product，复用既有 Client、stdio、EvidenceOverlap；六个固定导航 ID，输入不预先提供 XAML/C# 文件名。每项先用有界 rg 发现 XAML 与 C# 候选，再调用 ui_review、赋值精确行和方法声明窗口。按源码行与 SHA-256 核对正文；错误、耗时、实际返回字符和清理失败留在本地报告。没有新增依赖、插件层、生产缓存或源码映射推断。
+- 固定 TavernDesk profile=I:/New-tarven/work/TAVERN-TEST/profile；第一次本轮启动 PID=6512、HWND=0x140B0E，回执核对测试 DB/config/logs 路径，无 Fresh、无重复导入参数。六项通过：NavDashboard、NavChat、NavCampaigns、NavCharacters、NavWorldbooks、NavSettings。每项 2 原生+3 MCP，合计 30 次（12 原生、18 MCP）、67103 UTF-16 字符；第二次最终脚本实测调用耗时合计 5145 ms，连接/打开另计 2 次、8099 字符。显示源码 127 行、重复 42 行。结果 test-tmp/product-tasks/1788871732133-22296/report.json、1788871829665-10888/report.json；单应用、单操作者、脚本固定任务，未做盲试验或纯原生等价对照，不能推算通用提速或模型 token。
+- 同一实例上的 test:tavern-context 八种范围场景通过；精确行 2219 字符、allRequestedCovered=true，符号窗口 2453 字符定位方法但全方法覆盖未知，已知整文件请求 2387 字符仍未定位目标。范围正确与任务充分性分开。三次 UI→赋值→方法请求通过；没有把 snippet 非空升级为完整方法。报告 test-tmp/r3/acceptance-1788871741500.json。
+- 当前 Codex 的实际 hello 确认为 0.11.2，实例 9706c136-9daf-44e8-9811-2c0f3b755f6d，启动于 2026-09-08T10:33:06.633Z，buildId=186f4bfc8f4d3cbc5ac2f7fe9f96ec98fa28c6fca1e6b862916923f523d778c7。它仍调用旧 Gateway；其新启动的磁盘 Host 实际报告 0.12.3/Release。通过当前旧连接做了一次后台原图检查，printWindowDwm，捕获质量提示 unknown；实际查看可读到 V3 固定样本角色和六个导航，没有仅凭像素变化宣称成功。此证据属于旧 Gateway+新 Host 组合，不混入新 stdio 版本通过项。没有重载客户端、修改 MCP 配置或杀死该旧连接。
+- 已按用户“Skill 明确规范字段”的要求，将四份受管手册备份后同步到 C:/Users/40218/.agents/skills/wincode；随后 skill:check matched=true。备份 .wincode-backup-f76fb13c-62fb-4259-bec8-ed514885efa5。规范字段、容忍未知字段以及固定测试 profile 复用指引已进入实际安装手册；它不证明当前 MCP 已重连。
+- 本机 PATH 未发现 serena/serena-mcp-server；uv tool list 为空，受限检查 uv archive 中未发现 Serena 包；当前实际 hello 也报告 commandFound=false/handshakeOk=false。真实 Serena/C# 语义集成未运行。上游官方配置说明 C# 使用 .NET 10 与自动下载的 Roslyn Language Server（https://github.com/oraios/serena/blob/main/docs/02-usage/050_configuration.md）；未因此自动下载/安装，已询问可用现有路径，保留未验证项。
+- 最终本地 check 再次通过：300 pass、1 个既有可选 TavernDesk skip、0 fail/取消，报告 test-tmp/check/2026-09-08T12-53-08-086Z-core/report.json；交互桌面 35/35，包括真实隔离 WPF 缺陷→源码修复→构建→运行复查，报告 2026-09-08T12-49-49-117Z-desktop。后续改动为文档、测试脚本计数/关闭日志，未改 UI 生产实现。真实业务源码未修改。
+- 自审反例：六次命令赋值落在同一构造函数，逐项 nextRequest 仍重复显示 42 行。Skill 因此提醒复用已核对且未变化的正文，必要时合并有界范围；测试继续报告原始重复量，不先删除重复结果美化指标。保留 runtimeSourceVerified=false、wholeMethodCoverage=unknown；不重开 R7–R9 或引入缓存层。
+- 用户随后说明导入真实角色卡；先前自有 PID 6512 已正常 CloseMainWindow 退出。复用原 profile 重启为 PID=33672、HWND=0x330A40，后台查看当前仍显示 V3 固定样本；尚未确认用户新卡所在位置，已询问名称/是否在 [TEST] 窗口导入。没有将此重启误称真实角色卡验收通过，没有扫描个人数据库。新卡状态验收待定位后补充。
+- F12 API 在 main=ba94c003a1b4ed130cbd0bd73389506f3f348481 仍 state=open；D3 分支保护也未获单独确认。真实 Serena、当前 Codex 连接重载、新角色卡定位均未完成；这些限制不以受控测试替代。遵循减少子代理偏好，本轮只有主代理自审，无新增独立审核。
+
+### WP5 验收矩阵（2026-09-08，后续增订）
+
+| 能力 | 环境 / 数据 | 证据类型 | 结果与范围 |
+| --- | --- | --- | --- |
+| 构建、契约、取消/资源 | Node 24、本机隔离夹具 | 受控进程与故障注入 | 核心 300 pass、1 skip；远端最终 head 结果待 PR |
+| WPF UI→源码修复闭环 | 隔离真实 WPF 窗口 | 真实运行+合成源码 | 35/35 桌面套件，含修复后运行复查 |
+| 六项导航→源码 | 固定 TavernDesk / V3 测试样本 | 真实应用+字面源码候选 | 6/6；赋值与方法声明验证，运行时绑定/完整方法未知 |
+| 精准范围 | TavernDesk 当前源码、独立新 stdio | 真实源码只读核对 | 8 种场景与 UI 候选闭环通过；整文件请求不保证定位 |
+| 后台截图 | 当前旧 Gateway 0.11.2 + Host 0.12.3 | 实际查看原图 | 可读；captureQuality=unknown，不冒充新 Gateway GUI 验收 |
+| Serena/C# 重载→引用→正文 | 未找到可用本地命令 | 未验证 | 未安装上游/语言服务器，WP5 语义集成保持未完成 |
+| 用户新导入真实角色卡 | 待确定名称及测试 profile | 未验证 | 当前画面仍为固定样本，等待定位信息 |
+| 当前 Codex 重连 | 存活 0.11.2 连接 | 实际 hello | 已识别旧实例，未重载 |
+- 用户已确认新角色卡在书架中；Computer Use 的 list_windows 再次把测试 HWND=3344960（0x330A40）归给 AiPPTAddin.App.exe，get_window 报“window id 3344960 no longer belongs ... current owner ...”，刷新列表后唯一一次重试同样失败。未构造伪造窗口对象或绕过驱动注入输入，已请用户在该测试窗口打开新角色卡。WinCode 按 PID/HWND 的同窗读取和截图仍正常，故这项障碍归因 Computer Use，不归因 WinCode；真实卡显示验收继续等待界面切换。
+- 对最终隔离 WPF 修复测试补充反证检查：临时项目在仓库之外会脱离 global.json，因此现在明确复制已有 SDK 策略与 packages.lock.json，并采用 --locked-mode+原有离线源恢复。没有下载新依赖。test:ui-code 真实修复闭环单项复测通过，typecheck 通过，日志 test-tmp/wp5-locked-ui-code.log。
+- 真实角色卡补充验收：用户指明书架中的角色后，实际截图已显示其封面及名称。仅对固定 profile/data/taverndesk.db 使用 SQLite URI mode=ro 与 PRAGMA query_only，精确不区分大小写名称匹配为 1 条；原始卡片 JSON 与导入报告 JSON 可解析，描述 2896 字符、开场白 670 字符均与原卡字段一致。头像路径按 TavernDesk AppDataPaths 规则相对 data 根解析，文件存在且位于专用数据根内；未修改数据库、未公开角色卡正文/图片/原文件路径。
+- 该角色名在界面出现为两个 TextBlock，完整搜索 84 个节点后返回 ambiguous、2 matches、不展开 tree。当前连接的截图可读；另用新载入的 0.12.3 生产 Gateway/Host 经 InMemory MCP 验证相同歧义行为，结果 test-tmp/wp5-user-card.json。它不表示重复入库或查询失败，也不证明动态角色卡已有稳定唯一 AutomationId。详情页动作/聊天生成未验收，Computer Use 窗口归属错误仍存在。
+- 真实角色卡存在的书架状态下，新 stdio 六导航任务再次 6/6 通过：30 次调用、67083 UTF-16 字符、5134 ms 调用时间合计，重复显示 42 行。报告 test-tmp/product-tasks/1788872623250-36420/report.json。此证据替代上表“新卡位置未知”的当前状态，保留此前历史记录；已确认入库/书架显示，未声称聊天或全部卡片语义兼容。
+- 临时探针曾调用不存在的 connectTransport（失败日志 wp5-user-card-probe.log），核对既有 runtime-contract 测试后改为公开 SDK InMemoryTransport 与 Gateway 内已有 server.connect，复测通过；没有为测试添加生产连接 API。头像初检把相对路径误按 WinCode cwd 解析，随后查明 AppDataPaths 的 data 根规则并正确复核；初检 false 不属于应用文件丢失。
+- 为让远端检查报告直接提供实际测试数量，check 使用 Node 内置 TAP reporter 并收集 tests/pass/fail/cancelled/skipped 摘要；不只留下“命令退出 0”。缺少完整测试摘要仍报错，不把未运行套件记为通过。
+- TAP 报告补充实测：核心 check 通过，report.tests={tests:301,pass:300,fail:0,cancelled:0,skipped:1}（2026-09-08T13-05-15-874Z-core）；桌面 check 通过，report.tests={tests:35,pass:35,fail:0,cancelled:0,skipped:0}（2026-09-08T13-06-36-861Z-desktop）。更新 PR 后重新核对精确 head CI，不沿用先前 head 的成功状态。

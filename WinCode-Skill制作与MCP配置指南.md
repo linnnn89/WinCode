@@ -1,143 +1,92 @@
-# WinCode Skill 制作、安装与 MCP 配置指南
+# WinCode Skill 安装、维护与 MCP 配置指南
 
-适用于本仓库 v0.8–v0.9 系列。以下以 Windows、Codex 和 `I:/WinCode` 为例；其他用户须替换为自己的仓库路径。客户端界面名称可能随版本变化。
+适用于 **0.12.5**，核对日期 2026-09-08（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
 
-## 1. Skill 与 MCP 各做什么
+## 1. 三个独立对象
 
-- **Skill**：指导 Agent 何时、怎样调用工具，按需读取操作手册。
-- **MCP**：运行 WinCode，提供实际的代码分析、窗口发现和 UI 取证工具。
+- **Skill 手册**指导 Agent 选择工具和使用规范字段，不启动服务器。
+- **磁盘交付物**包含 Gateway、原生 UI Host、构建身份和交付清单。
+- **MCP 连接实例**是客户端已经启动的进程；更新源码、构建或复制 Skill 都不会自动更新这个进程。
 
-两者分别安装。复制 Skill 不会启动或注册 MCP；只有 MCP 也能调用工具，但没有本技能提供的操作指导。不需要把整个项目复制到技能目录，也不需要另建 HTTP 服务。
+架构与数据流见 [架构说明](WinCode-架构与数据流说明.md)。待办见 [当前计划](WinCode-下一轮工程化迭代计划书.md)，不要按历史计划重复安装和升级。
 
-## 2. 制作一个低上下文开销的 Skill
+## 2. 构建与交付核对
 
-本仓库已提供可直接使用的 [skills/wincode](skills/wincode/SKILL.md)：
+预先准备 Windows x64、Git、Node 24（22 兼容；不再支持 20）以及 `global.json` 锁定的 .NET SDK 10.0.303。已发布的 framework-dependent Host 需要 .NET 10 Windows Desktop 运行时。安装前提组件属于环境准备，不由下列检查隐式完成。
 
-```text
-skills/wincode/
-├── SKILL.md
-└── references/
-    ├── code.md          # 工作区、上下文、符号、影响分析
-    ├── ui.md            # 窗口、后台截图、XAML 候选
-    └── diagnostics.md   # 连接、健康状态、审计提醒
-```
-
-`SKILL.md` 的 YAML 头仅声明名称与简短用途，正文仅保留手册路由和共享边界。目前入口为 17 行、约 0.9 KB；文件字节数不等于 Token 数。
-
-```yaml
----
-name: wincode
-description: 使用 WinCode MCP 分析 Windows/.NET 工作区，或读取桌面窗口、截图与 XAML 源码候选。
----
-```
-
-制作或维护原则：
-
-1. 描述用于技能选择，保持精准，不写长功能清单。
-2. 入口明确“仅读取当前任务对应手册”，不默认加载全部文件。
-3. 每份手册只保留调用顺序、关键参数、必要示例和结果边界。
-4. 不复制 README、完整工具 Schema、源码、更新记录或测试报告。
-5. 参数变化时修改对应手册，再同步安装副本；公共规则只维护一处。
-6. 不增加每次调用必做的健康探测、全仓扫描或截图。代码先取小片段，UI 无视觉需求用 `capture: "none"`。
-
-按需加载取决于客户端和 Agent 的实际执行。Skill 不能消除 MCP Schema、工具结果和图片本身的上下文成本，也不保证固定 Token 消耗。
-
-## 3. 准备 WinCode 程序
-
-先安装项目要求的 Node.js（当前 README 标明 >=18），运行以下命令。UI 取证还需要 Windows x64 与 .NET 10 SDK；下面发布方式依赖本机相应 .NET 运行时。Serena/Repomix 的可选能力和前置条件见 [README](README.md)。
+在仓库根目录执行：
 
 ```powershell
-Set-Location I:/WinCode
 npm ci
-npm run build
-
-# 需要 Windows UI 取证时构建 Host
-dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-x64 --no-self-contained
+npm run check
+npm run delivery:verify
 ```
 
-以上命令会安装锁定的 Node 依赖并恢复/构建 .NET 依赖。普通使用不需要构建 WPF 测试夹具。确认存在 `dist/index.js`；UI Host 发布产物位于 `tools/WinCode.UIA.Host/bin/Release/net10.0-windows/win-x64/publish/`。
+`check` 进行类型检查、Gateway 构建、锁定 NuGet restore、Release Host/控制台夹具构建、核心回归、新 stdio 验证与交付清单生成。交互桌面验收另执行 `npm run check:desktop`，需要可用 Windows 桌面。真实 Serena/TavernDesk 验收单独选择，详见 [CONTRIBUTING](CONTRIBUTING.md)。
 
-## 4. 安装 Skill
+`npm run build` 只构建 Gateway，不能单独证明原生 Host、Skill 和整个交付物一致。生产使用发布的 Release Host；`npm run dev` 才显式启用开发回退。报告位于 `test-tmp/check/`，内容哈希不是发布签名。
 
-Codex 本例使用当前用户的 `.agents/skills`。其他 Agent 请使用其支持的技能目录，不能假定所有客户端共用该路径。
+## 3. Skill 的规范来源与同步
 
-首次安装，在 PowerShell 执行：
+仓库维护四份手册：[SKILL.md](skills/wincode/SKILL.md)、[代码](skills/wincode/references/code.md)、[UI](skills/wincode/references/ui.md)、[诊断](skills/wincode/references/diagnostics.md)。入口只负责路由，共享规则与字段按工具族查阅；不把全部手册塞进每次会话。
+
+对本机已约定的安装目录，先检查，再按需同步：
 
 ```powershell
-$skillSource = 'I:/WinCode/skills/wincode'
-$skillParent = Join-Path $env:USERPROFILE '.agents/skills'
-$skillTarget = Join-Path $skillParent 'wincode'
-if (Test-Path -LiteralPath $skillTarget) {
-    throw '已存在 wincode 技能，请先比较并备份本地修改，再更新。'
-}
-New-Item -ItemType Directory -Path $skillParent -Force | Out-Null
-Copy-Item -LiteralPath $skillSource -Destination $skillTarget -Recurse
+npm run skill:check -- C:/Users/40218/.agents/skills/wincode
+npm run skill:sync -- C:/Users/40218/.agents/skills/wincode
+npm run skill:check -- C:/Users/40218/.agents/skills/wincode
 ```
 
-最终入口必须是 `%USERPROFILE%/.agents/skills/wincode/SKILL.md`，不要多套一层 `wincode` 目录。
+这些是路径示例，不是跨机器通用目录。同步只管理四份文件，先备份被修改的已有文件，再写入；额外文件不受管，不修改 MCP 配置。受管文件中的本地修改会被仓库版本替换，因此规范更新应先进入仓库；不要把个人配置混入手册。首次同步也可创建目标目录。受管手册改变后重新生成并核对交付清单。
 
-**路径适配**：当前 [诊断手册](skills/wincode/references/diagnostics.md) 使用 `I:/WinCode` 的本机示例；仓库放在其他位置时，同步替换安装副本中的启动路径和日志检测脚本路径。工作区示例路径也应按任务替换。
+**未知字段保持容忍，但不会生效。** 参数名称、大小写、类型和范围以手册字段表为准。例如 `automationId` 是规范字段，`automationID` 不会成为筛选条件；仅含未知字段的 query 仍缺少必需条件。适配器配置字段不能伪装成 MCP 请求参数。
 
-重新加载客户端或开启新会话，检查技能列表是否出现 `wincode`，再用 `$wincode` 显式调用。实际发现时机以客户端为准。更新技能时先比较安装副本，保留用户自定义内容；不要直接覆盖整个技能父目录。
+## 4. 注册 stdio MCP
 
-## 5. 配置 MCP：图形界面与 CLI 二选一
+在客户端添加 stdio 服务器，分别填写：
 
-### 方法 A：Codex 自定义 MCP 界面
-
-打开自定义 MCP 添加页面，逐项填写：
-
-| 字段 | 内容 |
-|---|---|
+| 配置项 | 本机示例 |
+| --- | --- |
 | 名称 | `wincode` |
-| 类型 | `STDIO` |
-| 启动命令 | `node` |
+| 命令 | `node`，或该机器 Node 可执行文件的绝对路径 |
 | 参数 1 | `I:/WinCode/dist/index.js` |
 | 参数 2 | `--workspace` |
-| 参数 3 | `I:/WinCode` |
-| 环境变量、环境变量传递 | 初次配置可留空 |
+| 参数 3 | 需要分析的工作区绝对路径，例如 `I:/New-tarven` |
 
-**每个参数独立一项**。不要把 `codex mcp add ...` 放进“启动命令”，它是注册命令，不是服务器程序。路径含空格时，独立参数字段填写完整路径，不额外输入引号字符。
+参数应为独立数组项，不要拼成一条 shell 字符串。若客户端接受 `mcpServers` 配置，可使用：
 
-若客户端找不到 `node`，在终端用 `(Get-Command node).Source` 查出可执行文件绝对路径，填入启动命令。保存并启用后，让客户端重新连接。
-
-### 方法 B：Codex CLI
-
-在终端执行，而不是填到上面的界面里：
-
-```powershell
-codex mcp add wincode -- node I:/WinCode/dist/index.js --workspace I:/WinCode
+```json
+{
+  "mcpServers": {
+    "wincode": {
+      "command": "node",
+      "args": ["I:/WinCode/dist/index.js", "--workspace", "I:/New-tarven"]
+    }
+  }
+}
 ```
 
-路径含空格时使用终端引号，例如 `"D:/My Projects/WinCode/dist/index.js"`。命令会修改 Codex MCP 配置；已有同名服务时先检查现有配置，不重复注册。该语法已通过本机 `codex mcp add --help` 核对。
+不同客户端配置格式可能不同；本例不能直接替代 Codex 自身配置文件格式。不要重复注册多个同名或路径不同的旧实例。WinCode 走 stdio，无需另设 HTTP 服务。
 
-配置中的 `--workspace` 是初始项目。分析另一个项目时调用 `workspace_open` 切换即可，不需要重新安装 Skill。不同客户端应分别配置，不要同时用两种方法重复添加同一服务。
+## 5. 验证实际连接
 
-## 6. 最小验收
+1. 让客户端重新建立 WinCode 连接，再调用 `wincode_hello_world`；核对实例身份、版本、buildId 和工具 schema，而不仅看软件版本字符串。
+2. 用 `npm run delivery:verify` 检查磁盘交付物；将磁盘身份与实际连接对应起来。独立启动的新 stdio 会话通过不等于当前宿主已重连。
+3. 对目标工作区执行一次规范请求，确认返回的是该工作区及声明范围。需要主动健康探测时调用 `wincode_diagnose_project({})`。
 
-1. 技能列表出现 `wincode`：只说明 Skill 已发现。
-2. MCP 工具列表出现 `wincode_hello_world`、`wincode_ui_inspect` 等：说明工具已加载。
-3. 让 Agent 调用 `wincode_hello_world({})`：检查返回状态；可用或 fallback 不等于 Serena 语义连接成功。
-4. 用 `$wincode 打开某项目并查看依赖概览` 验证代码路径；使用自己的真实项目路径。
-5. UI 验收另行指定目标窗口；未知 PID/HWND 时先限定进程枚举，再定向取证。不要为连通性测试读取所有窗口内容。
+0.12.1 起 hello 不主动启动探测进程；unknown/null 表示未探测，不代表不可用。已知健康结果也可能陈旧。旧版本 hello 的行为不能套用新版说明。
 
-UI 后台截图应同时传真实 PID/HWND 和 `backgroundOnly: true`，不会主动激活或还原目标窗口。遮挡应用可能输出黑图或陈旧图，不能只凭返回成功断定截图正确。内置 Host 访问 UI 会显示 REC/WinCoding 标志并记录审计；不要绕过。
+0.12.5 已通过固定 Serena 1.7.0/Roslyn 的隔离真实验收；隔离安装不表示默认客户端已启用上游。0.12.4 起 Repomix 直接执行已安装 JavaScript bin，不再使用 cmd/npx 包装链，也不会自动下载；非标准安装和降级边界见诊断手册。
 
-只修改文档时无需运行会影响前台的整套 GUI 测试。若使用 skill-creator 自带校验器，Windows 中文文件建议用 `python -X utf8 <校验器路径>/quick_validate.py <技能目录>`；普通用户安装技能不依赖该校验器。
+## 6. 常见偏差
 
-## 7. 常见问题
+| 现象 | 核对与处理 |
+| --- | --- |
+| 源码是新版，hello 返回旧版 | 核对实际命令、路径、instanceId 和启动时间；通过客户端重连，不以强杀宿主或复制文件冒充完成 |
+| 字段被忽略，结果不像预期 | 对照规范字段表和实际工具 schema；容忍未知字段并不赋予其语义 |
+| Host 缺失或身份不符 | 完整执行锁定构建和 delivery:verify；不混用旧 DLL、新 Gateway 或开发 Host |
+| Serena/Repomix 不可用 | 先区分策略禁用、尚未探测、命令缺失、握手成功但语义不可用；检查 source/fallbackReason，不把降级当语义验收成功 |
+| UI 查不到或出现多个目标 | 核对 PID/HWND 和大小写准确的查询；只有 complete 且 unique 才能声称唯一定位 |
 
-| 现象 | 处理 |
-|---|---|
-| Skill 可见，工具不可用 | 检查 MCP 是否配置、启用并重新连接；Skill 不提供执行后端。 |
-| `node` 或 `dist/index.js` 找不到 | 检查绝对路径、Node 安装和 `npm run build` 结果。 |
-| `HOST_UNAVAILABLE` | 检查 Host 发布产物、运行时或显式 Host 配置；重复安装 Skill 无效。 |
-| `AUDIT_BUSY` | 等当前 Helper 完成；不要杀目标应用。 |
-| 日志达到阈值 | 阅读工具返回的大小和路径提醒，按授权保留证据后清理，不静默删除。 |
-
-审计目录为 `%LOCALAPPDATA%/WinCode/logs/ui-audit`，1 MiB 提醒、2 MiB 前预留结束空间并停止新访问。只读检测：
-
-```powershell
-pwsh -NoProfile -File I:/WinCode/scripts/check-ui-audit.ps1
-```
-
-明确需要桌面弹窗时加 `-Desktop`。检测脚本不删除文件；`test-tmp` 是测试输出目录，与正式审计目录不同。
+更新后仍无法核对客户端身份时，保留“客户端未验收”状态与实际证据，不反复尝试未声明参数。

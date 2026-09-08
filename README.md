@@ -20,7 +20,7 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.11.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.11.1**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
@@ -102,9 +102,13 @@ Serena results retain full `namePath`, including containers and overload indices
 
 `wincode_hello_world` reports a frozen running instance ID and build fingerprint, plus a hash of the tool definitions actually registered by that instance. Pass `toolName: "wincode_prepare_context"` to inspect just that tool's input schema. Compare it with `tools/list` on the same connection. `npm run build` emits a manifest; direct `tsc`, missing/mismatched artifacts or source development mode can report `unknown`. The build fingerprint checks local output consistency, not release authenticity. Workspace changes do not change the running build.
 
-Explicit `lineRanges` return `coverage` computed from the final serialized evidence: requested/complete line counts, actual returned intervals, missing intervals and reasons. A partial last line (`endLineComplete: false`) is not a covered line. Recoverable gaps can include a bounded `nextRequest`; EOF/missing files do not suggest blind retries. Detail pruning reports `omittedItemCount` while retaining totals. Other requests return `coverage: null`; `taskCoverage` is always null because source excerpts do not prove whole-method or task sufficiency. `npm run test:tavern-context -- <TavernDesk repository>` runs an opt-in read-only source acceptance in a new stdio process.
+Explicit `lineRanges` return `coverage` computed from the final serialized evidence: requested/complete line counts, actual returned intervals, missing intervals and reasons. A partial last line (`endLineComplete: false`) is not a covered line. Recoverable gaps can include a bounded `nextRequest`; EOF/missing files do not suggest blind retries. Detail pruning reports `omittedItemCount` while retaining totals. `bodyStatusScope` identifies `displayed-snippet` or `packed-file`; a complete snippet does not mean a complete method. Symbol windows report `symbolCoverage: "unknown"` and, when more file lines exist, a `nextRequest` for up to 80 following lines. A partial tail is reread; observed EOF stops continuation. This is optional follow-up evidence, not a parsed method boundary. Other requests return `coverage: null`; `taskCoverage` is always null because source excerpts do not prove whole-method or task sufficiency. `npm run test:tavern-context -- <TavernDesk repository>` runs an opt-in read-only source acceptance in a new stdio process.
 
 After rebuilding, reconnect the client's MCP server and check hello again; rebuilding files alone cannot update an existing process or the client's cached schema. `npm run test:e2e` verifies one new stdio process with compiled handlers and an isolated source fixture, including actual symbol/range bodies. It does not verify a separate Codex connection or GUI/upstream adapters.
+
+After updating the repository, check the installed skill with `npm run skill:check -- <absolute-wincode-skill-directory>`; a mismatch exits with code 2. Use `npm run skill:sync -- <same-directory>` to back up and synchronize the four managed documents, preserving additional files. This does not change MCP configuration or restart a connection.
+
+The 2026-09-08 check of the current Codex connection against TavernDesk source passed: workspace opening returned 3,705 UTF-16 characters, the requested method was located, and a 223-line request matched the source completely. A 512-token estimate budget reported only 9 complete lines and an incomplete tenth line. This is a dated acceptance result for that instance; verify other connections separately. Details are in the [work log](docs/codex_worklog.md).
 
 | Tool | Purpose |
 | --- | --- |
@@ -152,7 +156,7 @@ Coding agent ── stdio MCP ── WinCode
 
 ### Boundaries and visibility
 
-- **Background capture:** `backgroundOnly: true` requires both PID and HWND. It uses `PrintWindow` without focus shifts or screen fallbacks. Minimized windows are rejected. Some hardware-accelerated renderers may require standard capture.
+- **Background capture:** `backgroundOnly: true` requires both PID and HWND. It uses `PrintWindow` without focus shifts or screen fallbacks. Minimized windows are rejected. `captureQuality` samples up to 1024 raw pixels before annotation: `suspect-low-variation` means the sampled RGB channel ranges are at most 3 and may reflect either blank output or a legitimate uniform/low-contrast view. `unknown` never certifies visual usability. Hints retain both image and UIA evidence and do not change the capture policy. Older helpers without this field leave quality unverified.
 - **UI coverage:** Inspection depends on the application's underlying UIA provider. Verified against WPF; WinUI, WinForms, and custom-rendered controls may expose differing levels of UIA detail.
 - **Source evidence:** Matches literal attribute declarations in supplied `.xaml` files (`runtimeSourceVerified: false`). Dynamic bindings, runtime templates, and resource dictionaries are not evaluated.
 - **Project analysis:** Extracted directly from project file XML without invoking MSBuild evaluations. Serena and Repomix are optional upstreams; local fallbacks explicitly label reduced semantic coverage.
@@ -207,7 +211,7 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.11.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.11.1**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
@@ -293,6 +297,10 @@ Serena 结果保留完整 `namePath`（容器及重载索引）；将其作为 `
 
 重新构建后需在客户端重连 MCP，再核对 hello；仅替换磁盘文件不能更新旧进程或客户端缓存的参数定义。`npm run test:e2e` 用新 stdio 进程、生产编译产物和隔离源码夹具验证同会话契约及目标符号/行范围正文，不代表另一个 Codex 连接、GUI 或真实上游已经验收。
 
+更新仓库后，用 `npm run skill:check -- <已安装wincode目录绝对路径>` 核对手册；不一致退出码为 2。明确更新时运行 `npm run skill:sync -- <同一路径>`，先备份再同步四份受管文档，保留其他文件。它不修改 MCP 配置，也不重启连接。
+
+2026-09-08 已在当前 Codex 连接上完成 TavernDesk 源码验收：打开工作区返回 3,705 个 UTF-16 字符，目标方法成功定位，223 行请求与真实源码完整一致；512 token 估计预算明确报告仅 9 行完整、第 10 行不完整。这是该实例在当日的验收结果，其他连接仍需单独核对，详见[工作日志](docs/codex_worklog.md)。
+
 | 工具名称 | 功能描述 |
 | --- | --- |
 | `workspace_open` | 打开或切换工作区、隔离缓存，并返回有界项目摘要。 |
@@ -339,7 +347,7 @@ Coding Agent ── stdio MCP ── WinCode
 
 ### 能力边界与可见性
 
-- **后台截图适用性：**`backgroundOnly: true` 仅支持非最小化窗口且需同时指定 PID 与 HWND。部分采用自研渲染管线的应用后台可能返回空白画面，此时建议切换为标准截图。
+- **后台截图适用性：**`backgroundOnly: true` 仅支持非最小化窗口且需同时指定 PID 与 HWND。`captureQuality` 在标注前最多采样 1024 个原始像素；suspect-low-variation 表示采样 RGB 各通道范围不超过 3，可能为空图或正常纯色/低对比界面。unknown 也不能证明图片可用。提示保留图像和 UIA，不自动改变截图策略；旧 Host 缺少该字段时按未验证处理。
 - **UI 自动化覆盖度：**取证效果取决于目标应用本身的 UIA Provider 完备性。项目针对 WPF 提供了隔离测试夹具；对于 WinUI、WinForms 或自绘渲染程序，UIA 支持度视其实现而定。
 - **源码证据边界：**仅匹配指定 `.xaml` 文件内的字面量属性声明（`runtimeSourceVerified: false`），不求值动态 Binding、模板或全局资源字典。
 - **项目分析边界：**直接解析 `.sln` 与 `.csproj` 文件结构，不执行 MSBuild 动态属性计算。Serena 与 Repomix 均为可选上游，降级运行时会在结果中明确声明。

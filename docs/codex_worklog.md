@@ -349,3 +349,24 @@
 - 最终构建 aa1bb067cc79e5cab41ed17961a5c4a11c1d2948acee1c908356cf6b22acf49d，在新生产 stdio 上通过 TavernDesk 原有 8 场景及可选真实 UI 验收：UI review、赋值行 nextRequest、显式方法正文共 3 次调用，分别 6164/1877/2181 字符；赋值行覆盖完整，方法正文实际核对通过。报告 test-tmp/r3/acceptance-1788825262426.json；其余日志 test-tmp/r6/。没有将截图空白、旧主连接或真实 Serena LSP 未验收写成已解决。
 - 提交与交付：实现 dfeeab1 已推送 [PR #19](https://github.com/linnnn89/WinCode/pull/19)，本次记录补充后按最终提交的远端检查结果合并，实际合并状态以该 PR 为准。R1–R6 均已完成版本实现与复测；R7–R9 尚无新进入证据，继续按路线图条件安排，不擅自启动 MSBuild 求值、进程内 WPF 深检或 Repo Map。
 - 最终真实 Codex 身份验收：07:56:53 新代理实例 a90b9128-2d0b-4c02-9676-9512f9c36b6d 实际 hello 返回 0.11.0、verified，buildId 与上述最终 aa1bb067… 完全一致；实际 ui_review schema 含 candidateCodeFiles，整体 schemaHash=2837d4e1e2b0b35bdae5bd9ec451ea7bea9396df26aa4446cbe2d4020c4316b7。仅调用一次 hello，没有重启/修改配置；它确认最终构建可由 Codex 加载，不代表父连接更新。
+
+## 2026-09-08（北京时间）— 当前主连接 TavernDesk 实测验收完成
+
+- 用户要求完成实测问题下一轮迭代。基线 main@8f997d8 已包含 R1–R6，工作区干净；此前对话“下一轮尚未开始”已被当前代码和历史合并记录纠正。本次建立 codex/tavern-host-acceptance，仅更新 README、路线图及本日志，不重复实现已有功能。
+- 直接使用本主任务当前连接的 WinCode MCP：首末 hello 均为实例 1b949eb7-14e4-45c6-9cbd-6e6c21eef32a，startedAt=2026-09-08T00:25:54.527Z，version=0.11.0、build.status=verified、revision=8f997d8427301f97cd8d4b4da80b688e83f95c54。buildId=8510232a8a407b93464fbc59a7db9a0dfa51c6eeb5545dca06a666fa4de5ec52；schemaHash=2837d4e1e2b0b35bdae5bd9ec451ea7bea9396df26aa4446cbe2d4020c4316b7，实际参数含 scopeFiles/symbol/lineRanges。不是用独立 stdio 或其他代理替代本连接验收，也没有主动重启 MCP。
+- workspace_open(I:/New-tarven) 默认单块 JSON 3705 字符，无目录树、入口最多 8 项；work/.publish-verify 等作为省略项报告，未测总数为 null，项目扫描不完整明确标记。按需列出 ViewModels：访问/返回各 10 项，1193 字符，entry-budget、scanComplete=false、truncated=true。
+- 精准取证：ShowCharactersAsync 首调返回第 309 行声明及 301–324 行证据，2137 字符，保留本地模式匹配的语义不完整提示。1–223 行请求返回 223 个完整行、9934 字符，allRequestedCovered=true；512 token 估计预算返回 1510 字符，仅 9 个完整行、第 10 行半截，allRequestedCovered=false。小预算覆盖明细被省略时仍保留总计，不把 queryComplete=true/evidenceInsufficient=false 误判为完整覆盖。
+- 原始响应逐条核对 UTF-16 字符预算、实际源码片段/行号、目录截断和同实例身份；源文件 SHA-256=40c34ef90dc3746ab002e9dbcf17e1ff5287faacaa0da71942a59218ae7ff450。证据：[当前宿主原始响应及校验](../test-tmp/tavern-host-acceptance-20260908.json)，按既有 test-tmp 规则忽略。历史约 5 万 token 缺少同口径原始配对，不计算百分比提速。
+- 执行 node node_modules/tsx/dist/cli.mjs --test tests/workspace-summary.test.ts tests/runtime-identity.test.ts tests/runtime-contract.test.ts tests/context-coverage.test.ts：26/26 通过，0 失败/跳过，日志 test-tmp/live-tavern-targeted.log。没有生产源码变更，不重复全量回归或重新构建。
+- 共 8 次真实 MCP 调用：首末身份 2 次、打开/恢复工作区 2 次、精准取证 3 次、有界浏览 1 次。最终活动工作区恢复 I:/WinCode。仅只读 TavernDesk 源码，未启动 GUI、读取数据库、调用 Provider 或新增依赖。此前后台空白截图、computer use 窗口归属以及真实 Serena LSP 未验收仍保留，不纳入本次完成结论。
+
+## 2026-09-08（北京时间）— 0.11.1 证据边界与使用手册修补
+
+- 授权：用户要求修复重新评估指出的缺口，推送 PR 并合并。从 main@8f997d8 建立 codex/evidence-usage-fixes，包含此前未提交的主连接验收文档；范围限于安装手册一致性、符号片段/补读及截图质量提示。R7–R9 和真实任务/原生工具成本对照仍按进入条件另行评估。
+- 片段：保留旧 bodyStatus 枚举以兼容调用方，增加 bodyStatusScope 区分 displayed-snippet 与 packed-file；符号窗口始终 symbolCoverage=unknown。fileLineCount 来自同次源码读取；最终序列化后按实际尾行生成最多 80 行的 nextRequest，半截尾行重读、预算不足提升预算、EOF 不补读，不增加方法解析器或跨调用缓存。
+- 反证：113 行方法包含窗口外的错误处理，片段可以 complete，但不能报告整方法覆盖；compact/legacy 两种输出及补读正文均验证。首轮新增测试 18/20，发现 compact 输出被旧 evidence 字段覆盖，修复后上下文定向 36/36 通过。类型检查首次发现 mjs 测试导入缺声明，按仓库既有 build 测试方式使用明确文件 URL 动态导入后通过。
+- 截图：标注前至多采样 32×32 个原始像素，RGB 各通道范围不超过 3 时仅标 suspect-low-variation；正常纯色/低对比画面也可能触发，其他情况仍为 unknown，均不证明视觉可用。不丢弃原图/UIA、不激活窗口或自动改用屏幕截图。8 个像素/取消/错误边界检查通过；真实隔离 WPF 的 original/annotated MCP 响应均保留质量字段与图片块。
+- 手册：增加 skill:check / skill:sync，仅处理四份受管文档，默认只校验；显式同步先备份再替换并逐文件哈希核对，拒绝链接目标，保留其他文件及 MCP 配置。本机安装四份手册已更新。自审发现备份若仍叫 SKILL.md 可能被再次发现，改为 .bak 后缀；本次早期备份也已原位更名保留。最终同步专项 2/2、安装内容匹配，无重复 Skill.md 备份。
+- 版本与文档：package/lock/WINCODE_VERSION 为 0.11.1；README 中英文、Skill、CHANGELOG 及路线图最新状态已同步，原路线图历史章节保留。没有新增依赖或修改全局 MCP 配置。
+- 验证：typecheck、Gateway build、Host publish --no-restore 通过；默认非交互回归 234 项，233 pass、1 skip、0 fail；UI/协议 34/34 通过；生产新 stdio initialize/list/契约/目标正文/未知参数拒绝/同实例核对通过；TavernDesk 只读源码 8 场景通过。全量回归在最后 .bak 备份后缀调整前完成，该调整后仅重跑相应同步专项。日志 test-tmp/evidence-*.log，源码报告 test-tmp/r3/acceptance-1788828481850.json，均按既有规则排除。
+- 运行边界：本任务现有连接 hello 仍返回 0.11.0（实例 6e7b45f6-2662-43cf-a75c-f0884b1e72d7），没有把新 stdio 的 0.11.1 验证冒称为旧连接升级；后续客户端重连后加载新构建。截图提示修复不等于所有应用的空白截图已消除，computer use 窗口归属及真实 Serena LSP 仍未验收。

@@ -1,5 +1,6 @@
 using WinCode.UIA.Host;
 using FlaUI.Core;
+using System.Drawing;
 int passed = 0;
 void Check(bool condition) { if (!condition) throw new Exception("Assertion " + (passed + 1)); passed++; }
 var root = new Node("root", new Node("match"), new Node("match"), new Node("other"));
@@ -34,7 +35,33 @@ UiPropertyEvidence.Read("enabled", new BoolProperty(true, new Exception("disappe
 Check(observed == null && issues.SequenceEqual(new[]{"enabled:error"}));
 try { UiPropertyEvidence.Read("enabled", new BoolProperty(true, new OperationCanceledException()), _ => {}, issues); throw new Exception("cancel swallowed"); }
 catch (OperationCanceledException) { passed++; }
-Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new {passed}));
+var qualityPassed = 0;
+void QualityCheck(bool condition) { if (!condition) throw new Exception("Capture assertion " + (qualityPassed + 1)); qualityPassed++; }
+using (var image = new Bitmap(64, 64))
+{
+    using var graphics = Graphics.FromImage(image);
+    graphics.Clear(Color.Black);
+    var black = CaptureQuality.Inspect(image);
+    QualityCheck(black.Status == "suspect-low-variation" && black.SampleCount == 1024);
+    graphics.Clear(Color.White);
+    QualityCheck(CaptureQuality.Inspect(image).Status == "suspect-low-variation");
+    graphics.Clear(Color.FromArgb(100, 100, 100));
+    using var lowContrast = new SolidBrush(Color.FromArgb(103, 103, 103));
+    graphics.FillRectangle(lowContrast, 0, 0, 32, 64);
+    QualityCheck(CaptureQuality.Inspect(image).Status == "suspect-low-variation");
+    graphics.Clear(Color.White);
+    graphics.FillRectangle(Brushes.Black, 0, 0, 32, 64);
+    var varied = CaptureQuality.Inspect(image);
+    QualityCheck(varied.Status == "unknown" && varied.MaxChannelRange == 255);
+    QualityCheck(image.GetPixel(0, 0).ToArgb() == Color.Black.ToArgb() && image.GetPixel(63, 63).ToArgb() == Color.White.ToArgb());
+    using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+    try { CaptureQuality.Inspect(image, cancelled.Token); throw new Exception("capture cancellation ignored"); }
+    catch (OperationCanceledException) { qualityPassed++; }
+}
+using (var pixel = new Bitmap(1, 1)) QualityCheck(CaptureQuality.Inspect(pixel).SampleCount == 1);
+var disposed = new Bitmap(1, 1); disposed.Dispose();
+QualityCheck(CaptureQuality.Inspect(disposed).Status == "unknown");
+Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new {passed, qualityPassed}));
 class Node {
     public string Name; public Node[] Children; public Node? Next;
     public Node(string name, params Node[] children) { Name = name; Children = children;

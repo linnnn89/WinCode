@@ -4,7 +4,11 @@
 
 用途：后续开发、审查与验收的工作参考。本文记录建议和决策边界，不表示其中功能已经实施或发布。
 
-## 1. 当前结论与优先顺序
+## 当前维护状态（2026-09-08）
+
+R1–R6 已实现并进入 main，当前主任务连接的 R1–R3 验收见第 14 节。0.11.1 已完成修复及本地验证，范围为安装手册一致性、符号片段完整性/有界补读、截图质量提示；发布与验证结果见工作日志。原第 1–11 节保留初始设计及其当时基线，不能作为当前待办或运行版本。R7–R9 继续按真实阻塞进入；8–12 个真实任务与原生工具的成本对照仍是后续评价建议，未以现有脚本基准冒充完成。
+
+## 1. 初始结论与优先顺序（历史设计）
 
 下一阶段先解决真实使用中的上下文浪费与版本错配，再修正语义查询正确性，随后扩展 UI 到源码的调查能力。
 
@@ -238,7 +242,7 @@ Repomix 的个别有用做法可独立参考；当前显式候选打包会走内
 | --- | --- | --- |
 | 0.9.1 / R1 | [PR #14](https://github.com/linnnn89/WinCode/pull/14) 已合并，main 7ce737f | 非交互回归 169 pass、1 skip；最终入口筛选修正后专项 9/9。真实 TavernDesk 独立 MCP 响应 3705 字符，保留 solution、应用项目入口；CodeQL 通过 |
 | 0.9.2 / R2 | [PR #15](https://github.com/linnnn89/WinCode/pull/15) 已合并，main 2cbf443 | 专项 8/8，非交互回归 177 pass、1 skip，独立 stdio 契约与实际正文核对通过；CodeQL 通过 |
-| 0.9.3 / R3 | [PR #16](https://github.com/linnnn89/WinCode/pull/16) 已合并，main 0351111；主连接新版验收待办 | 专项 34/34；非交互回归 186 pass、1 skip；CodeQL 通过。真实 TavernDesk 新 stdio 8 场景通过 |
+| 0.9.3 / R3 | [PR #16](https://github.com/linnnn89/WinCode/pull/16) 已合并，main 0351111；当前主连接新版验收已补齐，见第 14 节 | 专项 34/34；非交互回归 186 pass、1 skip；CodeQL 通过。真实 TavernDesk 新 stdio 8 场景通过 |
 | 0.9.4 / R4 | [PR #17](https://github.com/linnnn89/WinCode/pull/17) 已合并，main 95446c3 | 新增 27 项；完整回归 213 pass、1 skip；CodeQL、stdio/TavernDesk 复测通过，真实 Serena LSP 未验收 |
 | 0.10.0 / R5 | [PR #18](https://github.com/linnnn89/WinCode/pull/18) 已合并，main 9d9053b | typecheck/build、stdio/TavernDesk、非交互回归 213 pass、1 skip；GUI/协议 34/34，CodeQL 通过；工具 schemaHash 与 R4 相同 |
 | 0.11.0 / R6 | [PR #19](https://github.com/linnnn89/WinCode/pull/19)：显式 C# 候选与 Gateway 实现、复测完成；远端合并状态见 PR | 专项 15/15，非交互回归 228 pass、1 skip，UI/协议 34/34，隔离源码修复闭环 1/1；最终构建 TavernDesk 8 场景及 UI→赋值→方法正文通过 |
@@ -253,3 +257,9 @@ Repomix 的个别有用做法可独立参考；当前显式候选打包会走内
 无需结束主任务即可由构建后新建的代理连接验证新版；必须注明它是新连接，父连接仍旧。官方 App Server 提供 `config/mcpServer/reload`，本机应用代码也有调用点，但当前工具未暴露，且未核实单服务器、无扰动刷新保证，因此本次未调用；本机 CLI 的 `mcp --help` 无 restart/reconnect 子命令。[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server)
 
 后续可在独立小改动中考虑 hello 暴露自身 PID，让关联直接可证；这不会自动修复既有旧进程，本轮不混入 SDK 迁移或 UI 源码导航。
+
+## 14. 当前主连接补充验收（2026-09-08）
+
+用户要求完成 TavernDesk 实测问题的下一轮迭代。核对当前 main@8f997d8 后，R1–R3 已包含在代码中；本次补齐当前主任务实际连接的验收，没有重复开发。当前连接已于北京时间 08:25:54 启动，hello 返回 0.11.0、build.status=verified、revision=8f997d8，实例 1b949eb7-14e4-45c6-9cbd-6e6c21eef32a；首末核对一致。这更新了第 13 节此前主连接仍旧的状态，不代表其他任务连接已刷新。
+
+真实连接打开 TavernDesk 默认响应 3705 字符，无目录树；按需目录浏览限制 10 项且明确截断。scopeFiles+symbol 返回 ShowCharactersAsync，第 309 行声明及正文核对通过；1–223 行在足预算下完整覆盖，512 token 预算时仅完整覆盖 9 行并明确半截尾行。原始响应已按实际源文件和 UTF-16 字符预算验证，记录在 test-tmp/tavern-host-acceptance-20260908.json；26 项相关回归通过。没有重新启动应用、访问个人数据库、修改 MCP 配置或安装依赖；已恢复活动工作区为 I:/WinCode。后台空白截图、computer use 窗口归属和真实 Serena LSP 不属于本次已解决项。

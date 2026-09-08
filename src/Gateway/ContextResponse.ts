@@ -94,6 +94,23 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
   }
 
   function render(): { type: 'text'; text: string }[] {
+    // A symbol window has no parsed end boundary. Continue from the final serialized
+    // tail, including a partial last line, without calling the whole method complete.
+    const evidence = data.evidence.map(item => {
+      if (item.locationKind !== 'symbol') return item;
+      const startLine = item.endLine + (item.endLineComplete === true ? 1 : 0);
+      const endLine = Math.min(startLine + 79, item.fileLineCount ?? 0);
+      const needsMoreBudget = item.endLineComplete !== true;
+      const maxTokens = needsMoreBudget ? Math.min(65536, data.metrics.budgetTokens * 2) : data.metrics.budgetTokens;
+      const blocked = needsMoreBudget && maxTokens <= data.metrics.budgetTokens && startLine <= item.startLine;
+      return { ...item, symbolCoverage: 'unknown',
+        ...(blocked ? { nextAction: 'Use a file reader for the remaining long line; maximum response budget reached.' } :
+          endLine >= startLine ? { nextRequest: {
+            task: 'Read following source lines; the symbol end boundary remains unknown.',
+            lineRanges: [{ file: item.file, startLine, endLine }], maxTokens,
+          } } : {}),
+      };
+    });
     const bodyStatus = (file: string): 'complete' | 'partial' | 'omitted' | 'unknown' => {
       if (!data.metrics.includeFullText) {
         const item = data.evidence.find(item => item.file === file);
@@ -115,13 +132,15 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
     if (omitted.size > omittedListLimit) metadataTruncated = true;
     const { formattedContent, executiveSummary, packedContent, packedFileSpans, requestedLineRanges, ...base } = data;
     const common = { ...base,
+      evidence,
+      bodyStatusScope: data.metrics.includeFullText ? 'packed-file' : 'displayed-snippet',
       relatedFiles: data.relatedFiles.map(item => ({...item, included: returned.includes(item.path), bodyStatus: bodyStatus(item.path)})),
       responseFormat, metadataTruncated, limitationsOmitted, omittedFileCount: omitted.size,
       coverage: rangeCoverage(), taskCoverage: null };
     if (responseFormat === 'compact') {
       return [{ type: 'text', text: JSON.stringify({ ...common,
         // A packed body has its own file delimiters. Snippet ranges must not describe that body.
-        evidence: data.metrics.includeFullText ? data.evidence.map(({ file, reason, line, symbol }) => ({ file, reason, line, symbol, bodyStatus: bodyStatus(file) })) : data.evidence,
+        evidence: data.metrics.includeFullText ? data.evidence.map(({ file, reason, line, symbol }) => ({ file, reason, line, symbol, bodyStatus: bodyStatus(file) })) : evidence,
         ...(data.metrics.includeFullText ? { packedContent: packedContent || '' } : {}),
       }) }];
     }

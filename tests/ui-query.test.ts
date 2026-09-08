@@ -13,6 +13,7 @@ import { ToolRouter } from '../src/Core/ToolRouter.js';
 it('bounded production search preserves ambiguity, incompleteness and cancellation', async () => {
   const {stdout} = await promisify(execFile)('dotnet', ['run', '--project', 'tests/fixtures/ui-query-check', '-c', 'Release'], {timeout:60000});
   assert.match(stdout, /"passed":16/);
+  assert.match(stdout, /"qualityPassed":8/);
 });
 it('query rejects unbounded, empty, malformed filters before launching a helper', async () => {
   for (const q of [{}, null, [], {name:''}, {name:'x',maxSearchNodes:5001}, {name:'x',maxMatches:21}, {name:'x',nodeId:1}]) {

@@ -101,6 +101,9 @@ export interface UiInspectResult {
   hwnd?: string;
   captureOrigin?: UiRect;
   captureMethod?: string;
+  /** Bounded raw-pixel hint only; neither status establishes visual usability. */
+  captureQuality?: { status: 'suspect-low-variation' | 'unknown'; sampleCount: number;
+    maxChannelRange?: number; message: string };
   backgroundOnly?: boolean;
   imageWidth?: number;
   imageHeight?: number;

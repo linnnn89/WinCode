@@ -37,6 +37,38 @@ function response(context: PreparedContextResult, format: 'compact' | 'legacy' =
   return data;
 }
 
+it('a long symbol is a complete displayed snippet, not a complete method, with bounded continuation', async () => fixture(async (root, manager) => {
+  const lines = ['export function SaveTarget() {', ...Array.from({ length: 110 }, (_, i) => `  // body ${i}`), '  return "TAIL_ERROR_HANDLER";', '}'];
+  await fs.writeFile(path.join(root, 'Long.ts'), lines.join('\n'));
+  for (const format of ['compact', 'legacy'] as const) {
+    const data = response(await manager.prepareContext({ task: 'Review error handling', scopeFiles: ['Long.ts'], symbol: 'SaveTarget', maxTokens: 4000 }), format);
+    assert.equal(data.bodyStatusScope, 'displayed-snippet');
+    assert.equal(data.relatedFiles[0].bodyStatus, 'complete');
+    assert.equal(data.evidence[0].symbolCoverage, 'unknown');
+    assert.equal(data.coverage, null);
+    assert.ok(!data.evidence[0].snippet.includes('TAIL_ERROR_HANDLER'));
+    const next = data.evidence[0].nextRequest;
+    assert.equal(next.lineRanges[0].startLine, data.evidence[0].endLine + 1);
+    assert.ok(next.lineRanges[0].endLine - next.lineRanges[0].startLine < 80);
+    const continued = response(await manager.prepareContext(next));
+    assert.equal(continued.evidence[0].snippet, lines.slice(next.lineRanges[0].startLine - 1, next.lineRanges[0].endLine).join('\n'));
+    assert.equal(continued.coverage.allRequestedCovered, true);
+  }
+}));
+
+it('symbol continuation includes a clipped tail and never suggests ranges past EOF', async () => fixture(async (root, manager) => {
+  await fs.writeFile(path.join(root, 'Long.ts'), 'export function SaveTarget() {\n' + Array.from({ length: 60 }, () => '  // ' + 'x'.repeat(200)).join('\n') + '\n}');
+  const data = response(await manager.prepareContext({ task: 'Read method', scopeFiles: ['Long.ts'], symbol: 'SaveTarget', maxTokens: 1000 }));
+  const e = data.evidence[0];
+  assert.equal(e.truncated, true);
+  assert.equal(e.nextRequest.lineRanges[0].startLine, e.endLine + (e.endLineComplete ? 1 : 0));
+  assert.ok(e.nextRequest.lineRanges[0].endLine <= e.fileLineCount);
+  await fs.writeFile(path.join(root, 'Short.ts'), 'export function SaveTarget() {}');
+  const short = response(await manager.prepareContext({ task: 'Read method', scopeFiles: ['Short.ts'], symbol: 'SaveTarget', maxTokens: 2000 }));
+  assert.equal(short.evidence[0].symbolCoverage, 'unknown');
+  assert.equal(short.evidence[0].nextRequest, undefined);
+}));
+
 it('an adequately budgeted 223-line request returns the entire range beyond the old 4000-character cap', async () => fixture(async (root, manager) => {
   const lines = Array.from({ length: 250 }, (_, index) => `// source line ${index + 1}: ${'x'.repeat(40)}`);
   await fs.writeFile(path.join(root, 'Long.ts'), lines.join('\n'));

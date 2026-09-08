@@ -446,3 +446,6 @@
 - 文档批量写入首次因当前 Set-Content 不接受 -NoNewline 未写入三个目标，随后改用明确补丁完成并检查差异；没有把失败写入记为完成。原生编译与锁定恢复首轮成功。后续增加报告字段及文档后仍须以干净检出复核最终版本。
 - 尚未完成：干净检出与重复内容身份、最终 CI/PR 合并。D3 分支保护与 F12 无 shell Repomix 兼容取舍仍待用户决定，不修改仓库权限、不关闭旧 CodeQL 告警。
 - 干净检出 I:/WinCode-worktrees/wp4-clean-20260908 的首次 npm ci 成功，但回归 299 pass/1 fail/1 skip：旧 tdd-suite 将项目名写死 WinCode/WinCode MCP；实际 identifyProject 按 path.basename(root) 命名，任意其他合法检出目录都会触发假失败。改为精确断言实际目录名，未更改产品行为、未重命名目录绕过。失败报告保留在该检出的 test-tmp/check/2026-09-08T12-37-31-404Z-core/。
+- 干净检出修正后完整 check 两次通过（均 300 pass、1 skip、0 fail/取消），报告 2026-09-08T12-39-02-455Z-core 与 12-39-56-230Z-core。两次 Gateway buildId=88c96147c9fc9430c5d5f39f0c27cf17d9b1a2ad5323c548c46fc817a35fe9ec；交付 contentId=5795657ffac19488b24503baf9ca2d867f5d1f24fa2a5deaa3c461783066c043，时间戳变化而内容身份相同。依赖来自该检出的 npm ci 与共享 NuGet 下载缓存，没有借用原工作区 dist/bin；这不是空机器离线构建证明。
+- 从系统 Temp（非仓库 cwd）直启该干净检出的发布 Host，health 成功，真实 version=0.12.2、configuration=Release、informationalVersion=0.12.2+b6901cd960da460fa91bb2eeba81e63eac716ae4、framework=.NET 10.0.11。生产 stdio 测试也在独立临时工作目录运行。
+- 反证自审：只覆盖 Host 主 EXE 会漏掉依赖 DLL 混用，清单实际枚举整个发布目录并用新增/缺失/替换反例验证；同版本旧内容仍通过哈希检测。未提供签名真实性证明，也未更新父 Codex 连接。最终 PR 的 Node 22/24、CodeQL 结果仍须在提交后核对。

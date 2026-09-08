@@ -234,3 +234,4 @@ ToolRouter 是允许知道具体实现的组装位置；Gateway 不再访问适�
 - GitHub 经验落实：参考 [Node watcher 实现](https://github.com/nodejs/node/blob/main/lib/internal/fs/watchers.js) 与 [VS Code 生命周期管理](https://github.com/microsoft/vscode/blob/main/src/vs/base/common/lifecycle.ts) 的 owner、幂等及失败语义；复用现有 ResourceManager，未引入新的管理框架。
 - 2026-09-08 更新：WP2 / 0.12.0 已按精确 head CI 合并 PR #23（main=39d2b20）。WP3 / 0.12.1 实施中，用户已确认 hello 被动、diagnose 主动；后续默认由主代理推进，独立审核与自审分别记载。
 - 2026-09-08 20:16:48（北京时间）：WP3 / 0.12.1 的精确 head CI 通过并合并 [PR #24](https://github.com/linnnn89/WinCode/pull/24)，main=227463e。WP4 / 0.12.2 正在执行：已实现 Node 24/22、SDK/NuGet 锁定、统一 check 和桌面入口、交付清单、真实 Host 身份与维护文档；首轮核心 300 pass/1 skip、桌面 35/35。最终干净检出与 CI 尚待完成；D3/F12 继续保留未决，不将自审写成独立审查。
+- WP4 干净检出经一次目录名假设修正后两次完整 check 通过，内容身份稳定；非仓库 cwd 的 stdio 与原生 Host health 通过。D3 未决，因此仅建立仓内检查和精确 head 人工核对，不声明 GitHub 已强制保护。详情与失败证据见工作日志。

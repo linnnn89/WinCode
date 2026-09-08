@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CacheManager } from '../src/Core/Cache.js';
@@ -188,6 +190,22 @@ describe('WinCode v0.5 stability', () => {
   });
 
   describe('Failure', () => {
+    it('awaited deadlines settle without unrelated active handles and settled operations release their timer', async () => {
+      const moduleUrl = pathToFileURL(path.join(root, 'src/Core/ResourceManager.ts')).href;
+      const run = promisify(execFile);
+      const cases = [
+        `try { await withTimeout(new Promise(() => {}), 40, 'isolated'); throw Error('Unexpected completion'); }
+         catch (error) { if (!(error instanceof TimeoutError)) throw error; console.log('deadline observed'); }`,
+        `console.log(await withTimeout(Promise.resolve('settled'), 30000, 'isolated'));`,
+      ];
+      for (const [index, body] of cases.entries()) {
+        const result = await run(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval',
+          `import { withTimeout, TimeoutError } from ${JSON.stringify(moduleUrl)}; ${body}`],
+        { cwd: root, windowsHide: true, timeout: 10000 });
+        assert.match(result.stdout, index === 0 ? /deadline observed/ : /settled/);
+      }
+    });
+
     it('Serena MCP timeout becomes a structured incomplete query and does not crash', async () => {
       const config = getDefaultConfig(root);
       config.cacheDir = testCacheDir;

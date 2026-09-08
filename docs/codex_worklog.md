@@ -370,3 +370,19 @@
 - 版本与文档：package/lock/WINCODE_VERSION 为 0.11.1；README 中英文、Skill、CHANGELOG 及路线图最新状态已同步，原路线图历史章节保留。没有新增依赖或修改全局 MCP 配置。
 - 验证：typecheck、Gateway build、Host publish --no-restore 通过；默认非交互回归 234 项，233 pass、1 skip、0 fail；UI/协议 34/34 通过；生产新 stdio initialize/list/契约/目标正文/未知参数拒绝/同实例核对通过；TavernDesk 只读源码 8 场景通过。全量回归在最后 .bak 备份后缀调整前完成，该调整后仅重跑相应同步专项。日志 test-tmp/evidence-*.log，源码报告 test-tmp/r3/acceptance-1788828481850.json，均按既有规则排除。
 - 运行边界：本任务现有连接 hello 仍返回 0.11.0（实例 6e7b45f6-2662-43cf-a75c-f0884b1e72d7），没有把新 stdio 的 0.11.1 验证冒称为旧连接升级；后续客户端重连后加载新构建。截图提示修复不等于所有应用的空白截图已消除，computer use 窗口归属及真实 Serena LSP 仍未验收。
+
+## 2026-09-08（北京时间）— PR 自动回归与真实源码审查对照
+
+- 授权：用户同意执行重新评估建议。基线 main@57d6d68 / 0.11.1，工作区干净，建立 codex/ci-real-task-baseline；范围为 CI、升级验收及小规模真实源码审查，据实测调整取证手册。无网关公共接口、运行版本或依赖升级；R7–R9 未启动。
+- 当前连接验收：本任务实际 hello 返回 0.11.1、verified，实例 690efd0b-200e-4b15-bd08-a3d608a777cf，启动于 09:17:46（北京时间）；buildId=483b15166ff2f1bb1905d8d6eec2a360c9aee39b82a669be41f7831d008aaea1、revision=57d6d682b6141c72171df176fb57bc5ce5d44efe，与磁盘产物一致。本轮没有重启客户端或修改 MCP 配置。真实连接正文同时验证 bodyStatusScope、symbolCoverage 和 nextRequest，Serena 仍降级。
+- CI：Windows 2025、Node.js 20/24 小矩阵、.NET 10；固定 GitHub Actions 提交，contents:read，禁用保留凭据，15 分钟超时并取消同分支旧运行。先发布原生 Host、预构建两个控制台夹具，再运行 npm test 与生产 stdio 契约。沿用现有检查且没有降低断言；交互 UI 不进入无桌面验收。分支保护未修改，远端结果以实际 PR 检查为准。
+- 对照设计：四项实际 TavernDesk 源码维护问题，起始信息均为明确文件及声明名。原生路径先用 rg 获取前 8/后 79 行；MCP 路径先按旧 Skill 使用 scopeFiles+symbol、4000 估计 token 预算，缺少分支后执行有界补读。数据根任务两侧继续读复制实现；导入任务两侧增加字段赋值搜索，MCP 路径此步转用原生工具。原始结果、参数、耗时、源码哈希见 test-tmp/maintenance-source-study-20260908.json（按既有规则忽略，不上传 TavernDesk 正文）。四份文件哈希未变化，所有 MCP 正文逐行等于源码。
+- 对照结果（调用数 / UTF-16 返回字符）：导入错误条件：原生 2 / 3929，MCP 起步 3 / 7797；回复取消：1 / 3979 对 2 / 7531；数据根迁移：2 / 11397 对 3 / 16135；固定测试根复用：1 / 4430 对 2 / 8121。任务取证共 6 / 23735 对 10 / 39584，MCP 起步一侧含一次原生回退；身份核对与打开/恢复工作区另计。四次初始 24 行窗口均未包含问题关键分支。该结果是同一 Agent 的非盲源码审查、固定窗口策略对照，不是独立模型实验、完整开发任务完成率、真实 Token 或总任务耗时比较；不计算通用提速百分比。
+- 审查结论：ImportAsync catch 仅在会话引用未变时写状态，页面离开/书架切换到会话变更的完整生命周期仍未核实，此项保留部分验收。ExecuteAsync 中 Interrupted 和空正文分支均先于持久化；数据库复制/发布先于配置保存，路径修复是独立入口，配置保存失败后的跨文件系统事务回滚不能由本方法保证；测试根需显式 reuse、匹配非链接标记，并拒绝祖先/子项链接。均为源码结论，不冒称 GUI、真实取消或数据迁移运行通过。
+- 最小修正：README 中英文与 Skill 明确区分声明预览和异常/取消/释放分支审核；后者有现成文件工具时优先有界原生读取，小文件可按预算取完整正文。保留 MCP 证据边界，没有为长方法增加解析器、工具或配置。
+- 本地验证：typecheck、build、默认回归 234 项（233 pass、1 skip、0 fail，28.5 秒）、新生产 stdio 契约通过。日志 test-tmp/ci-regression.log、test-tmp/ci-stdio.log。未重复运行交互 UI；Node.js 20 和全新 Windows runner 的结果待本 PR 实际 CI。
+- 已推送 [PR #21](https://github.com/linnnn89/WinCode/pull/21)。首轮 [CI 34176857681](https://github.com/linnnn89/WinCode/actions/runs/34176857681) 在两个版本暴露实际失败：Node 20 在模拟上游挂起时事件循环提前结束，207 pass、26 cancelled、1 skip；Node 24 在 workspace-summary 触发 libuv fs-event 短路径断言，231 pass、1 fail、1 skip。原生 Host 与控制台夹具构建均已通过，失败不是缺少 .NET 环境；CodeQL 通过不能替代这些回归。
+- 定位与修复：withTimeout 的 unref 使孤立等待在到达期限前退出，新增真实子进程用例以退出码 13/无超时结果先复现；移除该期限定时器的 unref，保留 finally 清理，并验证已完成操作不会挂到 30 秒期限。WorkspaceWatch 将传给 fs.watch 的路径经 realpathSync.native 规范化，状态仍保留请求路径；真实 junction 写入用例核对规范路径、变化通知和关闭。两项新用例修复前失败、修复后通过。依据：[Node timers](https://nodejs.org/api/timers.html#timeoutunref)、[libuv #5010](https://github.com/libuv/libuv/issues/5010)。未修改测试数据根来隐藏短路径问题，也未放宽断言或屏蔽失败套件。
+- 范围更新：CI 发现的问题直接阻碍本轮验收，按既有授权修复两个运行时局部缺口，版本增至 0.11.2；无新依赖或公共参数变化。前述 0.11.1 实际连接验收仍有效，但不能冒称该连接已加载随后新增的 0.11.2 修复。
+- 补充计量：两条取证路径的跨调用重复非空源码行均为 0；本样本中的额外调用来自窗口分片和逐次元数据，不据此引入缓存。MCP 身份核对及工作区打开/恢复共 4 次另外记录。安装 Skill 在首次文档修正后同步一致，最终 0.11.2 版本待交付前再核对。
+- 修复后本地验证：两个新增回归 2/2、typecheck、0.11.2 build、新生产 stdio 契约通过；默认回归 236 项（235 pass、1 skip、0 fail、0 cancelled，27.6 秒）。日志 ci-deadline-red.log / ci-watch-red.log 保留修复前反例，ci-regression-fixed.log / ci-stdio-fixed.log 保留修复后结果。最终远端验证与合并记录统一见 PR #21 对应提交的 CI/CodeQL 检查，不用本地通过推断远端成功。

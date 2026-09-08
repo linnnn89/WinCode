@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.2
+
+- Keep awaited deadlines active until completion or timeout, then release their timers; an otherwise idle process no longer exits before reporting a timeout.
+- Canonicalize the native directory-watch path to avoid Windows short-path alias assertions, while preserving the requested workspace identity and existing failure reporting.
+- Add Windows PR/main regression checks for Node.js 20/24, .NET 10 native/console builds and the production stdio contract; interactive UI acceptance remains separate.
+- Refine retrieval guidance after a small paired TavernDesk source audit: use bounded native file reads for known methods requiring error/cancellation branches, retaining scoped symbols for declaration previews. No gateway API or dependency change.
+
 ## 0.11.1
 
 - Clarify displayed-snippet versus packed-file completeness. Symbol windows explicitly retain unknown method coverage and offer bounded following-line requests based on the final serialized tail and observed EOF.

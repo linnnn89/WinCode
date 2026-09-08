@@ -80,7 +80,8 @@ export async function withTimeout<T>(
           }
           reject(new TimeoutError(provider, timeoutMs));
         }, timeoutMs);
-        timer.unref?.();
+        // An awaited deadline must fire even when it is the last active handle.
+        // The finally block releases it immediately when the operation settles.
       }),
     ]);
   } finally {

@@ -1,6 +1,7 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { mapUiSources } from '../src/Core/UiSourceMapper.js';
@@ -72,4 +73,37 @@ it('watch start failure is observable without a retry loop or leaked watcher', (
   assert.ok(first.lastError?.message);
   watch.stop();
   assert.deepEqual(watch.getStatus(), first, 'Stop must not erase failure history');
+});
+
+it('watching an alias uses its canonical directory and still reports changes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-watch-alias-'));
+  const target = path.join(root, 'target');
+  const alias = path.join(root, 'alias');
+  const watch = new WorkspaceWatch();
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await fs.mkdir(target);
+    await fs.symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const expected = fsSync.realpathSync.native(alias);
+    const original = fsSync.watch;
+    t.mock.method(fsSync, 'watch', (watched: any, ...args: any[]) => {
+      assert.equal(watched, expected, 'native watching must not receive an unresolved path alias');
+      return (original as any)(watched, ...args);
+    });
+    const changed = new Promise<void>((resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error('No file-change notification')), 4000);
+      watch.start(alias, resolve, 10);
+    });
+    assert.equal(watch.getStatus().active, true);
+    assert.equal(watch.activeRoot, path.resolve(alias), 'status preserves the requested workspace identity');
+    await fs.writeFile(path.join(target, 'probe.txt'), 'changed');
+    await changed;
+    watch.stop();
+    assert.equal(watch.getStatus().active, false);
+  } finally {
+    if (deadline) clearTimeout(deadline);
+    watch.stop();
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

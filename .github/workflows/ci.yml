@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: Windows regression (Node ${{ matrix.node }})
+    runs-on: windows-2025
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '24']
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install locked Node dependencies
+        run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Build production gateway
+        run: npm run build
+      - name: Publish native host
+        run: dotnet publish tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj -c Release -r win-x64 --no-self-contained
+      # Build console fixtures before their bounded runtime checks start timing.
+      - name: Build audit console fixture
+        run: dotnet build tests/fixtures/ui-audit-check/ui-audit-check.csproj -c Debug
+      - name: Build query console fixture
+        run: dotnet build tests/fixtures/ui-query-check/ui-query-check.csproj -c Release
+      - name: Non-interactive regression
+        run: npm test
+      - name: Production stdio contract
+        run: npm run test:e2e

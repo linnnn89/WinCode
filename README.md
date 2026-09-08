@@ -20,11 +20,11 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.11.1**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.11.2**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
-**Requirements:** Git, Node.js `>= 20.0.0`, and Windows x64. This iteration was tested on Node.js 24.19.0; Node.js 20 was not separately executed. Building the UI helper requires the .NET 10 SDK; running it requires the corresponding .NET runtime installed on the machine.
+**Requirements:** Git, Node.js `>= 20.0.0`, and Windows x64. Local validation uses Node.js 24.19.0; check the CI results for clean Windows runs on Node.js 20/24. Building the UI helper requires the .NET 10 SDK; running it requires the corresponding .NET runtime installed on the machine.
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git
@@ -177,11 +177,13 @@ Use `wincode_prepare_context` with the location information already available:
 {"task":"Review the save logic","lineRanges":[{"file":"src/Service.cs","startLine":50,"endLine":80}],"maxTokens":2000}
 ```
 
-Known lines: use `lineRanges`. Known file and declaration: use `scopeFiles` plus `symbol`. Known files only: use `scopeFiles`. Use `candidateFiles` when discovery beyond those candidates is intended; it remains a priority list, not an exclusive scope. Scoped symbol matching currently uses local C#/TS/JS/Python declaration patterns and reports incomplete semantic coverage; ambiguous or missing targets remain explicit issues.
+Known lines: use `lineRanges`. For a declaration and nearby context, use `scopeFiles` plus `symbol`; this returns a 24-line window before budget clipping. When reviewing a known method's error handling, cancellation or cleanup, prefer an existing file reader with bounded `rg` context when available, so the required branches can be read together. A small known file can also be requested with `scopeFiles` and `includeFullText:true`, subject to the output budget. Known files only: use `scopeFiles` for a preview. Use `candidateFiles` when discovery beyond those candidates is intended; it remains a priority list, not an exclusive scope. Scoped symbol matching currently uses local C#/TS/JS/Python declaration patterns and reports incomplete semantic coverage; ambiguous or missing targets remain explicit issues.
 
 The default `compact` response contains one JSON text block; `responseFormat: "legacy"` returns JSON plus Markdown. `maxTokens` accepts 512–65536 and budgets all returned text as UTF-16 characters divided by four, including metadata. Actual model tokens differ. Check actual ranges, `queryComplete`, truncation and `bodyStatus` before treating evidence as sufficient. Once the required evidence is available, continue analysis; refresh after edits or workspace changes. WinCode does not guarantee cross-request evidence freshness or provide the benchmark's reuse policy as a production cache. Parameter combinations and limits are in the [code manual](skills/wincode/references/code.md).
 
 ### Development and validation
+
+The [CI workflow](.github/workflows/ci.yml) runs on pull requests and main pushes using Windows, Node.js 20/24 and .NET 10. It type-checks, builds the gateway/native host and console fixtures, runs the non-interactive regression suites, and verifies the production stdio contract. Interactive desktop/UI and real Serena acceptance remain separate. Check the actual run result; adding a workflow does not configure branch protection or establish a passing build.
 
 ```powershell
 npm run build
@@ -211,11 +213,11 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.11.1**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.11.2**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
-**环境要求：**Git、Node.js `>= 20.0.0`、Windows x64。本轮实际测试使用 Node.js 24.19.0，未另行运行 Node.js 20。编译 UI Helper 需安装 .NET 10 SDK；运行依赖宿主机对应的 .NET 运行时。
+**环境要求：**Git、Node.js `>= 20.0.0`、Windows x64。本地验证使用 Node.js 24.19.0；Node.js 20/24 在全新 Windows 环境的验证以 CI 结果为准。编译 UI Helper 需安装 .NET 10 SDK；运行依赖宿主机对应的 .NET 运行时。
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git
@@ -368,11 +370,13 @@ Coding Agent ── stdio MCP ── WinCode
 {"task":"核对保存逻辑","lineRanges":[{"file":"src/Service.cs","startLine":50,"endLine":80}],"maxTokens":2000}
 ```
 
-已知行号用 `lineRanges`；已知文件和声明名用 `scopeFiles` 加 `symbol`；仅知道文件用 `scopeFiles`。需要发现候选之外的文件时再用 `candidateFiles`，它仍然是优先列表，不是排他范围。限定范围的符号定位目前使用 C#/TS/JS/Python 本地声明模式，会明确保留语义不完整、重名和缺失提示。
+已知行号用 `lineRanges`；只需声明及附近上下文时用 `scopeFiles` 加 `symbol`，预算裁剪前为 24 行窗口。审核已知方法的异常处理、取消或资源释放时，若已有文件读取工具，优先结合有界 `rg` 上下文一次读到所需分支。小文件也可用 `scopeFiles` 加 `includeFullText:true` 在预算内读取正文。仅知道文件时用 `scopeFiles` 预览。需要发现候选之外的文件时再用 `candidateFiles`，它仍然是优先列表，不是排他范围。限定范围的符号定位目前使用 C#/TS/JS/Python 本地声明模式，会明确保留语义不完整、重名和缺失提示。
 
 默认 `compact` 返回一个 JSON 文本块；`responseFormat: "legacy"` 返回 JSON 加 Markdown。`maxTokens` 接受 512–65536，以全部返回文本的 UTF-16 字符数除以四估算，包含元数据，不等于真实模型 Token 数。结合实际行号、`queryComplete`、截断信息和 `bodyStatus` 判断证据是否够用；满足后继续分析，文件修改或工作区切换后重新取证。WinCode 没有跨调用证据有效期保证，基准中的复用策略也不是生产缓存。参数组合与限制见[代码手册](skills/wincode/references/code.md)。
 
 ### 本地开发与测试验证
+
+[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 20/24 与 .NET 10，执行类型检查、网关/原生 Host/控制台夹具构建、非交互回归及生产 stdio 契约验证。交互桌面/UI 和真实 Serena 验收仍单独执行。通过与否以实际运行结果为准；添加工作流不会自动配置分支保护。
 
 ```powershell
 npm run build

@@ -238,3 +238,4 @@ ToolRouter 是允许知道具体实现的组装位置；Gateway 不再访问适�
 - 2026-09-08 20:44:51（北京时间）：WP4 / 0.12.2 精确 head 的 Node 22/24 与 CodeQL 全通过，合并 [PR #25](https://github.com/linnnn89/WinCode/pull/25)，main=ba94c00。D3 仍未决，工程交付完成不等于分支保护已生效。
 - WP5 / 0.12.3：已完成新 stdio 精准范围、固定 TavernDesk 六导航→源码候选、真实 WPF 修复闭环和实际截图核对；产品任务 30 次调用/67103 UTF-16 字符，127 显示源码行中 42 行重复，不宣称普遍提速。实际 Codex hello 仍为 0.11.2，安装 Skill 已备份同步。真实 Serena 命令缺失、用户新导入角色卡尚待定位，按本计划保持部分完成；详见工作日志验收矩阵。F12/D3 未决状态不变。
 - WP5 新卡补充：用户指明书架角色后，入库、原始 JSON 字段保持、头像文件与书架截图已核对；在新 0.12.3 Gateway/Host 中，同名两文本节点正确返回完整但 ambiguous，不猜测唯一项。含真实卡的六导航取证再度 6/6；详情动作/聊天、真实 Serena、当前 Codex 重连仍未验收。不会把 Computer Use 误归属问题记为 WinCode 故障。
+- 2026-09-08 21:43（北京时间）补充：用户同意尝试四项检查后，D3 main 保护已启用并回读，F12 经 PR #27 合并后 CodeQL alert #1 自动 fixed。用户另行批准隔离安装 Serena（1 GB / 15 分钟上限），真实 1.7.0/Roslyn 链暴露并定位 FastMCP result 包装兼容缺陷；0.12.5 修复及七项真实验收已进入最终回归。正文证据为直接上游 oracle，WinCode 符号/引用为真实 adapter；父 Codex 重连仍未完成，详见工作日志。

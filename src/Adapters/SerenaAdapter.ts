@@ -638,7 +638,13 @@ export class SerenaAdapter implements IAdapter {
   }
 
   private serenaResultText(result: Awaited<ReturnType<Client['callTool']>>): string {
-    if (result.structuredContent !== undefined) return JSON.stringify(result.structuredContent);
+    if (result.structuredContent !== undefined) {
+      const structured = result.structuredContent;
+      // FastMCP wraps a string tool return as { result: "..." }, including JSON and errors.
+      if (this.isRecord(structured) && Object.keys(structured).length === 1 && typeof structured.result === 'string')
+        return structured.result;
+      return JSON.stringify(structured);
+    }
     return Array.isArray(result.content)
       ? result.content.filter(block => block.type === 'text').map(block => (block as { text: string }).text).join('\n')
       : '';

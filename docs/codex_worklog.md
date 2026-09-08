@@ -495,3 +495,13 @@
 - Serena 固定 v1.7.0 commit=949a27ef1e5fda1a6e7b561e777bcece345c6ffd，复用现有 Python 3.13.7，venv/uv-cache/SERENA_HOME/语言服务位于 test-tmp/serena-real；安装完成约 632 MB，.NET 10 复用已有环境。C# Roslyn=5.5.0-2.26078.4，下载校验采用上游固定 SHA-256。握手真实成功，第一次查询发现 structuredContent.result 包裹 JSON 字符串被当成符号对象；上游 content 内实际返回三个完整身份。此新缺陷作为后续兼容修复，不把本 PR 写成 Serena 已验收。
 - 当前 Codex 管理 CLI 只有 list/get/add/remove/login/logout，没有受支持的 reconnect 命令。保存配置指向正确 I:/WinCode/dist/index.js；没有用重复注册或杀进程替代重连，也未宣称旧父连接更新。
 - 作者反证自审：无 shell 不等于已安装脚本可信或有沙盒；缺失显式 CLI 不应悄悄执行另一安装。CodeQL 任务成功仍需合并后读取 alert #1 的 fixed 状态；PR/远端验收待后续回执。
+
+## 2026-09-08 21:43 — 0.12.5 真实 Serena 兼容闭环
+
+- 0.12.4 PR #27 精确 head=b912343 的 Node 22/24 和三语言 CodeQL 均通过，2026-09-08 21:40:05 在启用保护后正常 squash 合并，main=41602e0af4a1738f2542ae513eec1dda1485df29。未使用 admin bypass。main 扫描后 alert #1 已自动 fixed，fixed_at=2026-09-08T13:41:50Z；未手动 dismiss。
+- 真实 Serena 原始返回同时包含 content JSON 和 structuredContent={result:JSON字符串}。旧实现优先序列化整个 structuredContent，误判为不支持的符号结构。现在仅解开唯一 result 字符串包装，其余结构仍执行原有校验；不吞掉未知元数据，不将畸形 structuredContent 的 text 作为成功替代。
+- 新增六项回归与既有身份/降级套件合计 52/52：真实包装的符号/引用、合法空数组、未激活错误、截断、非 JSON、额外 metadata。引用坐标仍明确 containing-symbol，不伪装为精确调用行。
+- 新增显式 test:serena-real，不安装组件、不修改 Codex 注册。复用已批准隔离安装的 Serena 1.7.0 与 Roslyn，按生产默认连接/调用超时执行专用 C# 项目；七项通过：三个同名/重载身份、歧义不猜测、两个重载分别命中各自调用、直接上游正文与源码逐字一致、合法空符号/零引用、终止自有上游后将测试重启命令设为缺失并确认降级、真实未激活项目。保留 direct upstream body oracle 和 WinCode adapter 查询的证据边界，不宣称新增全方法正文产品接口。
+- 报告 test-tmp/serena-acceptance/1788874762075-31176/report.json 与 1788874881144-38796/report.json；每次记录真实结果、PID 退出、dispose 成败，测试 C# 源码保持一致。进一步自审加强为核对引用预览中 > 标记所在行，避免“周围文本同时有另一重载”造成假阳性；最终复测回执另存本地。查询已隔离安装目录对应 python/dotnet 进程，没有残留匹配进程。Serena 环境最终约 632 MB，复用 Python 3.13.7，无全局 PATH 修改、无全局 Serena 启用。
+- 首轮 0.12.5 全量回归和 stdio 通过，交付阶段因检查运行期间补充 package.json 维护命令触发源码/构建指纹不一致而失败；这是有效的一致性保护。冻结变更后完整重跑，不绕过交付校验。失败报告 2026-09-08T13-40-56-234Z-core。
+- 当前 Codex 旧连接仍需客户端重连；没有提供可调用的重连接口，不用结束 Codex/强杀 Gateway 冒充成功。作者自审，未新增独立审查或子代理。

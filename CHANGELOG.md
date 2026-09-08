@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.5
+
+- Handle the real Serena 1.7/FastMCP structuredContent.result string envelope before parsing symbols or references. Preserve error, empty-result, malformed and shortened-response semantics; do not discard unknown envelope metadata or silently prefer text over unsupported structured data.
+- Add an opt-in real Serena acceptance command using an explicitly supplied installed command. It exercises overloaded C# identities, ambiguity, reference locations, direct upstream body evidence, legitimate empty results, process interruption with unavailable restart, inactive projects and owned-process cleanup. It neither installs dependencies nor reconnects the parent Codex client.
+
 ## 0.12.4
 
 - Repomix health and packing launch an installed JavaScript bin directly with the current Node executable and separate arguments, eliminating the cmd/npx shell chain. Local package bin discovery and explicit absolute customCliPath are supported; shell wrappers and npx caches are no longer invoked. Missing or invalid entries use the builtin packer without installing anything.

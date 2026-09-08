@@ -51,7 +51,8 @@ it('limits symbol scanning to the requested file before reading unrelated conten
     const result = await adapter.findSymbolsDetailed('Target', undefined, 'src/Target.cs');
     assert.equal(result.queryComplete, true);
     assert.equal(result.totalFound, 1);
-    assert.deepEqual(opened.map(file => path.relative(root, file)), [path.join('src', 'Target.cs')]);
+    // Windows runner TEMP can use an 8.3 alias while the scanner opens real paths.
+    assert.deepEqual(opened, [await fs.realpath(path.join(root, 'src', 'Target.cs'))]);
   } finally { t.mock.restoreAll(); }
 }));
 

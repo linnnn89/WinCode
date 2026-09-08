@@ -408,3 +408,4 @@
 - 构建身份：本地 buildId=238d4a12a6a702feb3d422a988567556b2cd33842a5c2e3181f2b3342d9a0a5e，schemaHash=751b916ea659b888da414f2f0696b853962ef38b7570c5b80a992716211af9c7（本包无 schema 修改）。这是提交前源码构建，revision 仍记录基线；最终 PR 按精确提交 CI 验证。
 - GitHub 借鉴：[Node watcher](https://github.com/nodejs/node/blob/main/lib/internal/fs/watchers.js) 的真实 close 事件和 [VS Code lifecycle](https://github.com/microsoft/vscode/blob/main/src/vs/base/common/lifecycle.ts) 的 owner/幂等/错误语义，落实到既有机制，没有新增框架或依赖。
 - 边界：截止检查仍为协作式，不能中断已经提交 OS 的单次 I/O；端到端取消留 WP3。恰好达到结果上限保守标截断。未运行本轮真实 Serena/交互 GUI，不把 mock 通过视为 WP5 完成。远端 Node 20/24 与 PR/合并结果随后增订。
+- 远端首轮 PR #22 / CI 34219091516：Node 20/24 各 266 pass、1 fail、1 skip、0 cancelled。唯一失败为新 scoped-file 测试将 TEMP 的 RUNNER~1 短路径与 scanner 的 runneradmin realpath 直接计算相对路径。生产读取只有目标文件，测试改成比较唯一打开路径与目标 realpath，保持零额外文件读取断言；定向 19/19 通过。两版各 10 次顺序+10 次并发生命周期均通过，原 EBUSY 未出现；CodeQL 通过。未据此跳过整套复测。失败日志 test-tmp/wp1-ci-first-failure.log。

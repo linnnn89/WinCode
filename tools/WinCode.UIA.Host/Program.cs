@@ -326,6 +326,7 @@ public static class Program
         string? screenshotBase64 = null;
         string? annotatedBase64 = null;
         string? captureMethod = null;
+        CaptureQualityResult? captureQuality = null;
         int? imageWidth = null;
         int? imageHeight = null;
         double? imageScale = null;
@@ -339,6 +340,8 @@ public static class Program
             {
                 using var rawBitmap = capture.Bitmap;
                 captureMethod = capture.Method;
+                // Sample before labels can make a blank raw image appear informative.
+                captureQuality = CaptureQuality.Inspect(rawBitmap, ct);
                 if (captureMode == "original")
                 {
                     var (b64, w, h, scale, omitted, reason) = ProcessImageWithBudget(rawBitmap);
@@ -383,6 +386,7 @@ public static class Program
             Hwnd = $"0x{targetHwnd.ToInt64():X}",
             CaptureOrigin = captureOrigin,
             CaptureMethod = captureMethod,
+            CaptureQuality = captureQuality,
             BackgroundOnly = request.BackgroundOnly,
             ImageWidth = imageWidth,
             ImageHeight = imageHeight,
@@ -998,6 +1002,7 @@ public class InspectResponse
     public string? Hwnd { get; set; }
     public RectDto? CaptureOrigin { get; set; }
     public string? CaptureMethod { get; set; }
+    public CaptureQualityResult? CaptureQuality { get; set; }
     public int? ImageWidth { get; set; }
     public int? ImageHeight { get; set; }
     public double? ImageScale { get; set; }

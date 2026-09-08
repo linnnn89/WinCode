@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1
+
+- Clarify displayed-snippet versus packed-file completeness. Symbol windows explicitly retain unknown method coverage and offer bounded following-line requests based on the final serialized tail and observed EOF.
+- Add a bounded raw-pixel quality hint before annotation. Low variation may indicate a blank or legitimate uniform image; preserve screenshots and UIA evidence without activating windows or changing capture policy.
+- Add explicit installed-skill checks and backup-first synchronization for four managed documents; preserve extra files and reject linked destinations. Refresh bilingual guidance and current roadmap status.
+
 ## 0.11.0
 
 - Extend UI review with optional explicit C# candidate files: follow literal Click/simple Binding names to declarations or assignments and offer scoped context requests.

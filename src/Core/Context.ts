@@ -31,6 +31,8 @@ export interface ContextEvidence {
   endLine: number;
   /** Whether the final displayed line contains its entire source text, excluding its newline. */
   endLineComplete?: boolean;
+  /** Line count observed in the same source read, for bounded continuation without guessing EOF. */
+  fileLineCount?: number;
   locationKind: 'symbol' | 'file-start' | 'full-file' | 'line-range';
   truncated: boolean;
   snippet: string;
@@ -294,6 +296,7 @@ export class ContextManager {
         startLine: snippet.startLine,
         endLine: snippet.endLine,
         endLineComplete: snippet.endLineComplete,
+        fileLineCount: snippet.fileLineCount,
         locationKind: ranges.has(rel) ? 'line-range' : includeFullText ? 'full-file' : symbol ? 'symbol' : 'file-start',
         truncated: snippet.truncated,
         snippet: snippet.text,
@@ -538,7 +541,7 @@ export class ContextManager {
     issues: PreparedContextResult['fileIssues'],
     range?: { startLine: number; endLine: number },
     sourceContent?: string
-  ): Promise<{ text: string; startLine: number; endLine: number; endLineComplete: boolean; truncated: boolean; symbol?: CodeSymbol } | null> {
+  ): Promise<{ text: string; startLine: number; endLine: number; endLineComplete: boolean; fileLineCount: number; truncated: boolean; symbol?: CodeSymbol } | null> {
     try {
       const fullPath = await this.resolveFile(rel);
       const stat = await fs.stat(fullPath);
@@ -564,6 +567,7 @@ export class ContextManager {
       }
       const endLine = start + text.split('\n').length;
       return { text, startLine: start + 1, endLine,
+        fileLineCount: lines.length,
         endLineComplete: text.length === slice.length || slice[text.length] === '\n',
         truncated: Boolean(skippedPrefix) || text.length < slice.length,
         symbol: symbol && symbol.line! >= start + 1 && symbol.line! <= endLine ? symbol : undefined };

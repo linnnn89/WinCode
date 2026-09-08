@@ -215,6 +215,8 @@ describe('WinCode MCP UI Inspect Protocol & End-to-End Suite', () => {
     const imageBlock = content[1];
     assert.strictEqual(imageBlock.mimeType, 'image/png');
     assert.ok(imageBlock.data && imageBlock.data.length > 500, 'Image block data must be non-empty base64');
+    assert.ok(['unknown', 'suspect-low-variation'].includes(data.captureQuality?.status));
+    assert.ok(data.captureQuality.sampleCount > 0 && data.captureQuality.sampleCount <= 1024);
   });
 
   it('7. wincode_ui_inspect live WPF fixture with raw screenshot returns image block without polluting text JSON', async () => {
@@ -237,6 +239,8 @@ describe('WinCode MCP UI Inspect Protocol & End-to-End Suite', () => {
     const imageBlock = content[1];
     assert.strictEqual(imageBlock.mimeType, 'image/png');
     assert.ok(imageBlock.data && imageBlock.data.length > 500);
+    assert.ok(['unknown', 'suspect-low-variation'].includes(data.captureQuality?.status));
+    assert.ok(data.captureQuality.sampleCount > 0 && data.captureQuality.sampleCount <= 1024);
   });
 
   it('8. wincode_ui_inspect targets WPF window via hwnd handle', async () => {

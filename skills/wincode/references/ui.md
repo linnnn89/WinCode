@@ -14,7 +14,9 @@ queryResult.searchComplete=true 且 status="unique" 才展开子树；ambiguous 
 
 先取足够的小树，出现相关截断再增预算。需要看视觉布局才用 capture="original"；需要对应节点编号用 "annotated"。图片直接消费 MCP image 块，不把 Base64 转贴为文本。
 
-后台取证保持 backgroundOnly=true 并同时传 PID/HWND，避免游戏或其他遮挡窗口污染屏幕回退。不要为截图抢前台、还原窗口或操作游戏。PrintWindow 成功仍可能黑屏/陈旧；检查 captureMethod、imageOmitted 与截断。最小化不支持；整个 Helper 超时可能无树，不无界重试。
+后台取证保持 backgroundOnly=true 并同时传 PID/HWND，避免游戏或其他遮挡窗口污染屏幕回退。不要为截图抢前台、还原窗口或操作游戏。PrintWindow 成功仍可能黑屏/陈旧；检查 captureMethod、captureQuality、imageOmitted 与截断。最小化不支持；整个 Helper 超时可能无树，不无界重试。
+
+captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-low-variation 表示采样 RGB 各通道范围不超过 3，可能是空图，也可能是正常纯色或低对比界面。unknown 不表示图片合格；采样可能漏掉局部内容。提示不丢弃原图或 UIA、不自动切换截图方式。旧 Host 未提供该字段时按未验证处理。
 
 需要源码候选时，确认源码工作区后改用 wincode_ui_review，一次取得快照与证据；无需先 inspect 再重复截图。沿用上述参数，增加 candidateFiles:["Views/MainWindow.xaml"]，必要时 textQueries:["保存"]。
 - 候选为 1–16 个工作区内相对 XAML 路径；只传相关文件。

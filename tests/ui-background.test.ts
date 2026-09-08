@@ -7,6 +7,28 @@ import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { getDefaultConfig } from '../src/Core/Config.js';
 import { FlaUiAdapter } from '../src/Adapters/FlaUiAdapter.js';
 
+it('raw capture quality hints survive MCP without discarding image or UIA evidence', async () => {
+  const router = new ToolRouter(getDefaultConfig(process.cwd()));
+  const server = new WinCodeMcpServer(router);
+  const client = new Client({ name: 'capture-quality', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  router.inspectUi = async () => ({ schemaVersion: '1.0', protocolVersion: '1.0', requestId: 'quality', success: true,
+    tree: { id: 1, parentId: null, children: [] }, backgroundOnly: true, captureMethod: 'printWindow',
+    captureQuality: { status: 'suspect-low-variation', sampleCount: 1024, maxChannelRange: 0, message: 'May be blank or a legitimate uniform view.' },
+    screenshotPngBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=' });
+  try {
+    await (server as any).server.connect(b); await client.connect(a);
+    const response = await client.callTool({ name: 'wincode_ui_inspect', arguments: { pid: 1, hwnd: '0x1', capture: 'original', backgroundOnly: true } });
+    const blocks = response.content as Array<{ type: string; text: string }>;
+    assert.equal(response.isError, false);
+    const data = JSON.parse(blocks[0].text);
+    assert.equal(data.tree.id, 1);
+    assert.equal(data.captureQuality.status, 'suspect-low-variation');
+    assert.equal(data.hasScreenshot, true);
+    assert.equal(blocks.filter(item => item.type === 'image').length, 1);
+  } finally { await client.close(); await server.stop(); }
+});
+
 it('background policy validates explicit identity before spawning and survives MCP serialization', async () => {
   const router = new ToolRouter(getDefaultConfig(process.cwd()));
   const server = new WinCodeMcpServer(router);

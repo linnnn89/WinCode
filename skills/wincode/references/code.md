@@ -46,6 +46,8 @@ lineRanges 为闭区间、1 起始行号，最多 8 个文件，每文件一个�
 
 metrics.selectedFiles 是选择数，packedFiles 是打包器实际处理数（片段模式为片段数），returnedFiles 是返回正文覆盖数；打包器缺少正文位置时为 null。relatedFiles.bodyStatus 表示 complete/partial/omitted/unknown；片段模式的 complete 仅表示该片段完整，不表示整个文件完整。小预算先裁辅助列表，metadataTruncated 提示列表可能不全。
 
+bodyStatusScope 明确该字段描述 displayed-snippet 或 packed-file。symbol 请求返回声明附近窗口，symbolCoverage=unknown；即使 bodyStatus=complete 也不能认定整个方法完整。若所需逻辑仍在后方，可使用该证据的 nextRequest 续读最多 80 行；补读从最终尾行之后开始，半截尾行会完整重读。它不推测方法结束位置、不证明调用链完整，fileLineCount 仅为读取时的行数；编辑后重新定位。EOF 不再建议补读，最大预算无法读取完整长行时转用文件读取工具。
+
 2000 是首轮建议预算；证据不足再定向补充，确需文件正文才设 includeFullText=true。中文任务优先附上明确符号。startLine/endLine 是本次片段实际覆盖行，line 是其中的符号声明行；locationKind=file-start 只说明读到文件开头，evidenceInsufficient=false 不保证已取得回答问题所需的代码。完整模式的 packedContent 是正文，候选元数据不保证打包结果完整。
 
 保留 queryComplete、truncated、metadataTruncated、limitationsOmitted、omittedFiles/omittedFileCount 等字段的含义；预算裁剪后不得把缺失当成不存在。根据缺口收窄候选或增加预算，勿例行拉取全文。

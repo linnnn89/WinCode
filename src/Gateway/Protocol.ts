@@ -302,7 +302,7 @@ export const WINCODE_TOOLS: Tool[] = [
         readStates: {type:'boolean', default:false, description:'Read toggle, selection and expand/collapse states only; no actions or input values.'},
         backgroundOnly: {
           type: 'boolean', default: false,
-          description: 'Require explicit PID+HWND; never use screen-pixel capture fallback. No activation or restore. Window capture may fail or produce unusable pixels; inspect captureMethod and imageOmitted.',
+          description: 'Require explicit PID+HWND; never use screen-pixel capture fallback. No activation or restore. Window capture may fail or produce unusable pixels; inspect captureMethod, captureQuality and imageOmitted. Quality is a hint, not a usability verdict.',
         },
         maxDepth: {
           type: 'integer',

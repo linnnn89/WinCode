@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.2
+
+- Support Node 24 as primary and 22 as compatibility runtime; require Node >=22. Pin .NET SDK 10.0.303 and lock native Host/fixture restores without changing declared dependencies.
+- Add one core check entry point and separate desktop check, with test inventory coverage, bounded reports and pinned CI report upload.
+- Link Gateway JavaScript, the complete published Host directory, managed Skill and build configuration in a delivery manifest. Detect changed/missing files and mismatched Release Host versions; hashes establish local consistency, not authenticity.
+- Read actual native assembly identity; production resolves the published Release Host, with Debug fallback available only in explicit development mode.
+- Add contributor and formatting conventions, update support/security guidance, and preserve existing extension compatibility without expanding its architecture.
+- Branch protection and the existing Repomix CodeQL alert require their separate pending decisions; this version does not claim either resolved.
+
 ## 0.12.1
 
 - Make hello passive: report instance identity, capabilities and known adapter observations without spawning probes. Unknown state is explicit; diagnose_project retains active checks.

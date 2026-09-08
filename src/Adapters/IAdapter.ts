@@ -1,6 +1,6 @@
 /**
  * Adapter contract for optional upstreams (Serena, Repomix).
- * FlaUI/Snoop remain unimplemented. Upstream tools are never forked.
+ * FlaUI provides bounded read-only inspection. Upstream implementations remain separate.
  * initialize/dispose are owned by ToolRouter + ResourceManager, not by composite tools.
  */
 

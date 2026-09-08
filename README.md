@@ -20,11 +20,11 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.12.1**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.12.2**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
-**Requirements:** Git, Node.js `>= 20.0.0`, and Windows x64. Local validation uses Node.js 24.19.0; check the CI results for clean Windows runs on Node.js 20/24. Building the UI helper requires the .NET 10 SDK; running it requires the corresponding .NET runtime installed on the machine.
+**Requirements:** Git, Windows x64 and Node.js `>=22` (24 primary, 22 compatible). Building requires .NET SDK 10.0.303, pinned without roll-forward in `global.json`; the published UI helper needs the .NET 10 Windows Desktop runtime. See [CONTRIBUTING](CONTRIBUTING.md) for locked builds and delivery verification.
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git
@@ -183,20 +183,16 @@ The default `compact` response contains one JSON text block; `responseFormat: "l
 
 ### Development and validation
 
-The [CI workflow](.github/workflows/ci.yml) runs on pull requests and main pushes using Windows, Node.js 20/24 and .NET 10. It type-checks, builds the gateway/native host and console fixtures, runs the non-interactive regression suites, and verifies the production stdio contract. Interactive desktop/UI and real Serena acceptance remain separate. Check the actual run result; adding a workflow does not configure branch protection or establish a passing build.
+The [CI workflow](.github/workflows/ci.yml) runs `npm run check` on pull requests and main pushes using Windows, Node.js 22/24 and .NET SDK 10.0.303. It performs locked builds, core regression, production stdio and delivery verification, and uploads bounded reports even on failure. Interactive desktop/UI and real Serena acceptance remain separate. Check the actual run result; adding a workflow does not configure branch protection or establish a passing build.
 
 ```powershell
-npm run build
-npm run typecheck
-npm test                  # Non-interactive test suites
-npm run test:benchmark    # Benchmark correctness and fault-injection tests
-npm run benchmark:agent -- 1  # Small pilot; use -- 3 for three repetitions
-
-# Build isolated WPF test fixture for live UI testing
-dotnet publish tests/fixtures/wpf-ui-review/wpf-ui-review.csproj -c Release -r win-x64 --no-self-contained
-npm run test:ui           # Interactive UI suites
-npm run test:ui-query     # Targeted local query acceptance suite
-npm run test:all          # Comprehensive test run
+npm ci
+npm run check            # Locked builds, core regression, stdio and delivery manifest
+npm run check:desktop    # Isolated WPF, UI and UI-to-source; interactive Windows required
+npm run delivery:verify  # Detect changed/missing Gateway, Host sidecars or managed Skill
+npm run test:inventory   # Ensure every *.test.ts belongs to a declared suite
+npm run test:all          # Both check and check:desktop
+npm run benchmark:agent -- 1  # Opt-in pilot; -- 3 for three repetitions
 ```
 
 Live UI suites require an interactive Windows desktop session. In a 222-node test fixture, targeted queries reduced response text from 62 KB to ~1.6 KB while completing in ~0.78 seconds. Detailed test records are maintained in the [work log](docs/codex_worklog.md).
@@ -213,11 +209,11 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.12.1**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.12.2**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
-**环境要求：**Git、Node.js `>= 20.0.0`、Windows x64。本地验证使用 Node.js 24.19.0；Node.js 20/24 在全新 Windows 环境的验证以 CI 结果为准。编译 UI Helper 需安装 .NET 10 SDK；运行依赖宿主机对应的 .NET 运行时。
+**环境要求：**Git、Windows x64、Node.js `>=22`（24 主支持、22 兼容）。构建使用 `global.json` 精确锁定且不自动滚动的 .NET SDK 10.0.303；已发布 UI Helper 依赖 .NET 10 Windows Desktop 运行时。锁定构建和交付校验见 [CONTRIBUTING](CONTRIBUTING.md)。
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git
@@ -376,20 +372,16 @@ Coding Agent ── stdio MCP ── WinCode
 
 ### 本地开发与测试验证
 
-[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 20/24 与 .NET 10，执行类型检查、网关/原生 Host/控制台夹具构建、非交互回归及生产 stdio 契约验证。交互桌面/UI 和真实 Serena 验收仍单独执行。通过与否以实际运行结果为准；添加工作流不会自动配置分支保护。
+[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 22/24 与 .NET SDK 10.0.303 执行 `npm run check`，覆盖锁定构建、核心回归、生产 stdio 和交付校验，失败时也上传有界报告。交互桌面/UI 和真实 Serena 验收仍单独执行。通过与否以实际运行结果为准；添加工作流不会自动配置分支保护。
 
 ```powershell
-npm run build
-npm run typecheck
-npm test                  # 运行非交互单元与契约测试
-npm run test:benchmark    # 基准正确性与故障注入测试
-npm run benchmark:agent -- 1  # 单轮小样本；三轮对照使用 -- 3
-
-# 实机 UI 测试前发布隔离 WPF 测试夹具
-dotnet publish tests/fixtures/wpf-ui-review/wpf-ui-review.csproj -c Release -r win-x64 --no-self-contained
-npm run test:ui           # 交互式 UI 自动化测试
-npm run test:ui-query     # 运行定向控件查询验收测试
-npm run test:all          # 全套回归验证
+npm ci
+npm run check            # 锁定构建、核心回归、stdio 和交付清单
+npm run check:desktop    # 隔离 WPF、UI 与 UI→源码；需要交互式 Windows
+npm run delivery:verify  # 检测 Gateway、Host/依赖文件、受管 Skill 缺失或变化
+npm run test:inventory   # 核对每个 *.test.ts 均被明确归入套件
+npm run test:all          # 同时执行 check 与 check:desktop
+npm run benchmark:agent -- 1  # 显式小样本；三轮对照使用 -- 3
 ```
 
 实机 UI 测试需要交互式 Windows 桌面会话。实测在包含 222 个节点的测试夹具中，定向查询将返回文本由 62 KB 降至约 1.6 KB，单次耗时稳定在 0.78 秒左右。详尽的测试记录参见 [工作日志](docs/codex_worklog.md)。

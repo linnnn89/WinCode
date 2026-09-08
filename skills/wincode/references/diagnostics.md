@@ -27,3 +27,7 @@ pwsh -NoProfile -File I:/WinCode/scripts/check-ui-audit.ps1
 ```
 
 仅用户明确需要桌面弹窗时加 -Desktop；不例行弹窗。日志只有 start 表示结果未知；本地日志不是防篡改证据。清理须获得授权、停止相关调用并保留用户需要的记录，不能为了恢复取证静默删除。
+
+从 0.12.2 起，生产模式仅使用发布的 Release Host，缺失时明确不可用；`npm run dev`（`--development`）才允许 Debug/dotnet-run 回退。`customHostPath` 是显式配置覆盖，不是 MCP 请求字段。Host 响应的 `hostIdentity` 来自实际程序集，包含 version、informationalVersion、configuration 与 framework；旧 Host 未提供身份时不能推定版本一致。
+
+仓内 `npm run check` 执行锁定构建、核心回归和生产 stdio，生成并校验 `dist/delivery-manifest.json`；`npm run check:desktop` 单独运行隔离桌面闭环。`npm run delivery:verify` 检查 Gateway、发布 Host 全部文件及四份受管手册的一致性，不启动 Host，也不验证另一个客户端实例或签名真实性。构建要求 Node 24（22 兼容）和 `global.json` 中锁定的 SDK；缺少环境时按授权安装，不自动修改环境。

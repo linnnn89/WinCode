@@ -65,6 +65,7 @@ await server.start();
     console.log(JSON.stringify({ status: 'passed', transport: 'stdio', productionHandlers: true,
       upstreams: false, gui: false, codexConnectionVerified: false, version: hello.version,
       runtime: hello.runtime, schemaHash: hello.toolContract.schemaHash, toolCount: tools.length,
+      resourceCleanup: { observation: 'before shutdown; not proof of process exit', value: hello.health?.resourceCleanup ?? null },
       checks: ['initialize', 'tools/list', 'hello schema agreement', 'symbol body at line 50', 'exact range body', 'unknown fields ignored', 'known field type rejected', 'stable instance'] }, null, 2));
   } finally {
     try { await client.close(); } finally {

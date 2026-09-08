@@ -24,7 +24,7 @@ Current source version: **0.11.2**. All UI tools are strictly read-only and non-
 
 ### Quick start
 
-**Requirements:** Git, Node.js `>= 20.0.0`, and Windows x64. This iteration was tested on Node.js 24.19.0; Node.js 20 was not separately executed. Building the UI helper requires the .NET 10 SDK; running it requires the corresponding .NET runtime installed on the machine.
+**Requirements:** Git, Node.js `>= 20.0.0`, and Windows x64. Local validation uses Node.js 24.19.0; check the CI results for clean Windows runs on Node.js 20/24. Building the UI helper requires the .NET 10 SDK; running it requires the corresponding .NET runtime installed on the machine.
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git
@@ -217,7 +217,7 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 
 ### 快速上手
 
-**环境要求：**Git、Node.js `>= 20.0.0`、Windows x64。本轮实际测试使用 Node.js 24.19.0，未另行运行 Node.js 20。编译 UI Helper 需安装 .NET 10 SDK；运行依赖宿主机对应的 .NET 运行时。
+**环境要求：**Git、Node.js `>= 20.0.0`、Windows x64。本地验证使用 Node.js 24.19.0；Node.js 20/24 在全新 Windows 环境的验证以 CI 结果为准。编译 UI Helper 需安装 .NET 10 SDK；运行依赖宿主机对应的 .NET 运行时。
 
 ```powershell
 git clone https://github.com/linnnn89/WinCode.git

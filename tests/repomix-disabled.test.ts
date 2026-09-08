@@ -26,6 +26,8 @@ async function fixture(run: (adapter: RepomixAdapter, config: ReturnType<typeof 
   const adapter = new RepomixAdapter(config, cache);
   try {
     await fs.writeFile(path.join(root, 'Example.ts'), 'export const builtinEvidence = true;');
+    config.adapters.repomix.customCliPath = path.join(root, 'fixture.cjs');
+    await fs.writeFile(config.adapters.repomix.customCliPath, '// controlled probe fixture');
     await run(adapter, config);
   } finally {
     await adapter.dispose();
@@ -65,6 +67,100 @@ it('disabled CLI initialization and explicit or memoized health never probe an e
     });
   } finally { probe.restore(); }
 });
+
+async function realCliFixture(run: (adapter: RepomixAdapter, config: ReturnType<typeof getDefaultConfig>, root: string) => Promise<void>) {
+  // The metacharacters are legal directory characters, not an actual shell payload.
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode 中文 & %PATH% ^ (cli) '));
+  const config = getDefaultConfig(root);
+  const script = path.join(root, 'tool & 中文.cjs');
+  config.adapters.repomix.customCliPath = script;
+  const cache = new CacheManager(config.cacheDir);
+  const adapter = new RepomixAdapter(config, cache);
+  await fs.writeFile(path.join(root, 'Example.ts'), 'export const builtinEvidence = true;');
+  await fs.writeFile(script, `
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('fixture-1'); process.exit(0); }
+fs.writeFileSync(path.join(process.cwd(), 'started.json'), JSON.stringify({pid:process.pid,args,cwd:process.cwd()}));
+if (args.includes('--compress')) { setInterval(() => {}, 1000); }
+else fs.writeFileSync(args[args.indexOf('-o') + 1], JSON.stringify({args,cwd:process.cwd()}));
+`);
+  try { await run(adapter, config, root); }
+  finally {
+    await adapter.dispose();
+    assert.equal(path.dirname(root), os.tmpdir());
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+}
+
+it('real Node CLI receives exact special-character paths and include argv without a shell', async () => realCliFixture(async (adapter, config, root) => {
+  await adapter.initialize();
+  assert.equal((await adapter.checkHealth()).source, 'installed');
+  const include = 'src/中文 & %PATH% ^ (x),"quote";echo';
+  const result = await adapter.packWorkspace({ include: [include] });
+  assert.equal(result.source, 'repomix-cli');
+  const received = JSON.parse(result.content);
+  assert.equal(received.cwd, root);
+  assert.equal(received.args[received.args.indexOf('--include') + 1], include);
+  const output = received.args[received.args.indexOf('-o') + 1];
+  assert.equal(path.dirname(output), path.join(config.cacheDir, 'repomix_tmp'));
+  await assert.rejects(fs.stat(output), { code: 'ENOENT' });
+  assert.equal(adapter.activeProcessCount, 0);
+}));
+
+it('discovers installed package bin metadata without invoking npm or PATH wrappers', async () => realCliFixture(async (adapter, config, root) => {
+  const packageRoot = path.join(root, 'node_modules', 'repomix');
+  await fs.mkdir(packageRoot, { recursive: true });
+  await fs.copyFile(config.adapters.repomix.customCliPath!, path.join(packageRoot, 'cli.cjs'));
+  await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'repomix', bin: { repomix: './cli.cjs' } }));
+  delete config.adapters.repomix.customCliPath;
+  await adapter.initialize();
+  assert.equal((await adapter.packWorkspace()).source, 'repomix-cli');
+}));
+
+for (const invalid of ['missing.cjs', 'wrapper.cmd', 'relative.cjs']) {
+  it(`invalid explicit CLI ${invalid} falls back without a process`, async () => realCliFixture(async (adapter, config, root) => {
+    await fs.writeFile(path.join(root, 'wrapper.cmd'), '@echo should-never-run');
+    config.adapters.repomix.customCliPath = invalid === 'relative.cjs' ? invalid : path.join(root, invalid);
+    const probe = fakeCliProbe();
+    try {
+      await adapter.initialize();
+      assert.equal((await adapter.checkHealth()).source, 'fallback');
+      assert.equal((await adapter.packWorkspace()).source, 'builtin-fallback');
+      assert.equal(probe.count(), 0);
+    } finally { probe.restore(); }
+  }));
+}
+
+it('timed out real CLI falls back after its process exits', async () => realCliFixture(async (adapter, config, root) => {
+  config.timeouts.repomixPackMs = 1500;
+  await adapter.initialize();
+  const result = await adapter.packWorkspace({ compress: true });
+  assert.equal(result.source, 'builtin-fallback');
+  assert.equal(adapter.lastError?.reason, 'timeout');
+  const { pid } = JSON.parse(await fs.readFile(path.join(root, 'started.json'), 'utf8'));
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  assert.equal(adapter.activeProcessCount, 0);
+}));
+
+it('cancelling real CLI rejects and waits for its process to exit', async () => realCliFixture(async (adapter, _config, root) => {
+  await adapter.initialize();
+  const controller = new AbortController();
+  const running = adapter.packWorkspace({ compress: true }, { signal: controller.signal });
+  const rejection = assert.rejects(running, error => error instanceof Error && /abort|cancel/i.test(error.message));
+  let started: { pid: number } | undefined;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    started = await fs.readFile(path.join(root, 'started.json'), 'utf8').then(JSON.parse).catch(() => undefined);
+    if (started) break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  controller.abort();
+  await rejection;
+  assert.ok(started, 'fixture process reached its packing code');
+  assert.throws(() => process.kill(started.pid, 0), { code: 'ESRCH' });
+  assert.equal(adapter.activeProcessCount, 0);
+}));
 
 it('disabled configuration overrides an earlier installed health memo', async () => {
   const probe = fakeCliProbe();

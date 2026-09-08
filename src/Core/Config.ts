@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const WINCODE_VERSION = '0.12.3';
+export const WINCODE_VERSION = '0.12.4';
 
 /**
  * Bounded waits for every external process/RPC. None of these may be Infinity.
@@ -41,6 +41,7 @@ export interface WinCodeConfig {
   adapters: {
     repomix: {
       useCli: boolean;
+      /** Absolute installed JavaScript CLI entry (.js/.cjs/.mjs), never a shell wrapper. */
       customCliPath?: string;
     };
     serena: {

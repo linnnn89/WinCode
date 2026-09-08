@@ -484,3 +484,14 @@
 - 临时探针曾调用不存在的 connectTransport（失败日志 wp5-user-card-probe.log），核对既有 runtime-contract 测试后改为公开 SDK InMemoryTransport 与 Gateway 内已有 server.connect，复测通过；没有为测试添加生产连接 API。头像初检把相对路径误按 WinCode cwd 解析，随后查明 AppDataPaths 的 data 根规则并正确复核；初检 false 不属于应用文件丢失。
 - 为让远端检查报告直接提供实际测试数量，check 使用 Node 内置 TAP reporter 并收集 tests/pass/fail/cancelled/skipped 摘要；不只留下“命令退出 0”。缺少完整测试摘要仍报错，不把未运行套件记为通过。
 - TAP 报告补充实测：核心 check 通过，report.tests={tests:301,pass:300,fail:0,cancelled:0,skipped:1}（2026-09-08T13-05-15-874Z-core）；桌面 check 通过，report.tests={tests:35,pass:35,fail:0,cancelled:0,skipped:0}（2026-09-08T13-06-36-861Z-desktop）。更新 PR 后重新核对精确 head CI，不沿用先前 head 的成功状态。
+
+## 2026-09-08 21:37 — 0.12.4 安全启动与剩余验收
+
+- 用户要求尝试落实四项检查，按已说明方案推进 F12/D3；随后明确批准 Serena 隔离安装与验收，上限新增磁盘 1 GB、安装 15 分钟，不改全局 PATH。
+- main 保护已通过 GitHub API 写入并回读：PR 必需、strict Node 22/24 与 CodeQL csharp/javascript-typescript/actions 五项检查，绑定 GitHub Actions app=15368；enforce_admins=true、禁止 force push/删除、要求解决讨论。单维护者 required_approving_review_count=0，不将其写作独立审核。请求/回执在 test-tmp/security-verification/main-protection-*.json；本轮未新增子代理。
+- Repomix 健康与打包改为 process.execPath+独立 argv+shell:false。读取本地 package.bin，显式 customCliPath 仅接受绝对 JS 入口；不再调用 npx 缓存/PATH shell 包装器，不安装 Repomix。保留禁用无进程、降级、缓存策略隔离；随机输出名避免并发碰撞，清理超时文件和取消监听器，持续排空并限制输出。
+- 初次新增测试错误使用 CacheManager 构造参数/dispose，修正为现有 API 后 15/15 通过；这些是真实 Node 子进程夹具，不是真实 Repomix 包验收。覆盖特殊字符 argv、安装 bin 发现、无效显式路径、超时与取消后 PID 退出。失败证据保留 repomix-targeted.log。
+- 完整检查第一轮暴露两项旧测试依赖 npx 恰好较慢；改为真实挂起脚本，不削弱超时/清理断言。第二轮因隔离 Serena 安装扩大工作区，旧全仓影响分析触发真实 total-byte-limit 并正确返回 UNKNOWN；将该测试改为固定两文件夹具，保留有引用风险评估及置信度约束，未放宽生产扫描上限。第三轮完整 check 通过，报告/日志见 test-tmp/security-verification/full-check-3.log。
+- Serena 固定 v1.7.0 commit=949a27ef1e5fda1a6e7b561e777bcece345c6ffd，复用现有 Python 3.13.7，venv/uv-cache/SERENA_HOME/语言服务位于 test-tmp/serena-real；安装完成约 632 MB，.NET 10 复用已有环境。C# Roslyn=5.5.0-2.26078.4，下载校验采用上游固定 SHA-256。握手真实成功，第一次查询发现 structuredContent.result 包裹 JSON 字符串被当成符号对象；上游 content 内实际返回三个完整身份。此新缺陷作为后续兼容修复，不把本 PR 写成 Serena 已验收。
+- 当前 Codex 管理 CLI 只有 list/get/add/remove/login/logout，没有受支持的 reconnect 命令。保存配置指向正确 I:/WinCode/dist/index.js；没有用重复注册或杀进程替代重连，也未宣称旧父连接更新。
+- 作者反证自审：无 shell 不等于已安装脚本可信或有沙盒；缺失显式 CLI 不应悄悄执行另一安装。CodeQL 任务成功仍需合并后读取 alert #1 的 fixed 状态；PR/远端验收待后续回执。

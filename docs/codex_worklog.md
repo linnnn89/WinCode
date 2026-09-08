@@ -445,3 +445,4 @@
 - 首轮本地核心 check 通过：301 tests，300 pass、1 既有可选 TavernDesk skip、0 fail/取消；桌面 35/35 通过，含真实 WPF 修复闭环。报告 test-tmp/check/2026-09-08T12-30-46-296Z-core/report.json、2026-09-08T12-32-57-103Z-desktop/report.json。新增交付反例 9/9 通过，覆盖 JS/源文件/Skill/SDK/Host DLL 变化、缺失 sidecar、新增 DLL、版本不一致、禁止隐式 Debug 回退。
 - 文档批量写入首次因当前 Set-Content 不接受 -NoNewline 未写入三个目标，随后改用明确补丁完成并检查差异；没有把失败写入记为完成。原生编译与锁定恢复首轮成功。后续增加报告字段及文档后仍须以干净检出复核最终版本。
 - 尚未完成：干净检出与重复内容身份、最终 CI/PR 合并。D3 分支保护与 F12 无 shell Repomix 兼容取舍仍待用户决定，不修改仓库权限、不关闭旧 CodeQL 告警。
+- 干净检出 I:/WinCode-worktrees/wp4-clean-20260908 的首次 npm ci 成功，但回归 299 pass/1 fail/1 skip：旧 tdd-suite 将项目名写死 WinCode/WinCode MCP；实际 identifyProject 按 path.basename(root) 命名，任意其他合法检出目录都会触发假失败。改为精确断言实际目录名，未更改产品行为、未重命名目录绕过。失败报告保留在该检出的 test-tmp/check/2026-09-08T12-37-31-404Z-core/。

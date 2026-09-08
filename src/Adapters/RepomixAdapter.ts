@@ -3,6 +3,7 @@ import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { IAdapter, AdapterHealth, AdapterLastError } from './IAdapter.js';
 import { WinCodeConfig, getDefaultTimeouts } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';
@@ -20,6 +21,7 @@ export class RepomixAdapter implements IAdapter {
   private cache: CacheManager;
   private resources?: ResourceManager;
   private isCliAvailable = false;
+  private cliEntry: string | null = null;
   private activeProcesses: Set<ChildProcess> = new Set();
   private healthCache: { at: number; value: AdapterHealth } | null = null;
   private inflightPacks = new Map<string, Promise<RepomixPackResult>>();
@@ -52,6 +54,7 @@ export class RepomixAdapter implements IAdapter {
     // Configuration is authoritative even when an earlier probe found an installed CLI.
     if (!this.config.adapters.repomix.useCli) {
       this.isCliAvailable = false;
+      this.cliEntry = null;
       this.healthCache = null;
       return {
         available: true,
@@ -66,11 +69,22 @@ export class RepomixAdapter implements IAdapter {
       return this.healthCache.value;
     }
 
+    this.cliEntry = await this.resolveCliEntry();
+    if (!this.config.adapters.repomix.useCli) return this.checkHealth(timeoutMs);
+    if (!this.cliEntry) {
+      this.isCliAvailable = false;
+      const health: AdapterHealth = { available: true, source: 'fallback',
+        details: 'Repomix JavaScript CLI entry not found; using builtin packer. Install locally or configure an absolute customCliPath (.js/.cjs/.mjs); npx caches and shell wrappers are not executed.' };
+      this.healthCache = { at: Date.now(), value: health };
+      return health;
+    }
     const health = await new Promise<AdapterHealth>((resolve) => {
       let isSettled = false;
-      const proc = spawn('cmd', ['/c', 'npx --no-install repomix --version'], {
+      const proc = spawn(process.execPath, [this.cliEntry!, '--version'], {
         cwd: this.config.workspaceRoot,
         windowsHide: true,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'ignore'],
       });
 
       this.trackProcess(proc);
@@ -95,7 +109,7 @@ export class RepomixAdapter implements IAdapter {
       }, waitMs);
 
       let stdout = '';
-      proc.stdout?.on('data', (d) => (stdout += d.toString()));
+      proc.stdout?.on('data', (d) => { stdout = (stdout + d.toString()).slice(0, 4096); });
 
       proc.on('close', (code) => {
         if (isSettled) return;
@@ -140,7 +154,41 @@ export class RepomixAdapter implements IAdapter {
     });
 
     this.healthCache = { at: Date.now(), value: health };
+    this.isCliAvailable = health.source === 'installed';
     return health;
+  }
+
+  private async resolveCliEntry(): Promise<string | null> {
+    const validEntry = async (entry: string): Promise<string | null> => {
+      if (!path.isAbsolute(entry) || !/\.(?:cjs|mjs|js)$/i.test(entry)) return null;
+      return await fs.stat(entry).then(stat => stat.isFile() ? entry : null).catch(() => null);
+    };
+    const custom = this.config.adapters.repomix.customCliPath;
+    // An invalid explicit override must not silently launch a different installation.
+    if (custom !== undefined) return validEntry(custom);
+    const searchPaths = new Set([
+      ...(createRequire(path.join(this.config.workspaceRoot, 'package.json')).resolve.paths('repomix') ?? []),
+      ...(createRequire(import.meta.url).resolve.paths('repomix') ?? []),
+    ]);
+    for (const base of searchPaths) {
+      const packageRoot = path.join(base, 'repomix');
+      try {
+        const manifestPath = path.join(packageRoot, 'package.json');
+        if ((await fs.stat(manifestPath)).size > 64 * 1024) continue;
+        const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+        const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.repomix;
+        if (manifest.name !== 'repomix' || typeof bin !== 'string' || path.isAbsolute(bin)) continue;
+        const entry = path.resolve(packageRoot, bin);
+        const relative = path.relative(packageRoot, entry);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+        const realRoot = await fs.realpath(packageRoot);
+        const realEntry = await fs.realpath(entry);
+        const realRelative = path.relative(realRoot, realEntry);
+        if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) continue;
+        if (await validEntry(realEntry)) return realEntry;
+      } catch { /* Missing or malformed packages leave the builtin packer available. */ }
+    }
+    return null;
   }
 
   private trackProcess(proc: ChildProcess): void {
@@ -160,7 +208,7 @@ export class RepomixAdapter implements IAdapter {
     // A disabled request must neither read a CLI snapshot nor join an enabled CLI pack.
     const allowCli = this.config.adapters.repomix.useCli;
     const policy = allowCli ? 'cli-enabled' : 'builtin-only';
-    const cacheKey = `repomix_pack_v3_${policy}_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
+    const cacheKey = `repomix_pack_v4_${policy}_${this.config.adapters.repomix.customCliPath ?? ''}_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<RepomixPackResult>(cacheKey, fingerprint);
@@ -228,13 +276,12 @@ export class RepomixAdapter implements IAdapter {
     if (!this.config.adapters.repomix.useCli) return this.packWithFallback(options, operation);
 
     const ext = style === 'xml' ? 'xml' : 'md';
-    const tempOutputFile = path.join(tempOutputDir, `repomix_${Date.now()}.${ext}`);
+    const tempOutputFile = path.join(tempOutputDir, `repomix_${crypto.randomUUID()}.${ext}`);
+    const entry = this.cliEntry;
+    if (!entry) throw new Error('Repomix CLI entry has not passed its health check');
 
     const args = [
-      '/c',
-      'npx',
-      '--no-install',
-      'repomix',
+      entry,
       '--style',
       style,
       '-o',
@@ -253,15 +300,17 @@ export class RepomixAdapter implements IAdapter {
 
     return new Promise((resolve, reject) => {
       let isSettled = false;
-      const proc = spawn('cmd', args, {
+      const proc = spawn(process.execPath, args, {
         cwd: root,
         windowsHide: true,
+        shell: false,
+        stdio: ['ignore', 'ignore', 'pipe'],
       });
 
       this.trackProcess(proc);
 
       let stderr = '';
-      proc.stderr?.on('data', (d) => (stderr += d.toString()));
+      proc.stderr?.on('data', (d) => { stderr = (stderr + d.toString()).slice(-4096); });
 
       const packTimeoutMs = this.config.timeouts?.repomixPackMs ?? 30_000;
       const cancel = async () => {
@@ -279,8 +328,10 @@ export class RepomixAdapter implements IAdapter {
       const timeout = setTimeout(async () => {
         if (isSettled) return;
         isSettled = true;
+        operation?.signal?.removeEventListener('abort', cancel);
         this.untrackProcess(proc);
         await killProcessTree(proc).catch(() => {});
+        await fs.unlink(tempOutputFile).catch(() => {});
         reject(new TimeoutError('repomix', packTimeoutMs));
       }, packTimeoutMs);
       operation?.signal?.addEventListener('abort', cancel, { once: true });

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.4
+
+- Repomix health and packing launch an installed JavaScript bin directly with the current Node executable and separate arguments, eliminating the cmd/npx shell chain. Local package bin discovery and explicit absolute customCliPath are supported; shell wrappers and npx caches are no longer invoked. Missing or invalid entries use the builtin packer without installing anything.
+- Real child-process regression fixtures cover Unicode, spaces and shell metacharacters in paths/arguments, missing or invalid overrides, local package discovery, timeout and cancellation with PID exit checks. These validate the launcher contract, not an installed upstream Repomix release.
+- main protection now requires pull requests, the Node 22/24 regression matrix and all three CodeQL analysis checks, including administrators; force pushes and branch deletion are disabled. Independent approval is not required by GitHub for this single-maintainer workflow.
+
 ## 0.12.3
 
 - Add an opt-in six-task TavernDesk acceptance entry point. Discover candidate files with bounded native searches, locate unique live navigation controls, and verify command assignments and method declaration snippets against current source hashes.

@@ -1,5 +1,7 @@
 # 诊断与审计
 
+从 0.12.4 起 Repomix 健康探测和打包都由当前 Node 可执行文件直接启动已安装的 JavaScript CLI；不经过 cmd、npx 或 PATH 包装脚本，也不下载包。默认按目标工作区和 WinCode 安装目录的 Node 模块路径读取 repomix/package.json 的 bin 入口；不搜索 npx 缓存或 npm 自定义全局前缀。非标准安装需在宿主 WinCodeConfig.adapters.repomix.customCliPath 提供绝对 .js/.cjs/.mjs 路径；该字段不是 MCP 工具参数，不能传给 hello/prepare_context。显式路径无效时返回 builtin fallback，不执行另一份安装；useCli=false 仍完全禁止探测和启动。执行已安装脚本不提供沙盒或脚本可信性保证。
+
 `hello` 从 0.12.1 起只读取版本、能力和已知状态，不启动上游、CLI 或 UI Host 探测进程。`health.healthObservation` 区分 `known/unknown` 并给出 `observedAt`；`unknown`、`available:null` 或 `commandFound:null` 表示尚未探测，不能解释为不可用。配置禁用属于已知策略，但观察时间可为 null。已知健康结果可能陈旧，需要当前检查时调用现有 `wincode_diagnose_project({})`，不向 hello 添加未声明的 force/probe 字段。
 
 代码查询、引用、上下文、影响分析和重构建议接收 MCP 客户端取消信号；停止后续扫描/打包，等待当前读操作或自有上游进程清理后释放请求占用。上游 RPC 取消可能重置共享 Serena 连接，其他上游调用可能失败或降级；不保证外部服务器的单请求取消实现。磁盘单次 OS I/O 不能保证瞬时中断。工作区切换在等待和提交前可取消；已开始提交切换时完成一致性收尾，不声称已回滚。

@@ -25,4 +25,6 @@ For a version change, align `package.json`, the root entries in `package-lock.js
 
 Before merging a topic branch, record the problem, changes, failures and actual verification in the existing work log. Require successful Node 22/24 and CodeQL results for the exact PR head. Keep independent review and author self-review distinct, and identify unverified integrations. Repository branch-protection settings require a separate owner decision; this document does not establish enforced protection. A successful CodeQL run also does not prove existing alerts are closed.
 
+On 2026-09-08, the owner authorized applying main protection. The read-back confirmed required pull requests, strict Node 22/24 regression and three CodeQL analysis checks bound to GitHub Actions, enforcement for administrators, resolved conversations, and disabled force pushes/deletions. The single-maintainer policy requires zero GitHub approvals; this does not constitute an independent review. Re-read GitHub settings when verifying current enforcement.
+
 SDK policy follows [Microsoft global.json guidance](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json); dependency locking uses [NuGet locked restore](https://learn.microsoft.com/en-us/nuget/consume-packages/package-references-in-project-files#locking-dependencies).

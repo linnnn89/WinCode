@@ -615,7 +615,11 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
     });
 
     it('Resilience: checkHealth should respect timeout, terminate hung process tree, and gracefully fallback', async () => {
-      const slowRepomix = new RepomixAdapter(config, cache);
+      const cli = path.join(testCacheDir, 'hung-health.cjs');
+      await fs.writeFile(cli, 'setInterval(() => {}, 1000);');
+      const isolatedConfig = structuredClone(config);
+      isolatedConfig.adapters.repomix.customCliPath = cli;
+      const slowRepomix = new RepomixAdapter(isolatedConfig, cache);
       const startTime = Date.now();
 
       // Test with a tiny timeout (50ms) to ensure timeout handling kicks in without hanging
@@ -623,22 +627,25 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
       const elapsed = Date.now() - startTime;
 
       assert.ok(health.available, 'Should be marked available');
-      // Either it finishes immediately if cached/fast or times out and falls back
-      if (health.source === 'fallback') {
-        assert.ok(health.details?.includes('timed out') || health.details?.includes('built-in'));
-      }
+      assert.strictEqual(health.source, 'fallback');
+      assert.strictEqual(slowRepomix.lastError?.reason, 'timeout');
       assert.ok(elapsed < 2000, `Health check must not block, took ${elapsed}ms`);
       assert.strictEqual(slowRepomix.activeProcessCount, 0, 'Active process count must be 0 after completion or timeout');
     });
 
     it('Process Management & Dispose: should terminate all active child process trees on dispose()', async () => {
-      const managedRepomix = new RepomixAdapter(config, cache);
+      const cli = path.join(testCacheDir, 'dispose-health.cjs');
+      await fs.writeFile(cli, 'setInterval(() => {}, 1000);');
+      const isolatedConfig = structuredClone(config);
+      isolatedConfig.adapters.repomix.customCliPath = cli;
+      const managedRepomix = new RepomixAdapter(isolatedConfig, cache);
 
       // Start a long-running child process simulated via checkHealth with large timeout
       const healthPromise = managedRepomix.checkHealth(15000);
 
       // Give it a few ms to spawn the child process
-      await new Promise((r) => setTimeout(r, 100));
+      for (let attempts = 0; attempts < 100 && managedRepomix.activeProcessCount === 0; attempts++)
+        await new Promise((r) => setTimeout(r, 20));
 
       assert.ok(managedRepomix.activeProcessCount >= 1, 'Should track active child process');
 
@@ -731,7 +738,15 @@ describe('WinCode MCP Comprehensive TDD Test Suite', () => {
     });
 
     it('ImpactAnalyzer should calculate blast radius and correct risk level', async () => {
-      const impact = await router.impact.analyzeImpact('ToolRouter');
+      // A growing checkout (including optional upstream installs) is not a bounded test fixture.
+      const impactRoot = path.join(testCacheDir, 'impact-fixture');
+      await fs.mkdir(impactRoot, { recursive: true });
+      await fs.writeFile(path.join(impactRoot, 'ToolRouter.ts'), 'export class ToolRouter {}');
+      await fs.writeFile(path.join(impactRoot, 'Caller.ts'), 'import { ToolRouter } from "./ToolRouter";\nexport const caller = new ToolRouter();');
+      const impactConfig = getDefaultConfig(impactRoot);
+      impactConfig.adapters.serena.enabled = false;
+      const impactSerena = new SerenaAdapter(impactConfig, new CacheManager(path.join(testCacheDir, 'impact-cache')));
+      const impact = await new ImpactAnalyzer(impactSerena, impactConfig).analyzeImpact('ToolRouter');
       assert.strictEqual(impact.target, 'ToolRouter');
       assert.ok(impact.targetFile.includes('ToolRouter.ts'));
       assert.ok(

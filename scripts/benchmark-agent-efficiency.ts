@@ -120,7 +120,7 @@ async function createFixture(root: string) {
 async function runCase(testCase: Case, policy: Policy, repetition: number, hooks: BenchmarkHooks) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-benchmark-'));
   const config = getDefaultConfig(root);
-  config.adapters.serena.enabled = false;
+
   config.adapters.flaui.enabled = false;
   config.adapters.repomix.useCli = false;
   const router = new ToolRouter(config);
@@ -128,9 +128,9 @@ async function runCase(testCase: Case, policy: Policy, repetition: number, hooks
   const client = new Client({ name: 'agent-efficiency-benchmark', version: '1' });
   const overlap = new EvidenceOverlap();
   let symbolQueries = 0;
-  const originalFind = router.serena.findSymbolsDetailed.bind(router.serena);
+  const originalFind = router.text.findSymbolsDetailed.bind(router.text);
   // Count invocations, including cache hits; keep production results and cache behavior intact.
-  router.serena.findSymbolsDetailed = async (...args) => { symbolQueries++; return originalFind(...args); };
+  router.text.findSymbolsDetailed = async (...args) => { symbolQueries++; return originalFind(...args); };
   const calls: { args: Args; elapsedMs: number; returnedCharacters: number; status: string; accepted: boolean; error?: string }[] = [];
   const errors: { phase: string; message: string }[] = [];
   const actions: { action: string; revision: number; accepted?: boolean }[] = [];

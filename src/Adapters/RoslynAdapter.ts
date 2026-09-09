@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { RoslynConfig, WinCodeConfig } from '../Core/Config.js';
+import { WINCODE_VERSION, type RoslynConfig, type WinCodeConfig } from '../Core/Config.js';
 import { CodeQueryError, computeTypeMatchStats, type CodeSymbol, type ContextCodeQuery, type CodeReferenceQuery,
   type FindReferencesResult, type FindSymbolsResult, type SemanticContext, type SymbolLocation, type SymbolReference } from '../Core/CodeQueries.js';
-import type { AdapterHealth } from '../Core/AdapterStatus.js';
+import type { AdapterHealth, AdapterLastError } from '../Core/AdapterStatus.js';
 import { checkOperation, type OperationContext } from '../Core/OperationContext.js';
-import { GatewayRestartRequiredError, Mutex, ResourceManager } from '../Core/ResourceManager.js';
+import { GatewayRestartRequiredError, Mutex, ResourceManager, TimeoutError } from '../Core/ResourceManager.js';
 import { RoslynHostClient, type HostReply } from './RoslynHostClient.js';
 
 const kinds = new Set(['class', 'interface', 'method', 'function', 'property', 'enum', 'struct', 'type']);
@@ -25,6 +25,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   private disposed = false;
   private health?: AdapterHealth;
   private observedAt: string | null = null;
+  private lastError?: AdapterLastError;
 
   /** textDeclarations 只处理已提供正文，用于保留既有多语言文本能力，不调用任何 Serena 连接方法。 */
   constructor(private readonly config: WinCodeConfig, private readonly resources: ResourceManager,
@@ -37,7 +38,18 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
       if (typeof value !== 'string' || !path.isAbsolute(value)) throw new CodeQueryError('INVALID_ARGUMENT', 'Roslyn executable and Host paths must be absolute.');
     for (const [value, maximum] of [[options.loadTimeoutMs, 120000], [options.queryTimeoutMs, 60000]] as const)
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > maximum)) throw new CodeQueryError('INVALID_ARGUMENT', 'Invalid Roslyn time budget.');
-    this.options = Object.freeze({ ...options });
+    const additionalInputs = options.additionalInputs === undefined ? [] : options.additionalInputs;
+    if (!Array.isArray(additionalInputs) || additionalInputs.length > 32 || JSON.stringify(additionalInputs).length > 4096)
+      throw new CodeQueryError('INVALID_ARGUMENT', 'additionalInputs must be an array of at most 32 files and 4096 JSON characters.');
+    const inputIdentities = new Set<string>();
+    for (const file of additionalInputs) {
+      if (typeof file !== 'string' || /[*?:\0]/.test(file)) throw new CodeQueryError('INVALID_ARGUMENT', 'additionalInputs requires literal relative file paths.');
+      const full = this.localPath(file);
+      const identity = process.platform === 'win32' ? full.toLowerCase() : full;
+      if (inputIdentities.has(identity)) throw new CodeQueryError('INVALID_ARGUMENT', 'Duplicate additional input.');
+      inputIdentities.add(identity);
+    }
+    this.options = Object.freeze({ ...options, additionalInputs: Object.freeze([...additionalInputs]) });
     this.localPath(options.project);
     if (path.extname(options.project).toLowerCase() !== '.csproj') throw new CodeQueryError('INVALID_ARGUMENT', 'Roslyn entry must be a C# project.');
     resources.register('disposable', 'roslyn-adapter', () => this.dispose());
@@ -70,7 +82,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   private accept(reply: HostReply): HostReply {
     if (!reply.success) {
       if (reply.errorCode === 'HOST_RESTART_REQUIRED') this.restartRequired = true;
-      if (['SNAPSHOT_STALE', 'INPUTS_CHANGED', 'PROJECT_LOAD_FAILED', 'INPUT_BUDGET_EXCEEDED'].includes(reply.errorCode ?? '')) this.reloadRequired = true;
+      if (['SNAPSHOT_STALE', 'INPUTS_CHANGED', 'PROJECT_LOAD_FAILED', 'INPUT_BUDGET_EXCEEDED', 'INPUT_UNAVAILABLE'].includes(reply.errorCode ?? '')) this.reloadRequired = true;
       const error = new CodeQueryError(reply.errorCode ?? 'HOST_PROTOCOL_ERROR', reply.error ?? 'Code Host request failed.');
       this.observe(false, error.message);
       throw error;
@@ -91,7 +103,8 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
       await Promise.all([this.regularFile(project), this.regularFile(this.options.dotnetPath), this.regularFile(this.options.hostPath)]);
       checkOperation(operation);
       this.client = new RoslynHostClient(this.options.dotnetPath, [this.options.hostPath, '--allow-project-evaluation',
-        this.config.workspaceRoot, project, this.options.configuration, this.options.targetFramework], this.config.workspaceRoot, this.resources);
+        this.config.workspaceRoot, project, this.options.configuration, this.options.targetFramework,
+        JSON.stringify(this.options.additionalInputs)], this.config.workspaceRoot, this.resources);
       try {
         const reply = this.accept(await this.client.waitReady(this.options.loadTimeoutMs ?? 120000, operation));
         this.acceptReady(reply);
@@ -110,6 +123,17 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
         reply.configuration !== this.options.configuration || reply.framework !== this.options.targetFramework ||
         (process.platform === 'win32' && reply.processTreeGuard !== true))
       throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Code Host ready/configuration contract mismatch.');
+    const identity = reply.hostIdentity as { version?: unknown; configuration?: unknown; protocolVersion?: unknown } | undefined;
+    if (identity?.version !== WINCODE_VERSION || identity.configuration !== 'Release' || identity.protocolVersion !== 2) {
+      throw new CodeQueryError('HOST_VERSION_MISMATCH', 'Code Host must match this Gateway version, Release configuration and protocol; rebuild the delivery.');
+    }
+    // 必须确认 Host 实际采用了补充输入；旧 Host 或漏传配置不能被当成成功加载。
+    const policy = reply.inputPolicy as { version?: unknown; additionalInputs?: unknown } | undefined;
+    if (policy?.version !== 1 || !Array.isArray(policy.additionalInputs) ||
+        policy.additionalInputs.length !== this.options.additionalInputs!.length ||
+        policy.additionalInputs.some((file, index) => typeof file !== 'string' ||
+          path.relative(this.localPath(file), this.localPath(this.options.additionalInputs![index])) !== ''))
+      throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Code Host input policy/configuration mismatch.');
     this.snapshot = reply.snapshot;
     this.reloadRequired = false;
   }
@@ -117,7 +141,19 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   /** 保留已知观察，不把 hello 当成主动加载或健康探针。 */
   private observe(available: boolean, details: string): void {
     this.observedAt = new Date().toISOString();
-    this.health = { available, source: available ? 'installed' : 'unavailable', details };
+    this.health = { available, source: available ? 'installed' : 'unavailable', details, lastError: this.lastError };
+  }
+
+  /** 只按明确错误类型记录已发生的失败；保留最后失败，不从消息文字猜测超时或恢复动作。 */
+  private recordError(error: unknown): void {
+    const code = error instanceof CodeQueryError ? error.errorCode : undefined;
+    const reason: AdapterLastError['reason'] = code === 'HOST_TIMEOUT' || error instanceof TimeoutError ? 'timeout' :
+      code === 'HOST_CRASHED' ? 'crash' :
+      code === 'CANCELLED' || (error instanceof Error && error.name === 'AbortError') ? 'cancelled' :
+      code === 'HOST_UNAVAILABLE' || code === 'INPUT_UNAVAILABLE' ? 'unavailable' : 'error';
+    this.lastError = { at: new Date().toISOString(), reason,
+      message: (error instanceof Error ? error.message : String(error)).slice(0, 2048), recoverable: !this.cleanupFailure };
+    this.observe(false, this.lastError.message);
   }
 
   /** 被动状态同时表明是否需要重载/重启，不以活进程替代语义完整性。 */
@@ -183,6 +219,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
     return this.lock.runExclusive(async () => {
       try { return await work(); }
       catch (error) {
+        this.recordError(error);
         if (this.cleanupFailure) throw this.cleanupFailure;
         if (this.client && (!this.client.active || (error instanceof CodeQueryError && error.errorCode === 'HOST_PROTOCOL_ERROR')))
           await this.stopClient(true);
@@ -260,6 +297,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
       if (this.cleanupFailure) throw this.cleanupFailure;
       await this.stopClient(); this.restartRequired = false; this.reloadRequired = false;
       this.health = undefined; this.observedAt = null;
+      this.lastError = undefined;
     });
   }
 
@@ -268,7 +306,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
     this.snapshot = undefined;
     if (!this.client) return;
     try { await this.client.close(force); this.client = undefined; }
-    catch (error) { this.cleanupFailure ??= new GatewayRestartRequiredError([error], 'Code Host cleanup failed; restart Gateway.'); throw this.cleanupFailure; }
+    catch (error) { this.cleanupFailure ??= new GatewayRestartRequiredError([error], 'Code Host cleanup failed; restart Gateway.'); this.recordError(this.cleanupFailure); throw this.cleanupFailure; }
   }
 
   /** 仅释放自有 Host；不处置复用的文本解析器、Gateway 或目标应用。 */

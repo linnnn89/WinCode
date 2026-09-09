@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const WINCODE_VERSION = '0.12.5';
+export const WINCODE_VERSION = '0.13.0';
 
 /**
  * Bounded waits for every external process/RPC. None of these may be Infinity.
@@ -10,8 +10,6 @@ export interface WinCodeTimeouts {
   gitMs: number;
   dotnetMs: number;
   commandProbeMs: number;
-  serenaConnectMs: number;
-  serenaCallMs: number;
   repomixHealthMs: number;
   repomixPackMs: number;
   fileScanMs: number;
@@ -44,6 +42,8 @@ export interface RoslynConfig {
   hostPath: string;
   loadTimeoutMs?: number;
   queryTimeoutMs?: number;
+  /** 额外构建输入的工作区相对文件路径；最多 32 项，JSON 最长 4096，不支持目录、通配符或根外路径。 */
+  additionalInputs?: readonly string[];
 }
 
 export interface WinCodeConfig {
@@ -59,13 +59,6 @@ export interface WinCodeConfig {
       useCli: boolean;
       /** Absolute installed JavaScript CLI entry (.js/.cjs/.mjs), never a shell wrapper. */
       customCliPath?: string;
-    };
-    serena: {
-      enabled: boolean;
-      customEndpoint?: string;
-      customCommand?: string;
-      /** Extra argv when customCommand is an executable (e.g. node + mock script). */
-      customArgs?: string[];
     };
     flaui: {
       enabled: boolean;
@@ -87,8 +80,6 @@ export function getDefaultTimeouts(): WinCodeTimeouts {
     gitMs: 5_000,
     dotnetMs: 5_000,
     commandProbeMs: 1_500,
-    serenaConnectMs: 8_000,
-    serenaCallMs: 15_000,
     repomixHealthMs: 3_000,
     repomixPackMs: 30_000,
     fileScanMs: 20_000,
@@ -122,9 +113,6 @@ export function getDefaultConfig(workspaceRoot?: string): WinCodeConfig {
     adapters: {
       repomix: {
         useCli: true,
-      },
-      serena: {
-        enabled: true,
       },
       flaui: {
         enabled: true,

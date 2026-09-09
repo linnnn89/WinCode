@@ -37,7 +37,7 @@ it('project summaries use WPF build declarations despite an unrelated directory 
   await fs.writeFile(path.join(root, 'ArbitraryName', 'Example.csproj'),
     '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><UseWPF>true</UseWPF><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework></PropertyGroup></Project>');
   const workspace = new WorkspaceManager(getDefaultConfig(root));
-  const report = await new ArchitectureAnalyzer(workspace, null as any).analyze();
+  const report = await new ArchitectureAnalyzer(workspace).analyze();
   assert.equal(report.projectSummaries[0].kind, 'WPF executable');
   assert.equal(report.projectSummaries[0].file, 'ArbitraryName/Example.csproj');
   assert.ok(report.projectSummaries[0].evidence.includes('UseWPF=true'));
@@ -98,14 +98,14 @@ it('shutdown attempts every owner and flushes cache even when an adapter throws'
   const router = new ToolRouter(getDefaultConfig(root));
   const calls: string[] = [];
   router.repomix.dispose = async () => { calls.push('repomix'); throw new Error('simulated cleanup failure'); };
-  router.serena.dispose = async () => { calls.push('serena'); };
+  router.text.dispose = async () => { calls.push('text'); };
   router.flaui.dispose = async () => { calls.push('flaui'); };
   router.extensions.disposeAll = async () => { calls.push('extensions'); };
   router.cache.flush = async () => { calls.push('cache'); };
   router.resources.register('disposable', 'test', () => { calls.push('resources'); });
   await assert.rejects(router.dispose(), AggregateError);
   await assert.rejects(router.dispose(), AggregateError);
-  assert.deepEqual(calls, ['repomix', 'serena', 'flaui', 'extensions', 'cache', 'resources']);
+  assert.deepEqual(calls, ['repomix', 'text', 'flaui', 'extensions', 'cache', 'resources']);
   assert.equal(router.resources.isDisposed, true);
 }));
 
@@ -175,8 +175,7 @@ it('shutdown waits for the active switch and rejects its queued queries', async 
   router.cache.computeWorkspaceFingerprint = async () => 'fixture';
   router.repomix.dispose = async () => { events.push('dispose'); };
   router.repomix.initialize = async () => { events.push('initialize'); };
-  router.serena.resetConnection = async () => {};
-  router.serena.initialize = async () => {};
+  router.text.initialize = async () => {};
   const switching = router.openWorkspace(root);
   await started;
   const rejected = assert.rejects(router.acquireRequestSlot(), /shutting down/);

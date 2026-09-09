@@ -23,12 +23,12 @@ export interface DiagnosticsReport {
 export class ProjectDiagnostics {
   private workspace: WorkspaceManager;
   private config: WinCodeConfig;
-  private serena?: AdapterHealthQuery;
+  private queries?: AdapterHealthQuery;
 
-  constructor(workspace: WorkspaceManager, config: WinCodeConfig, serena?: AdapterHealthQuery) {
+  constructor(workspace: WorkspaceManager, config: WinCodeConfig, queries?: AdapterHealthQuery) {
     this.workspace = workspace;
     this.config = config;
-    this.serena = serena;
+    this.queries = queries;
   }
 
   async runDiagnostics(): Promise<DiagnosticsReport> {
@@ -71,25 +71,15 @@ export class ProjectDiagnostics {
       });
     }
 
-    if (this.serena) {
-      const health = await this.serena.checkHealth();
-      const up = health.upstream;
+    if (this.queries) {
+      const health = await this.queries.checkHealth();
       if (this.config.adapters.roslyn?.enabled) {
         items.push({ category: 'Dependencies', status: health.available ? 'PASS' : 'WARN',
           message: `Direct Roslyn: ${health.details ?? 'state unavailable'}. Query completeness must be checked separately.` });
-      } else if (up?.mode === 'connected' && up.semanticQueryUsable) {
-        items.push({
-          category: 'Dependencies',
-          status: 'PASS',
-          message: `Serena semantic query usable (handshakeOk=${up.handshakeOk}, projectActive=${up.projectActive}).`,
-        });
       } else {
-        items.push({
-          category: 'Dependencies',
-          status: 'WARN',
-          message: `Serena not connected for semantic queries (commandFound=${up?.commandFound ?? false}, handshakeOk=${up?.handshakeOk ?? false}, projectActive=${up?.projectActive ?? 'unprobed'}, mode=${up?.mode ?? 'degraded'}). Local fallback scan is available.`,
-          suggestion: 'A found serena command is not a connection. Handshake, project activation, and a successful semantic query are required.',
-        });
+        items.push({ category: 'Dependencies', status: 'WARN',
+          message: 'Local text search is available. Semantic analysis is not configured.',
+          suggestion: 'Explicitly configure Roslyn with a C# project, framework and project evaluation permission.' });
       }
     }
 

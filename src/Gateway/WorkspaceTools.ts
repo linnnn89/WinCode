@@ -49,7 +49,7 @@ export const WORKSPACE_TOOLS = [
   }),
   defineTool<{ greeting?: string; toolName?: string }>({
     name: 'wincode_hello_world',
-    description: 'Passive heartbeat: current instance version, tool contracts and known adapter state, without starting probes. healthObservation includes observation time; unknown/null means not probed, and known state may be stale. Use wincode_diagnose_project for active checks. available/fallback does not mean Serena is connected.',
+    description: 'Passive heartbeat: current instance version, tool contracts and known adapter state, without starting probes. healthObservation includes observation time; unknown/null means not probed, and known state may be stale. Use wincode_diagnose_project for active checks. Local text availability does not mean Roslyn semantic analysis is configured.',
     inputSchema: {
       type: 'object',
       additionalProperties: true,
@@ -81,10 +81,7 @@ export const WORKSPACE_TOOLS = [
         codeProvider: health.codeProvider,
         adapters: {
           ...(health.roslyn ? { roslyn: health.roslyn } : {}),
-          serena: { available: true, source: health.serena.handshakeOk ? 'installed' : 'fallback',
-            details: `commandFound=${health.serena.commandFound}; handshakeOk=${health.serena.handshakeOk}; projectActive=${health.serena.projectActive === null ? 'unprobed' : health.serena.projectActive}; semanticQueryUsable=${health.serena.semanticQueryUsable}; mode=${health.serena.mode}`,
-            upstream: { commandFound: health.serena.commandFound, handshakeOk: health.serena.handshakeOk,
-              projectActive: health.serena.projectActive, semanticQueryUsable: health.serena.semanticQueryUsable, mode: health.serena.mode } },
+          text: { available: true, source: 'local-text', details: health.text.details },
           repomix: { available: health.repomix.available, source: health.repomix.source, details: health.repomix.details },
           flaui: { available: health.flaui.available, source: health.flaui.source, details: health.flaui.details },
         }, capabilities: tools.map(tool => tool.name),

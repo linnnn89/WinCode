@@ -13,12 +13,12 @@ async function fixture(run: (root: string, manager: ContextManager) => Promise<v
   try {
     await fs.writeFile(path.join(root, 'package.json'), '{"name":"coverage-fixture"}');
     const config = getDefaultConfig(root);
-    const serena = {
+    const text = {
       findSymbolsDetailed: async () => ({ symbols: [], limitations: [], queryComplete: true }),
       findSymbolsInContent: (source: string, file: string) => source.split('\n').flatMap((line, index) =>
         line.includes('function SaveTarget(') ? [{ name: 'SaveTarget', file, line: index + 1, kind: 'function' }] : []),
     };
-    const manager = new ContextManager(config, new WorkspaceManager(config), null as any, serena as any);
+    const manager = new ContextManager(config, new WorkspaceManager(config), null as any, text as any);
     await run(root, manager);
   } finally {
     assert.equal(path.dirname(root), os.tmpdir());

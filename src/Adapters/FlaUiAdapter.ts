@@ -379,6 +379,39 @@ export class FlaUiAdapter implements IAdapter {
     }
   }
 
+  /** 纯协议解释：版本不匹配时返回明确错误，不改变自有进程的生命周期。 */
+  private parseHostResponse(stdoutData: string, request: UiInspectRequest & { requestId: string }): UiInspectResult {
+    try {
+      const parsed = JSON.parse(stdoutData.trim()) as UiInspectResult;
+      if (parsed.protocolVersion && parsed.protocolVersion !== '1.0') {
+        return {
+          schemaVersion: '1.0',
+          protocolVersion: '1.0',
+          requestId: request.requestId,
+          success: false,
+          errorCode: UiErrorCodes.VERSION_MISMATCH,
+          errorMessage: `Host returned unsupported protocol version: ${parsed.protocolVersion}`,
+        };
+      }
+      // Old/custom helpers must not silently ignore a scoped query and return a whole window.
+      if ((request.query || request.readStates) && parsed.success && parsed.inspectionVersion !== 2) {
+        return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
+          success: false, errorCode: UiErrorCodes.VERSION_MISMATCH,
+          errorMessage: 'Query/state inspection requires a v0.9 helper (inspectionVersion 2).', auditNotice: parsed.auditNotice };
+      }
+      return parsed;
+    } catch (jsonErr) {
+      return {
+        schemaVersion: '1.0',
+        protocolVersion: '1.0',
+        requestId: request.requestId,
+        success: false,
+        errorCode: UiErrorCodes.HOST_ERROR,
+        errorMessage: `Failed to parse host JSON output: ${(jsonErr as Error).message}. Output head: ${stdoutData.slice(0, 300)}`,
+      };
+    }
+  }
+
   private async executeHost(
     request: UiInspectRequest & { requestId: string },
     timeoutMs: number,
@@ -558,37 +591,7 @@ export class FlaUiAdapter implements IAdapter {
             return;
           }
 
-          try {
-            const parsed = JSON.parse(stdoutData.trim()) as UiInspectResult;
-            if (parsed.protocolVersion && parsed.protocolVersion !== '1.0') {
-              resolve({
-                schemaVersion: '1.0',
-                protocolVersion: '1.0',
-                requestId: request.requestId,
-                success: false,
-                errorCode: UiErrorCodes.VERSION_MISMATCH,
-                errorMessage: `Host returned unsupported protocol version: ${parsed.protocolVersion}`,
-              });
-              return;
-            }
-            // Old/custom helpers must not silently ignore a scoped query and return a whole window.
-            if ((request.query || request.readStates) && parsed.success && parsed.inspectionVersion !== 2) {
-              resolve({ schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
-                success: false, errorCode: UiErrorCodes.VERSION_MISMATCH,
-                errorMessage: 'Query/state inspection requires a v0.9 helper (inspectionVersion 2).', auditNotice: parsed.auditNotice });
-              return;
-            }
-            resolve(parsed);
-          } catch (jsonErr) {
-            resolve({
-              schemaVersion: '1.0',
-              protocolVersion: '1.0',
-              requestId: request.requestId,
-              success: false,
-              errorCode: UiErrorCodes.HOST_ERROR,
-              errorMessage: `Failed to parse host JSON output: ${(jsonErr as Error).message}. Output head: ${stdoutData.slice(0, 300)}`,
-            });
-          }
+          resolve(this.parseHostResponse(stdoutData, request));
         });
 
         // Write request payload to stdin

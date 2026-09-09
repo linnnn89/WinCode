@@ -1,11 +1,11 @@
 /**
- * Adapter contract for optional upstreams (Serena, Repomix).
+ * Adapter contract for optional upstreams (Roslyn, Repomix).
  * FlaUI provides bounded read-only inspection. Upstream implementations remain separate.
  * initialize/dispose are owned by ToolRouter + ResourceManager, not by composite tools.
  */
 
 import { AdapterHealth } from '../Core/AdapterStatus.js';
-export type { AdapterHealth, AdapterLastError, UpstreamConnectionStatus } from '../Core/AdapterStatus.js';
+export type { AdapterHealth, AdapterLastError } from '../Core/AdapterStatus.js';
 
 export interface IAdapter {
   readonly name: string;

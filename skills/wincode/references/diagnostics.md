@@ -1,12 +1,12 @@
 # 诊断与审计
 
-0.12.5 已兼容 Serena 1.7/FastMCP 的 structuredContent.result 字符串包装。真实上游验收入口是维护命令 `npm run test:serena-real -- <已安装命令绝对路径> [启动器参数]`，只在用户要求验收且环境已准备时执行；它创建独立 C# 夹具，记录重载、引用、空结果、未激活、断连降级及 PID 退出。脚本不自动安装，也不把 commandFound/握手成功当作语义可用。安装在 test-tmp 的上游仅用于隔离验收，不表示 Codex 默认连接已启用 Serena。
+0.13.0 彻底退役外部 Serena。默认本地文本模式可用，但不提供编译器语义；需要 C# 语义时按代码手册显式配置直接 Roslyn。维护入口为 test:roslyn-host 与 test:roslyn-gateway，不再有 test:serena-real。
 
 从 0.12.4 起 Repomix 健康探测和打包都由当前 Node 可执行文件直接启动已安装的 JavaScript CLI；不经过 cmd、npx 或 PATH 包装脚本，也不下载包。默认按目标工作区和 WinCode 安装目录的 Node 模块路径读取 repomix/package.json 的 bin 入口；不搜索 npx 缓存或 npm 自定义全局前缀。非标准安装需在宿主 WinCodeConfig.adapters.repomix.customCliPath 提供绝对 .js/.cjs/.mjs 路径；该字段不是 MCP 工具参数，不能传给 hello/prepare_context。显式路径无效时返回 builtin fallback，不执行另一份安装；useCli=false 仍完全禁止探测和启动。执行已安装脚本不提供沙盒或脚本可信性保证。
 
 `hello` 从 0.12.1 起只读取版本、能力和已知状态，不启动上游、CLI 或 UI Host 探测进程。`health.healthObservation` 区分 `known/unknown` 并给出 `observedAt`；`unknown`、`available:null` 或 `commandFound:null` 表示尚未探测，不能解释为不可用。配置禁用属于已知策略，但观察时间可为 null。已知健康结果可能陈旧，需要当前检查时调用现有 `wincode_diagnose_project({})`，不向 hello 添加未声明的 force/probe 字段。
 
-代码查询、引用、上下文、影响分析和重构建议接收 MCP 客户端取消信号；停止后续扫描/打包，等待当前读操作或自有上游进程清理后释放请求占用。上游 RPC 取消可能重置共享 Serena 连接，其他上游调用可能失败或降级；不保证外部服务器的单请求取消实现。磁盘单次 OS I/O 不能保证瞬时中断。工作区切换在等待和提交前可取消；已开始提交切换时完成一致性收尾，不声称已回滚。
+代码查询、引用、上下文、影响分析和重构建议接收 MCP 客户端取消信号；停止后续扫描/打包，等待当前读操作或自有上游进程清理后释放请求占用。Roslyn 取消会传播到自有 Host；若合作取消未及时完成，则按既有超时策略清理自有进程树，不宣称其他请求已成功。磁盘单次 OS I/O 不能保证瞬时中断。工作区切换在等待和提交前可取消；已开始提交切换时完成一致性收尾，不声称已回滚。
 
 `health.resourceCleanup` 是最多 100 条资源关闭记录（owner、kind、closed/failed 与最多 1024 字符错误），`omitted` 表示更早记录被省略。进程数量为零不能替代这些结果或真实 PID 退出证据。关闭失败会向调用方抛出，重复关闭保留失败；初始化失败会尝试释放已取得资源。记录只保存在当前进程内，不是持久审计或防篡改证明。
 
@@ -14,7 +14,7 @@
 
 更新仓库后，先用 `npm run skill:check -- <已安装 wincode 目录的绝对路径>` 核对四份受管手册；不一致退出码为 2。明确更新时使用 `npm run skill:sync -- <同一路径>`，先在同级 .wincode-backup-* 目录以 .bak 后缀备份旧手册（避免备份被发现为重复 Skill），再写入并校验哈希；其他文件保持原样。此操作不注册 MCP、不改客户端配置、不重启运行实例。检查本机安装内容与仓库一致也不证明当前连接加载了新版。
 
-仅遇到故障或用户要求时调用 wincode_hello_world({}) 查看适配器、工作区及 runtime；环境问题再用 wincode_diagnose_project({})。健康成功不证明 Serena 语义连接成功；watcher 停止、最近超时和清理错误如实报告，不自动安装依赖或循环重启。
+仅遇到故障或用户要求时调用 wincode_hello_world({}) 查看适配器、工作区及 runtime；环境问题再用 wincode_diagnose_project({})。本地文本健康成功不证明 Roslyn 已配置或项目已加载；watcher 停止、最近超时和清理错误如实报告，不自动安装依赖或循环重启。
 
 工具不可用：先确认客户端是否启用了 wincode MCP；已保存配置通常需重新加载客户端/会话。Skill 不负责注册 MCP。安装路径取实际客户端配置，不沿用历史机器的 I:/WinCode。STDIO 配置结构（占位路径需替换）：
 - 命令：node
@@ -42,10 +42,19 @@ E4 统一错误表达尚未实施：当前可能收到 isError=true 的纯文本
 
 直接 Roslyn Host 与 UIA Host 是不同组件。新 Gateway 的 hello.codeProvider 和 health.roslyn 报告显式选择的提供方、已知观察、processAlive、snapshotId 及重载/重启/清理状态；hello 不启动 Roslyn 或执行项目，进程存活不等于当前磁盘语义已验证。ready 是内部握手帧，UIA 的 VERSION_MISMATCH、inspectionVersion 等不能套到 Code Host。当前 npm run check / delivery:verify 不替代 test:roslyn-host/test:roslyn-gateway，也不证明 Code Host 已纳入正式发布包。
 
+Roslyn 运行中已观察到的加载、查询或清理错误也纳入 health.lastAdapterError，provider=roslyn；health.roslyn.health.lastError 保留对应观察。lastError 是历史最后一次失败，不表示每次 hello 都执行了健康探测，也不能据此自行重放业务请求。工作区完整重置后观察清空。
+
 Code Host 内部协议 v2 的失败包含 success=false、errorCode 和 error，且不附带旧引用。SNAPSHOT_STALE/INPUTS_CHANGED 要求等写入稳定后显式 reload，再用新身份定位；PROJECT_LOAD_FAILED 表示结构化 MSBuild 加载失败，先修复项目输入，再 reload，不能继续使用最后一次成功快照。源码的 compilationErrors 可随有用的部分引用返回，不能据此宣称完整。
 
 Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回，不代表 E4 已覆盖所有工具。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，再显式搜索；同根打开也关闭旧 Host 后重新选择 SDK。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
 
-INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项目路径；HOST_PROTOCOL_ERROR 检查 Host 与 Gateway 的协议版本，不绕过校验。LEGACY_SYMBOL_ID 要求重新搜索 Roslyn 身份；UNSUPPORTED_SYMBOL_LOCATION 表示该实例使用 Serena；SYMBOL_MISMATCH 表示名称和定位不一致。INPUT_BUDGET_EXCEEDED 先缩小受支持范围，不能接受截断指纹。内部 BUSY 表示队列已满，DUPLICATE_REQUEST 要求新的 id；CANCELLED 是目标终止结果，取消确认不替代它。OUTSIDE_WORKSPACE/UNSUPPORTED_LINK 拒绝越界或链接路径，不放松校验来恢复。
+INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项目路径，以及 additionalInputs 中的文件是否存在；补充文件缺失时，重载也会失败，恢复文件后再显式搜索。不要为恢复查询而静默移除真实构建输入。HOST_VERSION_MISMATCH 先核对 Code Host 与 Gateway 的版本、Release 配置和协议；不要继续使用混合交付。HOST_PROTOCOL_ERROR 同时检查协议 v2、inputPolicy.version=1 和实际补充列表；旧 Host 没有确认新策略时不能绕过。LEGACY_SYMBOL_ID 要求重新搜索 Roslyn 身份；UNSUPPORTED_SYMBOL_LOCATION 表示该实例未配置 Roslyn；SYMBOL_MISMATCH 表示名称和定位不一致。INPUT_BUDGET_EXCEEDED 区分枚举规模与受跟踪输入字节限制，先缩小受支持范围，不能接受截断指纹。内部 BUSY 表示队列已满，DUPLICATE_REQUEST 要求新的 id；CANCELLED 是目标终止结果，取消确认不替代它。OUTSIDE_WORKSPACE/UNSUPPORTED_LINK 拒绝越界或链接路径，不放松校验来恢复。
 
 维护接口变更时，同步检查 Gateway 工具定义、相应 references 手册、实际客户端 Schema 和已安装四份受管文件；更新源码手册后运行 skill:sync，再以 skill:check 校验。仍须单独确认 MCP 实例的版本/构建/Schema，不能用手册同步代替重连。公共接口尚未发布时，只记录实验边界，不提前把新参数加入 MCP 规范字段表。
+
+
+## 2026-09-09 E4 当前开发快照
+
+用户已确认尚未广泛分发，可直接迁移到方案二。Gateway 普通错误已改为 JSON 文本并同步 structuredContent，使用稳定 errorCode、errorMessage、provider 和 recoveryAction；原文本前缀不再是兼容接口。UI/trash 保留领域结果字段并附同内容结构化载荷，尤其 partial 仍表示文件已经移动，不自动重试或移回。成功响应不在本次迁移范围。
+
+这是未发布、未完成专项验收的开发状态；恢复动作只表示先处理的步骤，不授予执行、安装或自动重试权限。完整错误码/恢复状态矩阵、E4 专项回归和最终手册核对尚待完成，当前连接是否已更新须查看运行身份。

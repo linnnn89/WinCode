@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolveDotnet } from './lib/dotnet.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
@@ -26,6 +27,7 @@ if (new Set(declared).size !== declared.length || found.length !== declared.leng
 if (inventoryOnly) {
   console.log(JSON.stringify({ tests: declared.length, groups: Object.fromEntries(Object.entries(groups).map(([name, files]) => [name, files.length])) }));
 } else {
+  const toolchain = resolveDotnet(root);
   const directory = path.join(root, 'test-tmp/check', `${new Date().toISOString().replace(/[:.]/g, '-')}-${desktop ? 'desktop' : 'core'}`);
   await fs.mkdir(directory, { recursive: true });
   const report = { version: pkg.version, mode: desktop ? 'desktop' : 'core', startedAt: new Date().toISOString(),
@@ -33,7 +35,9 @@ if (inventoryOnly) {
   async function run(name, command, args) {
     console.log(`[check] ${name}`);
     const started = Date.now();
-    const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
+    const result = spawnSync(command === 'dotnet' ? toolchain.dotnet : command, args, {
+      cwd: root, env: toolchain.env, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 8 * 1024 * 1024,
+    });
     const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
     await fs.writeFile(path.join(directory, `${name}.log`), output);
     const success = !result.error && result.status === 0;
@@ -53,6 +57,7 @@ if (inventoryOnly) {
   const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
   const tsx = path.join(root, 'node_modules/tsx/dist/cli.mjs');
   const native = 'tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj';
+  const codeHost = 'tools/WinCode.Code.Host/WinCode.Code.Host.csproj';
   const audit = 'tests/fixtures/ui-audit-check/ui-audit-check.csproj';
   const query = 'tests/fixtures/ui-query-check/ui-query-check.csproj';
   const wpf = 'tests/fixtures/wpf-ui-review/wpf-ui-review.csproj';
@@ -67,9 +72,10 @@ if (inventoryOnly) {
     } else {
       await node('typecheck', [tsc, '-p', 'tsconfig.test.json']);
       await node('build-gateway', ['scripts/build.mjs']);
-      for (const [name, project] of [['host', native], ['audit', audit], ['query', query]])
+      for (const [name, project] of [['host', native], ['code-host', codeHost], ['audit', audit], ['query', query]])
         await run(`restore-${name}`, 'dotnet', ['restore', project, '--locked-mode']);
       await run('publish-host', 'dotnet', ['publish', native, '-c', 'Release', '-r', 'win-x64', '--no-self-contained', '--no-restore', ...deterministic]);
+      await run('publish-code-host', 'dotnet', ['publish', codeHost, '-c', 'Release', '--no-self-contained', '--no-restore', ...deterministic]);
       await run('build-audit', 'dotnet', ['build', audit, '-c', 'Debug', '--no-restore', ...deterministic]);
       await run('build-query', 'dotnet', ['build', query, '-c', 'Release', '--no-restore', ...deterministic]);
       report.tests = testTotals(await node('regression', [tsx, '--test', '--test-reporter=tap', ...groups.test]));

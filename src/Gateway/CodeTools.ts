@@ -3,6 +3,18 @@ import { contextResponse } from './ContextResponse.js';
 import { validateContextScope, type PreparedContextOptions } from '../Core/Context.js';
 import type { SymbolLocation } from '../Core/CodeQueries.js';
 
+/** 引用、影响与重构共用同一位置校验契约。 */
+const symbolLocationSchema = {
+          type: 'object', additionalProperties: true, required: ['snapshotId', 'project', 'file', 'position'],
+          properties: {
+            snapshotId: { type: 'string', pattern: '^[a-f0-9]{32}$' },
+            project: { type: 'string', minLength: 1, maxLength: 4096 },
+            file: { type: 'string', minLength: 1, maxLength: 4096 },
+            position: { type: 'integer', minimum: 0 },
+          },
+          description: 'Copy the location returned by the current Roslyn symbol search. project/file are workspace-relative; position is a zero-based UTF-16 offset. This is not a durable ID. Local text mode rejects this field.',
+        };
+
 export const CODE_TOOLS = [
   defineTool<PreparedContextOptions>({
     name: 'wincode_prepare_context',
@@ -106,22 +118,13 @@ export const CODE_TOOLS = [
       properties: {
         symbolName: {
           type: 'string', minLength: 1, pattern: '\\S',
-          description: 'Exact symbol name, or the full upstream namePath including containers and overload indices such as Service/Save[0]. Pair a full namePath with its defining relativePath. Simple names require a complete unique semantic resolution; ambiguity does not select the first result.',
+          description: 'Plain symbol name. With Roslyn, select a returned symbolLocation to identify an overload. Old Serena namePath identities are retired.',
         },
         relativePath: {
           type: 'string',
-          description: 'Defining file relative to the workspace. Pair it with the full namePath for precise references; omitted paths are resolved only from a complete unique semantic candidate.',
+          description: 'Defining file relative to the workspace. Roslyn uses it to scope candidates; local text references remain a workspace-wide textual scan.',
         },
-        symbolLocation: {
-          type: 'object', additionalProperties: true, required: ['snapshotId', 'project', 'file', 'position'],
-          properties: {
-            snapshotId: { type: 'string', pattern: '^[a-f0-9]{32}$' },
-            project: { type: 'string', minLength: 1, maxLength: 4096 },
-            file: { type: 'string', minLength: 1, maxLength: 4096 },
-            position: { type: 'integer', minimum: 0 },
-          },
-          description: 'Copy the location returned by the current Roslyn symbol search. project/file are workspace-relative; position is a zero-based UTF-16 offset. This is not a durable ID. Serena instances reject this field.',
-        },
+        symbolLocation: symbolLocationSchema,
       },
       required: ['symbolName'],
     },
@@ -130,12 +133,13 @@ export const CODE_TOOLS = [
       router.findCodeReferences(args.symbolName, args.relativePath, signal, args.symbolLocation) :
       router.findCodeReferences(args.symbolName, args.relativePath, signal)), true),
   }),
-  defineTool<{ target: string }>({
+  defineTool<{ target: string; symbolLocation?: SymbolLocation }>({
     name: 'analyze_change_impact',
     description: 'Estimates change blast radius from uniquely resolved symbols. Confidence depends on unique resolution and query completeness, not on provider alone. Zero or incomplete references yield UNKNOWN, never safe-to-delete.',
     inputSchema: {
       type: 'object', additionalProperties: true,
       properties: {
+        symbolLocation: symbolLocationSchema,
         target: {
           type: 'string', minLength: 1, pattern: '\\S',
           description: 'Name of the class, component, or file to evaluate (e.g. "MemoryService" or "MemoryService.cs").',
@@ -148,16 +152,17 @@ export const CODE_TOOLS = [
       description: 'Alias for analyze_change_impact. Same unique-resolution and UNKNOWN-on-incomplete-query contract.' }],
     validate: args => { if (!args.target) throw new Error('target is required.'); },
     execute: async (args, { router, signal }) => {
-      const impact = await router.analyzeChangeImpact(args.target, signal);
+      const impact = await (args.symbolLocation ? router.analyzeChangeImpact(args.target, signal, args.symbolLocation) : router.analyzeChangeImpact(args.target, signal));
       return { content: [{ type: 'text', text: JSON.stringify(impact, null, 2) }, { type: 'text', text: impact.formattedReport }] };
     },
   }),
-  defineTool<{ target: string; goal: string }>({
+  defineTool<{ target: string; goal: string; symbolLocation?: SymbolLocation }>({
     name: 'wincode_plan_refactoring',
     description: 'Provides structured refactoring guidance, step-by-step breakdown, and safety boundaries for a component.',
     inputSchema: {
       type: 'object', additionalProperties: true,
       properties: {
+        symbolLocation: symbolLocationSchema,
         target: {
           type: 'string', minLength: 1, pattern: '\\S',
           description: 'Component or symbol name to refactor.',
@@ -170,6 +175,6 @@ export const CODE_TOOLS = [
       required: ['target', 'goal'],
     },
   }, {
-    execute: async (args, { router, signal }) => jsonResult(await router.planRefactoring(args.target, args.goal, signal), true),
+    execute: async (args, { router, signal }) => jsonResult(await (args.symbolLocation ? router.planRefactoring(args.target, args.goal, signal, args.symbolLocation) : router.planRefactoring(args.target, args.goal, signal)), true),
   }),
 ];

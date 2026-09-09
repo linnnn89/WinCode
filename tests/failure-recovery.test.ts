@@ -17,7 +17,7 @@ async function fixture(run: (router: ToolRouter, a: string, b: string, client: C
   await fs.writeFile(path.join(a, 'OnlyA.cs'), 'class OnlyA {}');
   await fs.writeFile(path.join(b, 'OnlyB.cs'), 'class OnlyB {}');
   const config = getDefaultConfig(a);
-  config.adapters.serena.enabled = false; config.adapters.flaui.enabled = false;
+  config.adapters.flaui.enabled = false;
   config.adapters.repomix.useCli = false;
   const router = new ToolRouter(config);
   const server = new WinCodeMcpServer(router);
@@ -40,27 +40,6 @@ async function fixture(run: (router: ToolRouter, a: string, b: string, client: C
 }
 
 const body = (result: any) => JSON.parse(result.content[0].text);
-
-it('internal Serena close failure requests Gateway restart instead of repeating an unrecoverable reset', async () => fixture(async (router, _a, b, client) => {
-  let closes = 0;
-  (router.serena as any).serenaClient = {
-    close: async () => { closes++; if (closes === 1) throw new Error('fixture transient client close failure'); },
-  };
-  const failed = await client.callTool({ name: 'workspace_open', arguments: { path: b } });
-  assert.equal(failed.isError, true);
-  assert.equal(body(failed).workspaceRecovery.recoveryAction, 'restart_gateway');
-  assert.match(body(failed).errorMessage, /restart the Gateway/);
-  const sessionId = router.session.current?.id;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const repeated = await client.callTool({ name: 'workspace_open', arguments: { path: b } });
-    assert.equal(body(repeated).workspaceRecovery.recoveryAction, 'restart_gateway');
-    assert.equal(router.session.current?.id, sessionId, 'permanent failure must not mutate the session again');
-  }
-  assert.equal(closes, 1);
-  await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
-  const health = body(await client.callTool({ name: 'wincode_hello_world', arguments: {} })).health;
-  assert.equal(health.workspaceRecovery.recoveryAction, 'restart_gateway');
-}, true));
 
 it('native watcher creation failure blocks queries and a later open recreates the watcher', async t => fixture(async (router, _a, b) => {
   const failed = t.mock.method(nativeFs, 'watch', () => { throw new Error('fixture native watch creation failure'); });
@@ -94,8 +73,8 @@ it('watcher failure during adapter initialization cannot commit a successful wor
   const original = nativeFs.watch;
   let targetWatch: nativeFs.FSWatcher | undefined;
   t.mock.method(nativeFs, 'watch', (...args: Parameters<typeof original>) => { targetWatch = original(...args); return targetWatch; });
-  const initialize = router.serena.initialize.bind(router.serena);
-  const fault = t.mock.method(router.serena, 'initialize', async () => {
+  const initialize = router.text.initialize.bind(router.text);
+  const fault = t.mock.method(router.text, 'initialize', async () => {
     await initialize();
     targetWatch!.emit('error', new Error('fixture asynchronous watch failure'));
   });
@@ -116,14 +95,14 @@ it('invalid target preserves the old workspace and still admits requests', async
   await router.acquireRequestSlot(); router.endRequest();
 }));
 
-for (const stage of ['namespace', 'session', 'watch', 'dispose', 'reset', 'initialize', 'serena', 'composites']) {
+for (const stage of ['namespace', 'session', 'watch', 'dispose', 'initialize', 'text', 'composites']) {
   it(`failure at ${stage} blocks queries; same-root recovery performs a full rebind`, async t => fixture(async (router, a, b, client) => {
     await router.cache.set('isolation', 'A');
     const targets: Record<string, [any, string]> = {
       namespace: [router.cache, 'setNamespace'], session: [router.session, 'open'],
       watch: [router, 'bindWatch'], dispose: [router.repomix, 'dispose'],
-      reset: [router.serena, 'resetConnection'], initialize: [router.repomix, 'initialize'],
-      serena: [router.serena, 'initialize'], composites: [router, 'bindCompositeTools'],
+      initialize: [router.repomix, 'initialize'],
+      text: [router.text, 'initialize'], composites: [router, 'bindCompositeTools'],
     };
     const [target, method] = targets[stage];
     const fault = t.mock.method(target, method, () => { throw new Error(`fixture:${stage}`); });
@@ -142,11 +121,11 @@ for (const stage of ['namespace', 'session', 'watch', 'dispose', 'reset', 'initi
     // An invalid recovery attempt must never reopen admission.
     await assert.rejects(router.openWorkspace(path.join(b, 'missing')));
     await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
-    const resets = t.mock.method(router.serena, 'resetConnection', router.serena.resetConnection.bind(router.serena));
+    const resets = t.mock.method(router.text, 'initialize', router.text.initialize.bind(router.text));
     const opened = await client.callTool({ name: 'wincode_workspace_open', arguments: { path: b } });
     assert.notEqual(opened.isError, true);
-    // Router resets explicitly; Serena.initialize also disposes its prior connection.
-    assert.equal(resets.mock.callCount(), 2);
+    // 同根恢复仍须重新绑定本地能力；外部连接已退出。
+    assert.equal(resets.mock.callCount(), 1);
     assert.equal(router.workspaceRecoveryState, null);
     const health = await router.getRuntimeHealth();
     assert.equal(health.session?.workspaceRoot, b);

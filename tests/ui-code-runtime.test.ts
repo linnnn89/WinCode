@@ -114,7 +114,7 @@ import { ToolRouter } from ${distUrl('Core/ToolRouter.js')};
 import { WinCodeMcpServer } from ${distUrl('Gateway/McpServer.js')};
 const config = getDefaultConfig(${JSON.stringify(sourceRoot)});
 config.cacheDir = ${JSON.stringify(path.join(root, 'cache'))};
-config.adapters.serena.enabled = false;
+
 config.adapters.repomix.useCli = false;
 const server = new WinCodeMcpServer(new ToolRouter(config));
 process.stdin.on('end', () => { void server.stop(); });

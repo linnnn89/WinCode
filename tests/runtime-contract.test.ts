@@ -13,7 +13,7 @@ import { WINCODE_TOOLS, contractHash, toolsContractHash } from '../src/Gateway/P
 it('hello and tools/list share an immutable registered contract and runtime survives workspace switching', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-contract-'));
   const config = getDefaultConfig(root);
-  config.adapters.serena.enabled = false;
+
   config.adapters.flaui.enabled = false;
   config.adapters.repomix.useCli = false;
   const server = new WinCodeMcpServer(new ToolRouter(config));

@@ -12,7 +12,7 @@ import { WINCODE_TOOLS, toolsContractHash } from '../src/Gateway/Protocol.js';
 async function fixture(run: (client: Client, router: ToolRouter, admissions: () => number) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-tool-contract-'));
   const config = getDefaultConfig(root);
-  config.adapters.serena.enabled = false;
+
   config.adapters.flaui.enabled = false;
   config.adapters.repomix.useCli = false;
   const router = new ToolRouter(config);
@@ -34,7 +34,7 @@ async function fixture(run: (client: Client, router: ToolRouter, admissions: () 
 
 it('rejects object-valued symbol queries before admission or adapter execution', async () => fixture(async (client, router, admissions) => {
   let calls = 0;
-  router.serena.findSymbolsDetailed = async () => { calls++; return {} as any; };
+  router.text.findSymbolsDetailed = async () => { calls++; return {} as any; };
   const result = await client.callTool({ name: 'wincode_find_code_symbol', arguments: { query: { wrong: 'type' } } });
   assert.equal(result.isError, true);
   assert.equal(admissions(), 0);
@@ -85,7 +85,7 @@ it('calls all 15 published tools and the hidden alias; unknown fields do not rea
   stub('prepareContext', prepared);
   stub('moveToTrash', { success: true });
   stub('analyzeChangeImpact', { formattedReport: 'Fixture report' });
-  stub('getRuntimeHealth', { status: 'ok', serena: {}, repomix: {}, flaui: {} });
+  stub('getRuntimeHealth', { status: 'ok', text: {}, repomix: {}, flaui: {} });
   stub('listUiWindows', { success: true, windows: [] });
   stub('inspectUi', { success: true });
   stub('reviewUi', { success: true });
@@ -226,7 +226,7 @@ it('validates directory and trash lexical scope before admission while preservin
 }));
 
 it('published schemas, hello hashes and validation keep the same instance snapshot', async () => fixture(async (client, router, admissions) => {
-  router.getRuntimeHealth = async () => ({ status: 'ok', serena: {}, repomix: {}, flaui: {} }) as any;
+  router.getRuntimeHealth = async () => ({ status: 'ok', text: {}, repomix: {}, flaui: {} }) as any;
   const tools = (await client.listTools()).tools;
   const exported = WINCODE_TOOLS.find(tool => tool.name === 'wincode_find_code_symbol')!;
   const original = structuredClone(exported.inputSchema);

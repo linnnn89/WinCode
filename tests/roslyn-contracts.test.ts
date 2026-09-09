@@ -5,10 +5,78 @@ import os from 'node:os';
 import path from 'node:path';
 import { RoslynHostClient } from '../src/Adapters/RoslynHostClient.js';
 import { RoslynAdapter } from '../src/Adapters/RoslynAdapter.js';
-import { getDefaultConfig } from '../src/Core/Config.js';
+import { WINCODE_VERSION, getDefaultConfig } from '../src/Core/Config.js';
 import { ResourceManager } from '../src/Core/ResourceManager.js';
 import { CodeQueryError } from '../src/Core/CodeQueries.js';
 import { ToolRouter, WorkspaceRecoveryRequiredError } from '../src/Core/ToolRouter.js';
+import { ImpactAnalyzer } from '../src/CompositeTools/ImpactAnalyzer.js';
+import { RefactorAssistant } from '../src/CompositeTools/RefactorAssistant.js';
+import type { CodeReferenceQuery, SymbolReference } from '../src/Core/CodeQueries.js';
+
+/** 用固定语义身份提供真实聚合器的输入；工作区故意不同于进程启动目录。 */
+function impactFixture(references: SymbolReference[]) {
+  const config = getDefaultConfig(path.resolve('test-tmp/impact-identity-fixture'));
+  const symbol = { name: 'Service', kind: 'class' as const, file: 'src/A/Service.cs', line: 1,
+    location: { snapshotId: 'a'.repeat(32), project: 'A.csproj', file: 'src/A/Service.cs', position: 13 } };
+  const queries: CodeReferenceQuery = {
+    findSymbols: async () => [symbol], findReferences: async () => references,
+    findSymbolsDetailed: async () => ({ query: 'Service', totalFound: 1, symbols: [symbol], source: 'roslyn',
+      analysisCompleteness: 'incomplete', limitations: ['Generators are excluded.'], queryComplete: false,
+      truncated: false, uniqueTypeMatch: true, typeMatchCount: 1 }),
+    findReferencesDetailed: async () => ({ symbolName: 'Service', totalReferences: references.length, references,
+      source: 'roslyn', analysisCompleteness: 'incomplete', limitations: ['Generators are excluded.'], queryComplete: false, truncated: false }),
+  };
+  return { config, queries, analyzer: new ImpactAnalyzer(queries, config) };
+}
+
+it('impact groups full file identities and keeps same-name and suffix callers outside the target', async () => {
+  const files = ['src/B/Service.cs', 'src/B/Handler.cs', 'src/C/Handler.cs', 'src/C/NewService.cs', 'src/A/Service.cs'];
+  const { analyzer } = impactFixture(files.map(file => ({ file, symbolName: 'Service', line: 2, preview: 'Service.Run();' })));
+  const report = await analyzer.analyzeImpact('Service');
+  assert.equal(report.referencesCount, 5);
+  assert.deepEqual(report.affectedFiles, files);
+  assert.deepEqual(report.affectedComponents.map(item => item.file), files.slice(0, 4));
+  assert.deepEqual(report.affectedComponents.map(item => item.references), [1, 1, 1, 1]);
+  assert.equal(report.riskLevel, 'UNKNOWN');
+});
+
+it('impact resolves relative and absolute hints against its workspace, preserving separator aliases', async () => {
+  const { analyzer, config } = impactFixture([{ file: 'Caller.cs', symbolName: 'Service', line: 1, preview: '' }]);
+  const targets = ['src/A/Service.cs', 'src\\A\\Service.cs', path.join(config.workspaceRoot, 'src/A/Service.cs')];
+  if (process.platform === 'win32') targets.push(path.join(config.workspaceRoot, 'SRC/A/SERVICE.CS').toUpperCase());
+  for (const target of targets) {
+    const report = await analyzer.analyzeImpact(target);
+    assert.equal(report.uniqueResolution, true, target);
+    assert.equal(report.referencesCount, 1, target);
+  }
+  assert.equal((await analyzer.analyzeImpact('other/src/A/Service.cs')).uniqueResolution, false);
+});
+
+it('impact collapses path aliases but preserves linked-source project components', async () => {
+  const { config } = impactFixture([]);
+  const references = [
+    { file: 'src/A/Service.cs', project: 'A.csproj' },
+    { file: 'src/A/Service.cs', project: 'B.csproj' },
+    { file: path.join(config.workspaceRoot, 'src/A/Service.cs'), project: 'B.csproj' },
+    { file: 'src/A/Service.cs', project: 'C.csproj' },
+  ].map(item => ({ ...item, symbolName: 'Service', line: 2, preview: '' }));
+  const populated = impactFixture(references);
+  const report = await populated.analyzer.analyzeImpact('Service');
+  assert.equal(report.affectedFiles.length, 1);
+  assert.equal(report.downstreamImpacts[0].occurrences, 4);
+  assert.deepEqual(report.affectedComponents.map(item => item.references), [2, 1]);
+});
+
+it('refactoring treats bounded Roslyn evidence as semantic coverage, not text fallback or interruption', async () => {
+  const { analyzer, queries } = impactFixture([{ file: 'Caller.cs', symbolName: 'Service', line: 1, preview: '' }]);
+  const assistant = new RefactorAssistant(null as any, analyzer);
+  const plan = await assistant.planRefactoring('Service', 'Simplify the implementation');
+  assert.equal(plan.evidence.source, 'roslyn');
+  assert.equal(plan.evidence.queryComplete, false);
+  assert.ok(plan.evidence.limitations.includes('Generators are excluded.'));
+  assert.ok(plan.recommendedSteps.some(step => /coverage limitations/.test(step)));
+  assert.ok(plan.recommendedSteps.every(step => !/interrupted|textual matches|degraded retrieval/.test(step)));
+});
 
 /** 只产生自有 Node 协议夹具；finally 先清理进程，再删除已验证的临时根。 */
 async function processFixture(source: string, run: (client: RoslynHostClient, resources: ResourceManager) => Promise<void>): Promise<void> {
@@ -41,8 +109,62 @@ it('rejects missing project-evaluation permission and unbounded options before a
   config.adapters.roslyn.loadTimeoutMs = 1000;
   config.adapters.roslyn.project = '../outside.csproj';
   assert.throws(() => new RoslynAdapter(config, resources, () => []), /escapes/);
+  config.adapters.roslyn.project = 'App.csproj';
+  for (const additionalInputs of [null, 'file.yaml', [null], [''], ['../outside.yaml'], ['*.yaml'],
+    ['same.yaml', './same.yaml'], Array.from({ length: 33 }, (_, index) => `${index}.yaml`), ['a'.repeat(4097)]]) {
+    config.adapters.roslyn.additionalInputs = additionalInputs as any;
+    assert.throws(() => new RoslynAdapter(config, resources, () => []), (error: unknown) => error instanceof CodeQueryError);
+  }
   assert.deepEqual(resources.list(), []);
   await resources.dispose();
+});
+
+it('passive runtime health includes a Roslyn load failure without starting another provider', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-roslyn-health-'));
+  const config = getDefaultConfig(root);
+  config.adapters.flaui.enabled = false; config.adapters.repomix.useCli = false;
+  config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'Missing.csproj',
+    configuration: 'Debug', targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: path.join(root, 'missing.dll') };
+  const router = new ToolRouter(config);
+  router.text.initialize = async () => { throw new Error('Local text must not initialize'); };
+  try {
+    await router.initialize();
+    assert.equal((await router.getRuntimeHealth()).lastAdapterError, null);
+    await assert.rejects(router.roslyn!.findSymbolsDetailed('Service'),
+      (error: unknown) => error instanceof CodeQueryError && error.errorCode === 'INPUT_UNAVAILABLE');
+    const health = await router.getRuntimeHealth();
+    assert.equal(health.lastAdapterError?.provider, 'roslyn');
+    assert.equal(health.lastAdapterError?.reason, 'unavailable');
+    assert.equal(health.roslyn?.health?.lastError?.at, health.lastAdapterError?.at);
+    assert.equal(router.resources.childProcessCount(), 0);
+  } finally {
+    await router.dispose();
+    assert.ok(path.relative(os.tmpdir(), root).startsWith('wincode-roslyn-health-'));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it('rejects a Host that fails to confirm the configured additional inputs and reaps it', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-roslyn-policy-'));
+  const resources = new ResourceManager();
+  try {
+    const config = getDefaultConfig(root);
+    const host = path.join(root, 'host.cjs');
+    await fs.writeFile(path.join(root, 'App.csproj'), '<Project />');
+    await fs.writeFile(path.join(root, 'schema.yaml'), 'mode: original');
+    await fs.writeFile(host, `console.log(JSON.stringify({id:null,type:'ready',success:true,protocolVersion:2,snapshot:'${'a'.repeat(32)}',configuration:'Debug',framework:'net10.0',processTreeGuard:true,hostIdentity:{version:'${WINCODE_VERSION}',configuration:'Release',protocolVersion:2},inputPolicy:{version:1,additionalInputs:[]}})); process.stdin.resume(); setInterval(()=>{},1000);`);
+    config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'App.csproj', configuration: 'Debug',
+      targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: host, additionalInputs: ['schema.yaml'] };
+    const adapter = new RoslynAdapter(config, resources, () => []);
+    await assert.rejects(adapter.findSymbolsDetailed('Service'),
+      (error: unknown) => error instanceof CodeQueryError && error.errorCode === 'HOST_PROTOCOL_ERROR');
+    assert.equal(adapter.getKnownHealth().snapshotId, null);
+    assert.equal(resources.childProcessCount(), 0);
+  } finally {
+    await resources.dispose();
+    assert.ok(path.relative(os.tmpdir(), root).startsWith('wincode-roslyn-policy-'));
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 for (const [label, output] of [
@@ -75,7 +197,7 @@ it('explicit shutdown failure remains a rejected cleanup result after process ex
     await assert.rejects(client.close());
   }));
 
-it('Roslyn cleanup failure enters sticky E1 recovery and never starts Serena or mutates another root', async () => {
+it('Roslyn cleanup failure enters sticky E1 recovery and never starts Local text or mutates another root', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-roslyn-recovery-'));
   const a = path.join(root, 'a'), b = path.join(root, 'b');
   await fs.mkdir(a); await fs.mkdir(b);
@@ -85,8 +207,8 @@ it('Roslyn cleanup failure enters sticky E1 recovery and never starts Serena or 
     targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: path.join(root, 'host.dll') };
   const router = new ToolRouter(config);
   let closes = 0;
-  router.serena.initialize = async () => { throw new Error('Serena must not initialize'); };
-  router.serena.findSymbolsDetailed = async () => { throw new Error('Serena must not query'); };
+  router.text.initialize = async () => { throw new Error('Local text must not initialize'); };
+  router.text.findSymbolsDetailed = async () => { throw new Error('Local text must not query'); };
   try {
     await router.initialize();
     (router.roslyn as any).client = { close: async () => { closes++; throw new Error('injected cleanup failure'); } };
@@ -99,10 +221,54 @@ it('Roslyn cleanup failure enters sticky E1 recovery and never starts Serena or 
     const health = await router.getRuntimeHealth();
     assert.equal(health.codeProvider, 'roslyn');
     assert.equal(health.roslyn?.cleanupFailed, true);
+    assert.equal(health.lastAdapterError?.provider, 'roslyn');
+    assert.equal(health.lastAdapterError?.recoverable, false);
   } finally {
     await assert.rejects(router.dispose());
     assert.equal(router.resources.childProcessCount(), 0);
     assert.ok(path.relative(os.tmpdir(), root).startsWith('wincode-roslyn-recovery-'));
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+for (const identity of [undefined, { version: '0.0.0', configuration: 'Release', protocolVersion: 2 },
+  { version: WINCODE_VERSION, configuration: 'Debug', protocolVersion: 2 }]) {
+  it('rejects missing or mismatched Code Host build identity and reaps its process', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-host-version-'));
+    const resources = new ResourceManager();
+    try {
+      const config = getDefaultConfig(root);
+      const host = path.join(root, 'host.cjs');
+      await fs.writeFile(path.join(root, 'App.csproj'), '<Project />');
+      const ready = { id: null, type: 'ready', success: true, protocolVersion: 2, snapshot: 'a'.repeat(32),
+        configuration: 'Debug', framework: 'net10.0', processTreeGuard: true, hostIdentity: identity,
+        inputPolicy: { version: 1, additionalInputs: [] } };
+      await fs.writeFile(host, 'console.log(' + JSON.stringify(JSON.stringify(ready)) + '); process.stdin.resume(); setInterval(()=>{},1000);');
+      config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'App.csproj', configuration: 'Debug',
+        targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: host };
+      const adapter = new RoslynAdapter(config, resources, () => []);
+      await assert.rejects(adapter.findSymbolsDetailed('Service'),
+        (error: unknown) => error instanceof CodeQueryError && error.errorCode === 'HOST_VERSION_MISMATCH');
+      assert.equal(adapter.getKnownHealth().snapshotId, null);
+      assert.equal(resources.childProcessCount(), 0);
+    } finally {
+      await resources.dispose();
+      assert.ok(path.relative(os.tmpdir(), root).startsWith('wincode-host-version-'));
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+it('text mode rejects selected identities before any analysis or resource admission', async () => {
+  const router = new ToolRouter(getDefaultConfig(process.cwd()));
+  let calls = 0;
+  router.text.findSymbolsDetailed = async () => { calls++; throw new Error('must not scan'); };
+  const location = { snapshotId: 'a'.repeat(32), project: 'App.csproj', file: 'App.cs', position: 0 };
+  for (const call of [() => router.analyzeChangeImpact('App', undefined, location),
+    () => router.planRefactoring('App', 'Simplify', undefined, location)]) {
+    assert.throws(call, (error: unknown) => error instanceof CodeQueryError && error.errorCode === 'UNSUPPORTED_SYMBOL_LOCATION');
+  }
+  assert.equal(calls, 0);
+  assert.equal(router.resources.childProcessCount(), 0);
+  await router.dispose();
 });

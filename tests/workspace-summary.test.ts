@@ -14,7 +14,7 @@ type Call = (name: string, args?: Record<string, unknown>) => Promise<any>;
 async function fixture(run: (root: string, router: ToolRouter, call: Call) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-summary-'));
   const config = getDefaultConfig(root);
-  config.adapters.serena.enabled = false;
+
   config.adapters.flaui.enabled = false;
   config.adapters.repomix.useCli = false;
   const router = new ToolRouter(config);

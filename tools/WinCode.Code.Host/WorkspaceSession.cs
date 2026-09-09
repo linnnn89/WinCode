@@ -20,6 +20,8 @@ internal sealed class WorkspaceSession : IDisposable
     private Solution? solution;
     private WorkspaceInputs? inputs;
     private string[] extraFiles = [];
+    private string[] documentFiles = [];
+    private readonly string[] additionalInputs;
     private string? sdkSelection;
     private string? snapshot;
     private volatile bool invalidated = true;
@@ -31,9 +33,10 @@ internal sealed class WorkspaceSession : IDisposable
     private string[] loadDiagnostics = [], compilationErrors = [];
 
     /// <summary>绑定固定根及配置并启动监听；不在构造时执行 MSBuild，求值由 ReloadAsync 显式启动。</summary>
-    public WorkspaceSession(string root, string projectPath, string configuration, string framework)
+    public WorkspaceSession(string root, string projectPath, string configuration, string framework, string[]? additionalInputs = null)
     {
         this.root = root; this.projectPath = projectPath; this.configuration = configuration; this.framework = framework;
+        this.additionalInputs = additionalInputs ?? [];
         watcher = new(root) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size };
         watcher.Changed += (_, e) => Changed(e.FullPath);
         watcher.Created += (_, e) => Changed(e.FullPath);
@@ -46,10 +49,13 @@ internal sealed class WorkspaceSession : IDisposable
     /// <summary>立即推进变更代次，不防抖；重载仅由显式请求执行，避免每个保存事件都运行 targets。</summary>
     private void Changed(string file)
     {
-        if (!WorkspaceInputs.IsIgnored(root, file))
+        // 已加载/显式输入优先于目录排除；目录事件保留提示，新源码仍由每次枚举发现。
+        var known = extraFiles.Concat(additionalInputs).Any(input => string.Equals(input, file, StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith(file.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+        if (known || (!WorkspaceInputs.IsIgnored(root, file) && (WorkspaceInputs.IsAutomaticInput(file) || Directory.Exists(file))))
         {
             Interlocked.Increment(ref generation);
-            if (Path.GetExtension(file).ToLowerInvariant() is ".csproj" or ".props" or ".targets" or ".json" or ".config")
+            if (!Directory.Exists(file) && !Path.GetExtension(file).Equals(".cs", StringComparison.OrdinalIgnoreCase))
                 Interlocked.Increment(ref configurationGeneration);
         }
     }
@@ -61,12 +67,34 @@ internal sealed class WorkspaceSession : IDisposable
             throw new HostFailure("HOST_RESTART_REQUIRED", watchError ?? cleanupFailure!.Message);
     }
 
+    /// <summary>
+    /// 每次加载尝试前用最多四个 50 ms 观察窗收敛写入通知；不重放请求或额外执行 MSBuild。
+    /// 持续写入仍失败，后续内容和事件核查全部保留；这不是全磁盘原子快照保证。
+    /// </summary>
+    private async Task WaitForQuietInputsAsync(CancellationToken token)
+    {
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            CheckHealth();
+            var before = Interlocked.Read(ref generation);
+            await Task.Delay(50, token);
+            CheckHealth();
+            if (before == Interlocked.Read(ref generation)) return;
+        }
+        throw new HostFailure("INPUTS_CHANGED", "Input events have not settled; finish writes before reloading.");
+    }
+
     /// <summary>校验窗口内事件代次没有变化；散列期间有写入则拒绝这个不稳定检查点。</summary>
-    private async Task<WorkspaceInputs> CaptureAsync(CancellationToken token, bool checkEvents = true)
+    private async Task<WorkspaceInputs> CaptureAsync(CancellationToken token, bool checkEvents = true, bool freezeDocuments = false)
     {
         CheckHealth();
         var before = Interlocked.Read(ref generation);
-        var captured = await WorkspaceInputs.CaptureAsync(root, extraFiles, token);
+        foreach (var file in additionalInputs)
+        {
+            WorkspaceInputs.Inside(root, file);
+            if (!File.Exists(file)) throw new HostFailure("INPUT_UNAVAILABLE", "Additional input must exist as a file: " + Path.GetRelativePath(root, file));
+        }
+        var captured = await WorkspaceInputs.CaptureAsync(root, extraFiles.Concat(additionalInputs), token, freezeDocuments ? documentFiles : null);
         CheckHealth();
         if (checkEvents && before != Interlocked.Read(ref generation))
             throw new HostFailure("INPUTS_CHANGED", "Inputs changed while reading; reload after writes finish.");
@@ -90,6 +118,7 @@ internal sealed class WorkspaceSession : IDisposable
         for (var attempt = 0; attempt < 2; attempt++)
         {
             token.ThrowIfCancellationRequested();
+            await WaitForQuietInputsAsync(token);
             // 设计时构建会触碰 obj 缓存；加载阶段按内容比较，另单独拒绝配置求值期间的配置写入。
             var configurationBefore = Interlocked.Read(ref configurationGeneration);
             var before = await CaptureAsync(token, checkEvents: false);
@@ -106,16 +135,27 @@ internal sealed class WorkspaceSession : IDisposable
                 var candidate = workspace.CurrentSolution;
                 excludedAnalyzers = candidate.Projects.Sum(p => p.AnalyzerReferences.Count);
                 var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var documents = new List<string>();
                 foreach (var project in candidate.Projects.ToArray())
                 {
                     required.Add(WorkspaceInputs.Inside(root, project.FilePath!));
-                    foreach (var document in project.Documents) required.Add(WorkspaceInputs.Inside(root, document.FilePath!));
+                    foreach (var document in project.Documents)
+                    {
+                        var file = WorkspaceInputs.Inside(root, document.FilePath!);
+                        required.Add(file); documents.Add(file);
+                    }
+                    foreach (var document in project.AdditionalDocuments)
+                        if (document.FilePath != null) required.Add(WorkspaceInputs.Inside(root, document.FilePath));
+                    // SDK/包提供的分析配置可位于根外；只接受加载图已明确报告的文件，读取时仍拒绝链接。
+                    foreach (var document in project.AnalyzerConfigDocuments)
+                        if (document.FilePath != null) required.Add(Path.GetFullPath(document.FilePath));
                     foreach (var metadata in project.MetadataReferences.OfType<PortableExecutableReference>())
                         if (metadata.FilePath != null) required.Add(metadata.FilePath);
                     candidate = candidate.WithProjectAnalyzerReferences(project.Id, []);
                 }
                 extraFiles = required.ToArray();
-                var captured = await CaptureAsync(token, checkEvents: false);
+                documentFiles = documents.ToArray();
+                var captured = await CaptureAsync(token, checkEvents: false, freezeDocuments: true);
                 if (before.Fingerprint != captured.Fingerprint)
                 {
                     ReleaseWorkspace();
@@ -125,8 +165,10 @@ internal sealed class WorkspaceSession : IDisposable
                 // 显式固定每份文档文本，防止 FileTextLoader 在首次查询时才读取更新后的磁盘文件。
                 foreach (var document in candidate.Projects.SelectMany(p => p.Documents).ToArray())
                 {
+                    // MSBuild 的 CodePage/BOM 决定解码；快照固定字节不能把项目编码改成 UTF-8。
+                    var loadedText = await document.GetTextAsync(token);
                     using var content = new MemoryStream(captured.Files[document.FilePath!], false);
-                    candidate = candidate.WithDocumentText(document.Id, SourceText.From(content, Encoding.UTF8, throwIfBinaryDetected: true));
+                    candidate = candidate.WithDocumentText(document.Id, SourceText.From(content, loadedText.Encoding, throwIfBinaryDetected: true));
                 }
                 var errors = new List<string>();
                 foreach (var project in candidate.Projects)
@@ -135,8 +177,10 @@ internal sealed class WorkspaceSession : IDisposable
                     errors.AddRange(compilation!.GetDiagnostics(token).Where(d => d.Severity == DiagnosticSeverity.Error).Take(20).Select(d => d.ToString()));
                 }
                 var after = await CaptureAsync(token, checkEvents: false);
-                if (captured.Fingerprint != after.Fingerprint || configurationBefore != Interlocked.Read(ref configurationGeneration))
-                    throw new HostFailure("INPUTS_CHANGED", "Inputs changed during compilation.");
+                if (captured.Fingerprint != after.Fingerprint)
+                    throw new HostFailure("INPUTS_CHANGED", "Input contents changed during compilation.");
+                if (configurationBefore != Interlocked.Read(ref configurationGeneration))
+                    throw new HostFailure("INPUTS_CHANGED", "Build input events arrived during loading; wait for writes to settle and reload.");
                 var completedDiagnostics = ReadLoadDiagnostics();
                 solution = candidate;
                 // 稳定快照只保留摘要，文档已固定；不长期保留 SDK/包程序集的大块字节数组。
@@ -146,7 +190,9 @@ internal sealed class WorkspaceSession : IDisposable
                 compilationErrors = errors.ToArray();
                 invalidated = false;
                 return new { id, type = "ready", success = true, protocolVersion = 2, snapshot,
+                    hostIdentity = HostBuildIdentity.Current,
                     projects = candidate.ProjectIds.Count, configuration, framework, loadMs = clock.ElapsedMilliseconds,
+                    inputPolicy = new { version = 1, additionalInputs = additionalInputs.Select(file => Path.GetRelativePath(root, file)).ToArray() },
                     loadDiagnostics, compilationErrors, excludedAnalyzers, scope = "loaded-solution-snapshot",
                     processTreeGuard = OperatingSystem.IsWindows(), diskFreshnessVerified = false, freshness = Freshness(after) };
             }
@@ -167,7 +213,7 @@ internal sealed class WorkspaceSession : IDisposable
 
     /// <summary>描述检查的明确范围；自定义 targets 的任意外部输入、环境与整个磁盘不在保证范围内。</summary>
     private static object Freshness(WorkspaceInputs value) => new {
-        status = "checked", scope = "workspace-files-loaded-metadata-and-ancestor-config",
+        status = "checked", scope = "compilation-inputs-and-explicit-files",
         fingerprint = value.Fingerprint, files = value.FileCount, bytes = value.Bytes,
         externalCustomInputsVerified = false
     };

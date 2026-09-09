@@ -14,7 +14,7 @@ const version = '1.2.3';
 const identity = { version, configuration: 'Release', informationalVersion: version, framework: '.NET fixture' };
 const toolchains = { node: 'fixture', dotnet: 'fixture', npm: null };
 
-async function fixture(run: (root: string, manifest: any) => Promise<void>) {
+async function fixture(run: (root: string, manifest: any) => Promise<void>, includeCodeHost = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-delivery-'));
   async function write(file: string, content: string) {
     const target = path.join(root, file);
@@ -31,9 +31,20 @@ async function fixture(run: (root: string, manifest: any) => Promise<void>) {
     })) await write(file, content);
     for (const name of ['WinCode.UIA.Host.exe', 'WinCode.UIA.Host.dll', 'WinCode.UIA.Host.deps.json', 'WinCode.UIA.Host.runtimeconfig.json', 'dependency.dll'])
       await write(`${delivery.hostDirectory}/${name}`, 'fixture bytes; never executed');
+    if (includeCodeHost) {
+      await write('tools/WinCode.Code.Host/WinCode.Code.Host.csproj', '<Project />');
+      await write('tools/WinCode.Code.Host/packages.lock.json', '{}');
+      for (const file of ['WinCode.Code.Host.dll', 'WinCode.Code.Host.deps.json', 'WinCode.Code.Host.runtimeconfig.json',
+        'Microsoft.CodeAnalysis.Workspaces.MSBuild.dll', 'BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll',
+        'BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.deps.json',
+        'BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.runtimeconfig.json']) {
+        await write(`${delivery.codeHostDirectory}/${file}`, 'fixture Code Host bytes; never executed');
+      }
+    }
     const gateway = await build.createBuildManifest(root, await build.collectBuildInputs(root), version);
     await write('dist/build-manifest.json', JSON.stringify(gateway));
-    const contents = await delivery.collectDelivery(root, identity, toolchains);
+    const contents = await delivery.collectDelivery(root, identity, toolchains,
+      includeCodeHost ? { ...identity, protocolVersion: 2 } : undefined);
     await run(root, { formatVersion: 1, contentId: delivery.deliveryId(contents), delivery: contents, revision: null, createdAt: 'first' });
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
@@ -76,3 +87,24 @@ it('release Host resolution never silently falls back to Debug or dotnet run', t
   config.adapters.flaui.customHostPath = path.resolve('fixture-host.exe');
   assert.equal(adapter.resolveHostCommand()!.command, config.adapters.flaui.customHostPath);
 });
+
+it('optional Code Host records all runtime files and rejects damaged BuildHost artifacts', async () => fixture(async (root, manifest) => {
+  assert.equal(manifest.delivery.components.codeHost.identity.protocolVersion, 2);
+  assert.equal((await delivery.verifyDelivery(root, manifest)).matched, true);
+  const buildHost = path.join(root, delivery.codeHostDirectory, 'BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll');
+  const original = await fs.readFile(buildHost);
+  await fs.appendFile(buildHost, 'changed');
+  await assert.rejects(delivery.verifyDelivery(root, manifest), /changed|incomplete/);
+  await fs.writeFile(buildHost, original);
+  await fs.unlink(buildHost);
+  await assert.rejects(delivery.verifyDelivery(root, manifest), /Missing Code Host sidecar/);
+}, true));
+
+it('Code Host rejects added unrecorded dependencies and incompatible release identities', async () => fixture(async (root, manifest) => {
+  await fs.writeFile(path.join(root, delivery.codeHostDirectory, 'extra.dll'), 'extra');
+  await assert.rejects(delivery.verifyDelivery(root, manifest), /changed|incomplete/);
+  for (const override of [{ version: '0.0.1' }, { configuration: 'Debug' }, { protocolVersion: 99 }]) {
+    await assert.rejects(delivery.collectDelivery(root, identity, toolchains,
+      { ...identity, protocolVersion: 2, ...override }), /Code Host version/);
+  }
+}, true));

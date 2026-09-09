@@ -16,7 +16,7 @@ import { contextResponse } from '../src/Gateway/ContextResponse.js';
 it('exclusive scope and exact line ranges avoid all workspace symbol queries', async () => {
   await fixture(async (_root, router, call) => {
     let queries = 0;
-    router.serena.findSymbolsDetailed = async () => { queries++; throw new Error('unexpected workspace query'); };
+    router.text.findSymbolsDetailed = async () => { queries++; throw new Error('unexpected workspace query'); };
     const scoped = payload(await call({ task: 'Review SaveTarget behavior', scopeFiles: ['Service.ts'] })).data;
     assert.deepEqual(scoped.relatedFiles.map((f: any) => f.path), ['Service.ts']);
     const ranged = payload(await call({ task: 'Review SaveTarget behavior', lineRanges: [{ file: 'Service.ts', startLine: 50, endLine: 50 }] })).data;
@@ -30,7 +30,7 @@ it('exclusive scope and exact line ranges avoid all workspace symbol queries', a
 
 it('scoped symbol lookup preserves local fallback limits and rejects ambiguity', async () => {
   await fixture(async (root, router, call) => {
-    router.serena.findSymbolsDetailed = async () => { throw new Error('unexpected workspace query'); };
+    router.text.findSymbolsDetailed = async () => { throw new Error('unexpected workspace query'); };
     const args = { task: 'Review target', scopeFiles: ['Service.ts'], symbol: 'SaveTarget' };
     const unique = payload(await call(args)).data;
     assert.equal(unique.evidence[0].symbol, 'SaveTarget');
@@ -53,7 +53,7 @@ it('scoped symbol lookup preserves local fallback limits and rejects ambiguity',
 it('precise retrieval validates scope and ranges before any workspace query', async () => {
   await fixture(async (_root, router, call) => {
     let queries = 0;
-    router.serena.findSymbolsDetailed = async () => { queries++; return { symbols: [] } as any; };
+    router.text.findSymbolsDetailed = async () => { queries++; return { symbols: [] } as any; };
     for (const options of [
       { scopeFiles: [] },
       { scopeFiles: ['Service.ts'], candidateFiles: ['Other.ts'] },
@@ -89,7 +89,7 @@ it('precise retrieval remains bounded after response serialization', async () =>
 async function fixture(run: (root: string, router: ToolRouter, call: (args: Record<string, unknown>) => Promise<any>) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-context-'));
   const config = getDefaultConfig(root);
-  config.adapters.serena.enabled = false;
+
   config.adapters.flaui.enabled = false;
   const router = new ToolRouter(config);
   const server = new WinCodeMcpServer(router);
@@ -99,7 +99,7 @@ async function fixture(run: (root: string, router: ToolRouter, call: (args: Reco
     await fs.writeFile(path.join(root, 'package.json'), '{"name":"isolated-context-fixture"}');
     await fs.writeFile(path.join(root, 'Service.ts'), Array.from({ length: 90 }, (_, i) =>
       i === 49 ? 'export function SaveTarget() { return "TARGET_BODY"; }' : `// fixture line ${i + 1}`).join('\n'));
-    router.serena.findSymbolsDetailed = async () => ({ symbols: [], limitations: [], queryComplete: true } as any);
+    router.text.findSymbolsDetailed = async () => ({ symbols: [], limitations: [], queryComplete: true } as any);
     await Promise.all([client.connect(clientTransport), (server as any).server.connect(serverTransport)]);
     await run(root, router, args => client.callTool({ name: 'wincode_prepare_context', arguments: args }));
   } finally {
@@ -177,7 +177,7 @@ it('compact and legacy retain identical evidence with sufficient budget', async 
 
 it('unsupported focus globs and malformed options fail before any search', async () => fixture(async (_root, router, call) => {
   let searches = 0;
-  router.serena.findSymbolsDetailed = async () => { searches++; throw new Error('unexpected search'); };
+  router.text.findSymbolsDetailed = async () => { searches++; throw new Error('unexpected search'); };
   for (const extra of [{ focusAreas: ['src/*.ts'] }, { candidateFiles: ['../outside.ts'] },
     { candidateFiles: [42] }, { maxTokens: -1 }, { maxTokens: 1.5 }, { responseFormat: 'typo' }, { includeFullText: 'true' }]) {
     const result = await call({ task: 'SaveTarget', ...extra });
@@ -214,7 +214,7 @@ it('missing-candidate metadata cannot evict a small useful body', async () => fi
 
 it('a prefix ending exactly at the declaration newline still returns the declaration', async () => fixture(async (root, router, call) => {
   await fs.writeFile(path.join(root,'Boundary.ts'), ['//intro', ...Array(8).fill('//'+'x'.repeat(497)), 'export function SaveTarget(){ return "TARGET_BODY"; }'].join('\n'));
-  router.serena.findSymbolsDetailed = async () => ({symbols:[{name:'SaveTarget',file:'Boundary.ts',line:10,kind:'function'}], queryComplete:true, limitations:[]} as any);
+  router.text.findSymbolsDetailed = async () => ({symbols:[{name:'SaveTarget',file:'Boundary.ts',line:10,kind:'function'}], queryComplete:true, limitations:[]} as any);
   const {data} = payload(await call({task:'SaveTarget',candidateFiles:['Boundary.ts'],maxTokens:8000}));
   assert.ok(data.evidence[0].snippet.includes('TARGET_BODY'));
   assert.equal(data.evidence[0].startLine,10);
@@ -264,7 +264,7 @@ it('packed body spans remain correct after escaping and final prefix clipping', 
 }));
 
 it('matched symbol, reason and actual source range refer to the same target', async () => fixture(async (_root, router, call) => {
-  router.serena.findSymbolsDetailed = async () => ({ queryComplete: true, limitations: [], symbols: [
+  router.text.findSymbolsDetailed = async () => ({ queryComplete: true, limitations: [], symbols: [
     { name: 'UnrelatedOptions', file: 'Service.ts', line: 2, kind: 'interface' },
     { name: 'SaveTarget', file: 'Service.ts', line: 50, kind: 'function' },
   ] } as any);
@@ -281,7 +281,7 @@ it('matched symbol, reason and actual source range refer to the same target', as
 it('long preceding lines cannot crowd the matched declaration out of a clipped snippet', async () => fixture(async (root, router, call) => {
   await fs.writeFile(path.join(root, 'Service.ts'), Array.from({ length: 70 }, (_, i) =>
     i === 49 ? 'export function SaveTarget() { return "TARGET_BODY"; }' : '// ' + 'x'.repeat(800)).join('\n'));
-  router.serena.findSymbolsDetailed = async () => ({ queryComplete: true, limitations: [], symbols: [
+  router.text.findSymbolsDetailed = async () => ({ queryComplete: true, limitations: [], symbols: [
     { name: 'SaveTarget', file: 'Service.ts', line: 50, kind: 'function' },
   ] } as any);
   const { data } = payload(await call({ task: 'SaveTarget', candidateFiles: ['Service.ts'], maxTokens: 512 }));
@@ -305,7 +305,7 @@ it('out-of-workspace junction candidates are reported and never packed', async (
 
 it('file truncation keeps exact displayed line ranges and incomplete query warnings', async () => fixture(async (root, router, call) => {
   await fs.writeFile(path.join(root, 'Large.ts'), Array.from({ length: 80 }, (_, i) => `// ${i + 1} ${'字'.repeat(400)}`).join('\n'));
-  router.serena.findSymbolsDetailed = async () => ({ symbols: [], queryComplete: false, limitations: ['Semantic query timed out.'] } as any);
+  router.text.findSymbolsDetailed = async () => ({ symbols: [], queryComplete: false, limitations: ['Semantic query timed out.'] } as any);
   const { data } = payload(await call({ task: 'LargeTarget', candidateFiles: ['Large.ts'], maxTokens: 512 }));
   assert.equal(data.queryComplete, false);
   assert.ok(data.limitations.includes('Semantic query timed out.'));
@@ -325,10 +325,10 @@ it('focus directory cap counts added files, not previously selected candidates',
 
 it('refactoring retains uncertainty and gives a disambiguation step without prescribing an interface', async () => {
   const report = { referencesCount: 0, affectedFiles: [], riskLevel: 'UNKNOWN', riskReason: 'Duplicate types',
-    confidence: 'UNCERTAIN', source: 'serena-adapter-fallback', uniqueResolution: false, queryComplete: true,
+    confidence: 'UNCERTAIN', source: 'local-text', uniqueResolution: false, queryComplete: true,
     limitations: ['Text retrieval does not prove symbol identity.'], matchedSymbols: [
       { name: 'Service', file: 'a.ts', line: 1 }, { name: 'Service', file: 'b.ts', line: 2 }], recommendations: [] };
-  const assistant = new RefactorAssistant(null as any, null as any, { analyzeImpact: async () => report } as any);
+  const assistant = new RefactorAssistant(null as any, { analyzeImpact: async () => report } as any);
   const plan = await assistant.planRefactoring('Service', '简化条件判断');
   assert.equal(plan.evidence.riskLevel, 'UNKNOWN');
   assert.deepEqual(plan.evidence.limitations, report.limitations);
@@ -338,9 +338,9 @@ it('refactoring retains uncertainty and gives a disambiguation step without pres
 
 it('refactoring with usable evidence names affected files and validates only the requested change', async () => {
   const report = { referencesCount: 2, affectedFiles: ['Caller.ts'], riskLevel: 'MEDIUM', riskReason: 'Two calls',
-    confidence: 'HIGH', source: 'serena-mcp', uniqueResolution: true, queryComplete: true,
+    confidence: 'HIGH', source: 'roslyn', uniqueResolution: true, queryComplete: true,
     limitations: [], matchedSymbols: [], recommendations: [] };
-  const assistant = new RefactorAssistant(null as any, null as any, { analyzeImpact: async () => report } as any);
+  const assistant = new RefactorAssistant(null as any, { analyzeImpact: async () => report } as any);
   const plan = await assistant.planRefactoring('Service', '简化条件判断');
   assert.ok(plan.recommendedSteps.some(step => step.includes('Caller.ts')));
   assert.ok(plan.recommendedSteps.some(step => step.includes('简化条件判断')));

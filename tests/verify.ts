@@ -27,15 +27,15 @@ async function runVerification() {
   assert.strictEqual(cached?.hello, 'world', 'Cache should store and retrieve data');
   console.log('✓ CacheManager verified.');
 
-  console.log('4. Testing SerenaAdapter Symbol Indexing & References...');
-  const symbols = await router.serena.findSymbols('ToolRouter');
+  console.log('4. Testing LocalTextAdapter Symbol Indexing & References...');
+  const symbols = await router.text.findSymbols('ToolRouter');
   console.log(`   Found ${symbols.length} symbols matching "ToolRouter":`, symbols.map(s => `${s.kind} ${s.name} (${s.file}:${s.line})`));
   assert.ok(symbols.length > 0, 'Should find ToolRouter class');
 
-  const refs = await router.serena.findReferences('ToolRouter');
+  const refs = await router.text.findReferences('ToolRouter');
   console.log(`   Found ${refs.length} references to "ToolRouter"`);
   assert.ok(refs.length > 0, 'Should find references to ToolRouter');
-  console.log('✓ SerenaAdapter symbol search & reference tracking verified.');
+  console.log('✓ LocalTextAdapter symbol search & reference tracking verified.');
 
   console.log('5. Testing RepomixAdapter & ContextManager...');
   const context = await router.context.prepareContext({

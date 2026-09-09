@@ -38,11 +38,9 @@ for (const [index, directory] of roots.entries()) {
     ...Array.from({ length: 10 }, (_, round) => `class Probe${round}Only${index} {}`)].join('\n'));
 }
 const config = getDefaultConfig(roots[0]);
-config.adapters.serena.enabled = false;
+
 config.adapters.flaui.enabled = false;
 config.adapters.repomix.useCli = false;
-config.timeouts.serenaConnectMs = 3000;
-config.timeouts.serenaCallMs = 3000;
 const router = new ToolRouter(config);
 const children: cp.ChildProcess[] = [];
 const originalSpawn = cp.spawn;
@@ -78,33 +76,21 @@ try {
     const index = round % 2;
     await call('switch', () => router.openWorkspace(roots[index]));
     await call('query-before-interleaving', () => query(index));
-    // Real owned Node fixture: hang an RPC for cancellation, or exit during it.
-    // Keep the production RPC/reset implementation intact; the gate controls scheduling only.
+    // 调度门只控制文本查询开始时刻；保留真实扫描及工作区排空逻辑。
     const cancel = round % 2 === 0;
-    router.config.adapters.serena.enabled = true;
-    router.config.adapters.serena.customCommand = process.execPath;
-    router.config.adapters.serena.customArgs = [path.resolve('tests/fixtures/mock-serena-mcp.mjs'), cancel ? '--hang' : '--crash'];
-    await router.serena.initialize();
-    assert.equal(await router.serena.ensureConnected(), true);
-    const upstreamMetrics = processMetrics([process.pid, ...children
-      .filter(child => child.exitCode === null && child.signalCode === null && child.pid)
-      .map(child => child.pid!)]);
+    const upstreamMetrics = processMetrics([process.pid]);
     const controller = new AbortController();
     let entered!: () => void, release!: () => void;
     const ready = new Promise<void>(resolve => { entered = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const adapter = router.serena as any;
-    const originalCall = adapter.callSerenaTool;
-    adapter.callSerenaTool = async (...args: unknown[]) => {
-      const outcome = Promise.resolve(originalCall.apply(adapter, args)).then(
-        value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
+    const adapter = router.text as any;
+    const originalCall = adapter.findSymbolsDetailed;
+    adapter.findSymbolsDetailed = async (...args: unknown[]) => {
       entered();
       await gate;
-      const result = await outcome;
-      if (!result.ok) throw result.error;
-      return result.value;
+      return originalCall.apply(adapter, args);
     };
-    const queryWork = call(cancel ? 'cancel-in-flight' : 'exit-in-flight', async () => {
+    const queryWork = call(cancel ? 'cancel-in-flight' : 'query-in-flight', async () => {
       await router.acquireRequestSlot();
       try {
         const pending = router.findCodeSymbols(`Probe${round}`, undefined, controller.signal);
@@ -113,7 +99,7 @@ try {
           return { cancelled: true };
         }
         const result = await pending;
-        assert.notEqual(result.source, 'serena-mcp');
+        assert.notEqual(result.source, 'roslyn');
         assert.ok(result.symbols.some(symbol => symbol.name === `Probe${round}Only${index}`));
         return result;
       } finally { router.endRequest(); }
@@ -129,18 +115,18 @@ try {
       assert.equal(router.isSwitchingWorkspace, true);
       assert.equal(router.inFlightRequests, 1);
       assert.equal(router.config.workspaceRoot, roots[index], 'root cannot change while the old query owns its slot');
-      interleavings.push({ round, mode: cancel ? 'cancel' : 'upstream-exit',
-        rpcStarted: true, switchWaiting: true, oldRootPreserved: true });
+      interleavings.push({ round, mode: cancel ? 'cancel' : 'text-completion',
+        queryStarted: true, switchWaiting: true, oldRootPreserved: true });
       if (cancel) controller.abort();
       release();
       await Promise.all([queryWork, switching]);
     } finally {
       controller.abort(); release();
       await Promise.allSettled([queryWork, ...(switching ? [switching] : [])]);
-      adapter.callSerenaTool = originalCall;
+      adapter.findSymbolsDetailed = originalCall;
     }
-    router.config.adapters.serena.enabled = false;
-    await router.serena.initialize();
+
+    await router.text.initialize();
     await Promise.all([call('query-after-interleaving-1', () => query(1 - index)),
       call('query-after-interleaving-2', () => query(1 - index))]);
     const health = await call('health', () => router.getRuntimeHealth());
@@ -168,7 +154,7 @@ if (liveOwnedPids.length) error = `${error ?? ''}\nOwned child processes still l
 const report = { success: !error, node: process.version, elapsedMs: Date.now() - started, callCount: calls.length,
   sampleIntervalMs, finalMetrics: processMetrics([process.pid]),
   budget: { maxCalls: 100, maxMs: 300000 }, calls, samples, interleavings, liveOwnedPids, error,
-  limitations: ['Local generated workspaces and mock upstream only; real Serena/Repomix compatibility untested.',
+  limitations: ['Generated workspaces and real local text scans; Roslyn process faults are covered by the separate real Host/Gateway suites.',
     'Bounded paced sample is not an endurance or leak proof; no forced GC or continuous high-load claim.',
     'Windows WorkingSet64 is a point-in-time working set, not peak RSS. Metrics availability/missing PIDs are recorded explicitly.',
     'outputChars are serialized UTF-16 characters, not model tokens.'],

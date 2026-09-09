@@ -17,7 +17,7 @@ async function fixture(run: (router: ToolRouter, server: WinCodeMcpServer, clien
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-wp3-'));
   const config = getDefaultConfig(root);
   config.adapters.repomix.useCli = false;
-  config.adapters.serena.enabled = false;
+
   config.adapters.flaui.enabled = false;
   const router = new ToolRouter(config);
   const server = new WinCodeMcpServer(router);
@@ -39,7 +39,7 @@ async function fixture(run: (router: ToolRouter, server: WinCodeMcpServer, clien
 it('hello reads unknown or stale snapshots without invoking probes or spawning processes', async t => fixture(async (router, _server, client) => {
   router.config.adapters.flaui.enabled = true;
   router.config.adapters.repomix.useCli = true;
-  for (const adapter of [router.serena, router.repomix, router.flaui])
+  for (const adapter of [router.text, router.repomix, router.flaui])
     t.mock.method(adapter, 'checkHealth', async () => { throw new Error('hello must not probe'); });
   const spawn = t.mock.method(cp, 'spawn', () => { throw new Error('unexpected child process'); });
   const execSync = t.mock.method(cp, 'execSync', () => { throw new Error('unexpected command probe'); });
@@ -50,7 +50,7 @@ it('hello reads unknown or stale snapshots without invoking probes or spawning p
     const health = JSON.parse(result.content[0].text).health;
     assert.equal(health.repomix.available, null);
     assert.equal(health.flaui.available, null);
-    assert.equal(health.serena.commandFound, null);
+    assert.equal(health.text.semanticConfigured, false);
     assert.equal(health.healthObservation.repomix.state, 'unknown');
     (router.repomix as any).healthCache = { at: 1, value: { available: true, source: 'installed' } };
     const snapshot = await router.getRuntimeHealth();
@@ -63,12 +63,12 @@ it('hello reads unknown or stale snapshots without invoking probes or spawning p
 
 it('diagnose retains active checks while hello remains passive', async t => fixture(async (router, _server, client) => {
   const calls: string[] = [];
-  t.mock.method(router.diagnostics, 'runDiagnostics', async () => { await router.serena.checkHealth(); return { fixture: true } as any; });
-  for (const [name, adapter] of Object.entries({ serena: router.serena, repomix: router.repomix, flaui: router.flaui }))
+  t.mock.method(router.diagnostics, 'runDiagnostics', async () => { await router.text.checkHealth(); return { fixture: true } as any; });
+  for (const [name, adapter] of Object.entries({ text: router.text, repomix: router.repomix, flaui: router.flaui }))
     t.mock.method(adapter, 'checkHealth', async () => { calls.push(name); return { available: true, source: 'installed' as const }; });
   const result = await client.callTool({ name: 'wincode_diagnose_project', arguments: {} });
   assert.notEqual(result.isError, true);
-  assert.deepEqual(calls, ['serena', 'repomix', 'flaui']);
+  assert.deepEqual(calls, ['text', 'repomix', 'flaui']);
 }));
 
 it('cleanup retains failure, finishes other owners, and does not claim repeated success', async () => {
@@ -234,55 +234,4 @@ it('cancelling one pack does not cancel another caller or reuse its pending resu
   await rejected;
   assert.equal((await second).content, 'peer content');
   assert.equal(entered, 2);
-}));
-
-it('cancelled upstream RPC terminates its real owned process and a later query reconnects', { timeout: 10000 }, async t => fixture(async router => {
-  router.config.adapters.serena.enabled = true;
-  router.config.adapters.serena.customCommand = process.execPath;
-  const script = path.resolve('tests/fixtures/mock-serena-mcp.mjs');
-  router.config.adapters.serena.customArgs = [script, '--hang'];
-  await router.serena.initialize();
-  assert.equal(await router.serena.ensureConnected(), true);
-  const pid = (router.serena as any).serenaPid as number;
-  assert.ok(pid > 0);
-  let reached!: () => void;
-  const entered = new Promise<void>(resolve => { reached = resolve; });
-  const invoke = (router.serena as any).callSerenaTool.bind(router.serena);
-  t.mock.method(router.serena as any, 'callSerenaTool', (...args: any[]) => { const pending = invoke(...args); reached(); return pending; });
-  const controller = new AbortController();
-  const pending = router.findCodeSymbols('MockService', undefined, controller.signal);
-  const rejected = assert.rejects(pending, /abort|cancel/i);
-  await entered;
-  controller.abort();
-  await rejected;
-  assert.throws(() => process.kill(pid, 0), (error: any) => error.code === 'ESRCH');
-  router.config.adapters.serena.customArgs = [script];
-  const next = await router.findCodeSymbols('MockService');
-  assert.equal(next.source, 'serena-mcp');
-  assert.equal(next.symbols[0].name, 'MockService');
-}));
-
-it('cancelling a pending upstream handshake also reaps the spawned process', { timeout: 10000 }, async t => fixture(async router => {
-  router.config.adapters.serena.enabled = true;
-  router.config.adapters.serena.customCommand = process.execPath;
-  const script = path.resolve('tests/fixtures/mock-serena-mcp.mjs');
-  router.config.adapters.serena.customArgs = [script, '--hang-init'];
-  await router.serena.initialize();
-  let reached!: (child: cp.ChildProcess) => void;
-  const spawned = new Promise<cp.ChildProcess>(resolve => { reached = resolve; });
-  const original = cp.spawn;
-  const spawn = t.mock.method(cp, 'spawn', ((...args: any[]) => {
-    const child = (original as any)(...args) as cp.ChildProcess;
-    if (Array.isArray(args[1]) && args[1].includes(script)) reached(child);
-    return child;
-  }) as typeof cp.spawn);
-  syncBuiltinESMExports();
-  try {
-    const controller = new AbortController();
-    const rejected = assert.rejects(router.findCodeSymbols('MockService', undefined, controller.signal), /abort|cancel/i);
-    const child = await spawned;
-    controller.abort();
-    await rejected;
-    assert.throws(() => process.kill(child.pid!, 0), (error: any) => error.code === 'ESRCH');
-  } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
 }));

@@ -42,13 +42,13 @@ export class LocalTextAdapter {
   async findSymbolsDetailed(query: string, kind?: string, relativePath?: string, operation?: OperationContext): Promise<FindSymbolsResult> {
     checkOperation(operation);
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
-    const key = `local_text_symbols_v1_${JSON.stringify([query, kind, relativePath, this.config.workspaceRoot])}`;
+    const key = `local_text_symbols_v2_${JSON.stringify([query, kind, relativePath, this.config.workspaceRoot])}`;
     const cached = await this.cache.get<FindSymbolsResult>(key, fingerprint);
     checkOperation(operation);
     if (cached?.queryComplete) return cached;
     const scan = await scanLocalFiles(this.config.workspaceRoot, this.config.timeouts.fileScanMs,
-      ['.cs', '.ts', '.js', '.py'], 500,
-      (content, file, extension) => parseTextDeclarations(content, file, extension).filter(symbol =>
+      ['.cs', '.ts', '.tsx', '.js', '.jsx', '.py'], 500,
+      (content, file, extension) => parseTextDeclarations(content, file, extension, () => checkOperation(operation)).filter(symbol =>
         symbol.name.toLowerCase().includes(query.toLowerCase()) && (!kind || symbol.kind.toLowerCase() === kind.toLowerCase())),
       relativePath, operation);
     const stats = computeTypeMatchStats(scan.items, query);

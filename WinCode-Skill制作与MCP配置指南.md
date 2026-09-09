@@ -1,6 +1,6 @@
 # WinCode Skill 安装、维护与 MCP 配置指南
 
-适用于 **0.12.5**，核对日期 2026-09-08（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
+适用于 **0.13.1**，核对日期 2026-09-08（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
 
 ## 1. 三个独立对象
 
@@ -22,7 +22,7 @@ npm run check
 npm run delivery:verify
 ```
 
-`check` 进行类型检查、Gateway 构建、锁定 NuGet restore、Release Host/控制台夹具构建、核心回归、新 stdio 验证与交付清单生成。交互桌面验收另执行 `npm run check:desktop`，需要可用 Windows 桌面。真实 Serena/TavernDesk 验收单独选择，详见 [CONTRIBUTING](CONTRIBUTING.md)。
+`check` 进行类型检查、Gateway 构建、锁定 NuGet restore、Release UIA/Code Host 与控制台夹具构建、核心回归、新 stdio 验证与交付清单生成。交互桌面验收另执行 `npm run check:desktop`，需要可用 Windows 桌面。真实 Roslyn/TavernDesk 验收按对应入口执行，详见 [CONTRIBUTING](CONTRIBUTING.md)。
 
 `npm run build` 只构建 Gateway，不能单独证明原生 Host、Skill 和整个交付物一致。生产使用发布的 Release Host；`npm run dev` 才显式启用开发回退。报告位于 `test-tmp/check/`，内容哈希不是发布签名。
 
@@ -77,7 +77,7 @@ npm run skill:check -- C:/Users/40218/.agents/skills/wincode
 
 0.12.1 起 hello 不主动启动探测进程；unknown/null 表示未探测，不代表不可用。已知健康结果也可能陈旧。旧版本 hello 的行为不能套用新版说明。
 
-0.12.5 已通过固定 Serena 1.7.0/Roslyn 的隔离真实验收；隔离安装不表示默认客户端已启用上游。0.12.4 起 Repomix 直接执行已安装 JavaScript bin，不再使用 cmd/npx 包装链，也不会自动下载；非标准安装和降级边界见诊断手册。
+0.13 系列已经退役外部 Serena，默认 local-text；C# 语义使用随产品交付的 Code Host，通过显式 --roslyn-config 配置入口项目、Configuration、TFM、SDK 与求值许可，字段示例见代码手册。真实 Host/MCP 验收通过也不代表实际客户端已启用 Roslyn。0.12.4 起 Repomix 直接执行已安装 JavaScript bin，不再使用 cmd/npx 包装链，也不会自动下载；非标准安装和降级边界见诊断手册。
 
 ## 6. 常见偏差
 
@@ -86,7 +86,9 @@ npm run skill:check -- C:/Users/40218/.agents/skills/wincode
 | 源码是新版，hello 返回旧版 | 核对实际命令、路径、instanceId 和启动时间；通过客户端重连，不以强杀宿主或复制文件冒充完成 |
 | 字段被忽略，结果不像预期 | 对照规范字段表和实际工具 schema；容忍未知字段并不赋予其语义 |
 | Host 缺失或身份不符 | 完整执行锁定构建和 delivery:verify；不混用旧 DLL、新 Gateway 或开发 Host |
-| Serena/Repomix 不可用 | 先区分策略禁用、尚未探测、命令缺失、握手成功但语义不可用；检查 source/fallbackReason，不把降级当语义验收成功 |
+| Roslyn/Repomix 不可用 | 先核对 provider、显式配置、项目求值许可、已知健康和恢复动作；Roslyn 失败不会暗中换成本地文本，Repomix 降级不代表语义验收成功 |
 | UI 查不到或出现多个目标 | 核对 PID/HWND 和大小写准确的查询；只有 complete 且 unique 才能声称唯一定位 |
 
 更新后仍无法核对客户端身份时，保留“客户端未验收”状态与实际证据，不反复尝试未声明参数。
+
+0.13.1 的已知工具失败以同源 JSON 文本和 structuredContent 表达，UI/trash 保留领域信息；未知工具在正常受理时返回 JSON-RPC -32602。未知字段容忍策略与未知工具的协议错误是两回事。影响分析只返回一个 JSON 文本块，formattedReport 在对象内。

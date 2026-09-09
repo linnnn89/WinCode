@@ -1,3 +1,6 @@
+import { ContextManager } from '../src/Core/Context.js';
+import { WorkspaceManager } from '../src/Core/Workspace.js';
+import { parseTextDeclarations } from '../src/Core/TextDeclarations.js';
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -130,3 +133,126 @@ it('does not turn a directory read failure into a complete empty scan', async (t
     assert.match(result.queryError!, /read-error/);
   } finally { t.mock.restoreAll(); }
 }));
+
+it('ignores C# comment and literal declarations while preserving real declaration lines and signatures', async () => fixture(async (adapter, root) => {
+  const source = [
+    '// class GhostComment {}',
+    '/* public class GhostBlock {} */',
+    'var sample = "class GhostString {}";',
+    'var multi = @"text',
+    'class GhostVerbatim {}',
+    '";',
+    'var raw = """',
+    'class GhostRaw {}',
+    '""";',
+    'public class Actual {} // remains in signature',
+  ].join('\r\n');
+  await fs.writeFile(path.join(root, 'Sample.cs'), source);
+  const ghosts = await adapter.findSymbolsDetailed('Ghost');
+  assert.deepEqual(ghosts.symbols, []);
+  const actual = await adapter.findSymbolsDetailed('Actual');
+  assert.equal(actual.symbols[0]?.line, 10);
+  assert.equal(actual.symbols[0]?.signature, 'public class Actual {} // remains in signature');
+  assert.equal(actual.source, 'local-text');
+  assert.equal(actual.analysisCompleteness, 'degraded');
+}));
+
+it('ignores JS templates/regex and Python multiline strings without hiding following real declarations', async () => fixture(async (adapter, root) => {
+  await fs.writeFile(path.join(root, 'Sample.ts'), [
+    'const note = "class GhostString {}";',
+    '/* class GhostComment {} */',
+    'const re = /class GhostRegex[\\/]/;',
+    'const sample = `',
+    'class GhostTemplate {}',
+    '${(() => "class GhostNested {}")()}',
+    '`;',
+    'export function ActualTs() {}',
+  ].join('\n'));
+  await fs.writeFile(path.join(root, 'Sample.py'), [
+    '# class GhostComment:',
+    'doc = r"""',
+    'class GhostPython:',
+    '    pass',
+    '"""',
+    'def ActualPy():',
+    '    return "ok"',
+  ].join('\n'));
+  assert.deepEqual((await adapter.findSymbolsDetailed('Ghost')).symbols, []);
+  const actual = (await adapter.findSymbolsDetailed('Actual')).symbols;
+  assert.deepEqual(actual.map(s => [s.name, s.line]).sort(), [['ActualPy', 6], ['ActualTs', 8]]);
+}));
+
+it('finds TSX/JSX declarations while excluding JSX text and attributes', async () => fixture(async (adapter, root) => {
+  for (const ext of ['tsx', 'jsx']) {
+    await fs.writeFile(path.join(root, `Card.${ext}`), [
+      `export function UserCard${ext}() {`,
+      '  return <section title="class GhostAttribute {}">',
+      '    class GhostText {}',
+      '    <><span>{"class GhostExpression {}"}</span><input /></>',
+      '  </section>;',
+      '}',
+      `export class After${ext} {}`,
+    ].join('\n'));
+  }
+  assert.deepEqual((await adapter.findSymbolsDetailed('Ghost')).symbols, []);
+  const actual = (await adapter.findSymbolsDetailed('UserCard')).symbols;
+  assert.deepEqual(actual.map(s => [s.name, s.line]).sort(), [['UserCardjsx', 1], ['UserCardtsx', 1]]);
+  assert.equal((await adapter.findSymbolsDetailed('After')).totalFound, 2);
+  assert.equal(adapter.findSymbolsInContent('export function Direct() { return <p>class Ghost {}</p>; }', 'Direct.tsx')[0]?.name, 'Direct');
+}));
+
+it('does not report a complete empty scan or cache results when lexical boundaries are uncertain', async () => fixture(async (adapter, root, cached) => {
+  await fs.writeFile(path.join(root, 'Broken.ts'), 'const note = `unterminated\nclass Ghost {}');
+  const result = await adapter.findSymbolsDetailed('Ghost');
+  assert.deepEqual(result.symbols, []);
+  assert.equal(result.queryComplete, false);
+  assert.match(result.queryError!, /lexical-uncertainty/);
+  assert.equal(cached.size, 0);
+}));
+
+it('keeps declarations after escaped/interpolated literals and ordinary division', async () => fixture(async (adapter, root) => {
+  const samples: Record<string, string> = {
+    'Nested.cs': 'var text = $"{string.Join("class Ghost {}", items)}";\npublic class ActualCs {}',
+    'Nested.ts': 'const text = `outer ${`inner ${"class Ghost {}"}`} tail`;\nconst ratio = 12 / 3;\nexport function ActualTs() {}',
+    'Nested.py': 'text = f"outer {"class Ghost {}"}"\ndef ActualPy(): pass',
+  };
+  for (const [file, source] of Object.entries(samples)) await fs.writeFile(path.join(root, file), source);
+  assert.deepEqual((await adapter.findSymbolsDetailed('Ghost')).symbols, []);
+  assert.equal((await adapter.findSymbolsDetailed('Actual')).totalFound, 3);
+}));
+
+it('does not reuse declaration results cached by the retired unmasked parser', async () => fixture(async (adapter, root, cached) => {
+  await fs.writeFile(path.join(root, 'Only.cs'), '// class Ghost {}');
+  cached.set(`local_text_symbols_v1_${JSON.stringify(['Ghost', undefined, undefined, root])}`, {
+    queryComplete: true, symbols: [{ name: 'Ghost' }], totalFound: 1,
+  });
+  assert.deepEqual((await adapter.findSymbolsDetailed('Ghost')).symbols, []);
+}));
+
+it('excludes regex literals used as control-flow statements', async () => fixture(async (adapter, root) => {
+  await fs.writeFile(path.join(root, 'Regex.js'), 'if (ready && check()) /class GhostRegex/.test(input);\nif (ready) {} /class GhostBlockRegex/.test(input);\nexport class Actual {}');
+  assert.deepEqual((await adapter.findSymbolsDetailed('Ghost')).symbols, []);
+  assert.equal((await adapter.findSymbolsDetailed('Actual')).totalFound, 1);
+}));
+
+
+it('scoped TSX context returns the real declaration and reports uncertain lexical input', async () => fixture(async (adapter, root) => {
+  await fs.writeFile(path.join(root, 'Card.tsx'), 'export function UserCard() { return <p>class Ghost {}</p>; }');
+  const config = getDefaultConfig(root);
+  const manager = new ContextManager(config, new WorkspaceManager(config), null as any, adapter);
+  const result = await manager.prepareContext({ task: 'Review', scopeFiles: ['Card.tsx'], symbol: 'UserCard' });
+  assert.ok(result.evidence.some(item => item.file === 'Card.tsx' && item.snippet.includes('UserCard')));
+  await fs.writeFile(path.join(root, 'Broken.ts'), 'const text = `open');
+  const broken = await manager.prepareContext({ task: 'Review', scopeFiles: ['Broken.ts'], symbol: 'Ghost' });
+  assert.ok(broken.fileIssues.some(item => item.reason === 'lexical-uncertainty'));
+  assert.equal(broken.evidence.length, 0);
+}));
+
+it('checks cancellation during long literal processing, not only between files', () => {
+  const source = 'const note = `' + 'text '.repeat(10000) + '`;\nexport class Actual {}';
+  let checks = 0;
+  const cancelled = new Error('cancelled while processing source');
+  assert.throws(() => parseTextDeclarations(source, 'Long.ts', '.ts', () => {
+    if (++checks === 3) throw cancelled;
+  }), error => error === cancelled);
+});

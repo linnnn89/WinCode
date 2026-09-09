@@ -733,3 +733,28 @@
 - 本次验证：[错误契约 10 场景通过](../test-tmp/error-contracts/run-Daj6o7/report.json)；[最新核心检查](../test-tmp/check/2026-09-09T09-11-00-925Z-core/report.json)的类型检查、Gateway 构建及 .NET 构建通过，核心回归 306/307。失败为 tests/resource-cleanup.test.ts 的中文文件原地修改指纹未变化，根因尚未定位；不以此前 307/307 覆盖此失败。此轮 check 在 regression 失败后停止，未执行后续 stdio 与清单阶段。
 - E4 待完成：错误/恢复分支专项测试、当前 UI 错误双载荷的验收及完整手册核对。旧的桌面 35、Host 58、MCP 19 场景属于 E4 之前的成功基线，不表示该开发快照已全部复验。
 - 上传范围为工作分支 codex/roslyn-correctness 的源码、测试、脚本、仓内文档与 CI；.deps、node_modules、dist、test-tmp、缓存继续忽略，不上传本地依赖或生成证据。Serena 专用目录仍未实际删除。main 未合并，实际客户端与全局 Skill 未改动。
+
+## 2026-09-09 20:40 — 结合最新架构评估收敛下一轮计划（北京时间）
+
+- 用户要求读取“架构分析优化建议”最新分析并结合本地实际更新计划；已读取引用聊天，核对本地/远端 main@a23740c、当前声明解析/扫描、Gateway 错误/影响输出、CI、Skill 与既有验收记录。此次规划不修改生产代码、依赖、实际客户端或远端配置，不派生子代理。
+- 直接调用当前 parseTextDeclarations 做六个最小观察：C# `// class Ghost {}`、TS `const note = "class Ghost {}";`、Python 三引号内 `class Ghost:` 都错误返回 Ghost；真实 UserCard 函数在 .ts 返回声明，在 .tsx/.jsx 返回空。源码确认符号/引用扩展名集合不一致。将其列为 LocalText 优先修补，同时保留文本引用、复杂词法和降级完整性的边界。
+- 本轮实际执行 `npm run test:error-contracts`，10 场景通过；[报告](../test-tmp/error-contracts/run-uZMb3F/report.json)。它证明当前实现的已测分支，不证明标准一致性：unknown tool 的现有断言本身要求 isError，需按协议层修订。持续 CI 和恢复/领域分支仍待补齐。
+- 只读核对 [CI 34339009649](https://github.com/linnnn89/WinCode/actions/runs/34339009649)：Node 22/24 成功，Node 22 真实 Host/MCP 步骤成功。CodeQL 34339009257 的三个有效语言成功、Python 历史 job 失败，失败注释明确 exit 32/没有 Python 源码；附带增量缓存提示不能替代该直接证据。
+- 与聊天结论的一处更新：GitHub default-setup 当前语言列表已排除 Python，updated_at=2026-09-09T10:13:02Z。将“修改 Python 配置”从待做事项撤下，改为下一次新扫描确认；本轮未改远端设置或触发扫描。当前仓库没有本地 CodeQL workflow，不为历史红叉另建一套流程。
+- 对照 MCP 2025-11-25 工具规范确认未知工具属于协议错误、业务输入值校验属于工具错误；保留已批准的 E4 方案二，不重新要求用户选择旧方案。影响报告去掉第二文本块与 unknown tool 的对外兼容调整列为实施前明确项，暂不扩展全工具响应抽象。
+- 重写根目录计划和路线图，只保留 0.13 修补方针、实际客户端验收及条件性 UI→Roslyn/性能研究。移除 E1–E3、A1/A2、B/C、Serena 退役和职责拆分的已完成步骤；所有历史实现/失败仍保留本日志与 Git，未把旧失败静默删成成功。
+- 本轮未执行完整核心、桌面或真实 Roslyn 套件，也未声称当前客户端已启用。仅用已有远端结果建立版本基线；计划保留隔离项目、求值范围与实际消费者验证关口。
+- 文档终验：两份计划的 15 个本地链接、围栏、版本和维护命令核对通过，git diff --check 通过。校验脚本首次按系统默认 GBK 读取含中文 JSON 失败；改为显式 UTF-8 后回执校验通过，未改全局环境。
+
+
+## 2026-09-09 21:18 — 0.13.1 LocalText 与 E4 稳定化实施（北京时间）
+
+- 用户要求按计划实施，沿用既有逐版本复测/debug、PR 与合并授权。针对客户端验收的询问，用户明确选择“先完成代码与 CI，客户端验收暂缓”；未修改真实 MCP 配置或已安装 Skill，未安装新依赖/SDK，未分出子代理。
+- LocalText：复用并提取现有 C# 非代码区屏蔽纯函数；增加有深度/取消边界的 JS/TS/Python 屏蔽。修复注释、字符串、模板、正则及 JSX 展示内容产生假声明；增加 TSX/JSX 扫描与指定文件符号取证。行号/展示签名保留原文；词法边界不确定时文件结果不完整且不缓存，旧 v1 声明缓存失效。插值/JSX 表达式省略，复杂语法仍可能漏检，不主张完整语法或精确引用。
+- E4：正常受理时未知工具走 SDK ProtocolError -32602；已知工具保留 isError/领域载荷，关闭/取消的入口优先级不变。专项由 10 扩展为 16 场景，覆盖真实隔离 trash metadata partial 及重试位置、工作区提交失败/阻断/恢复、注入 UI 失败与独立图片。后者只验证序列化，不冒充真实截图。Node 22 CI 新增专项及有界回执上传。
+- 影响输出：删除第二份 Markdown 文本，保留 JSON 中 formattedReport、证据字段和别名。固定 dotnet-mini/MemoryService 的同一结果文本从 3194 减至 2511 个 UTF-16 字符，减少 683；[量化回执](../test-tmp/impact-0131-size.json)。这不是实际 token 测量或跨任务性能结论。
+- RED/DEBUG 记录：各类 Ghost、TSX、未知工具和输出去重先复现失败后修复。第一次完整 check 的两个失败来自仍要求旧 stdio 结果的断言，按新契约迁移后通过；测试编写中的 evidence.content/impact.data 错误访问由类型/运行检查指出并更正。自审又复现代码块后的正则字面量泄漏，补充反例并修复后重跑完整检查。未删减生产边界或用旧成功覆盖失败。
+- 最终本地验收：[核心检查](../test-tmp/check/2026-09-09T13-15-21-646Z-core/report.json)318 项、317 通过、0 失败、1 跳过（未配置固定 TavernDesk 工作区的可选集成）；覆盖类型、锁定构建、生产 stdio 与完整交付。独立[桌面夹具 35/35](../test-tmp/check/2026-09-09T13-09-20-368Z-desktop/report.json)、[真实 Host 58 场景](../test-tmp/roslyn-host/fixture-cB6uto/report.json)、[真实 MCP 19 场景](../test-tmp/roslyn-gateway/run-j1oS63/report.json)、[E4 16 场景](../test-tmp/error-contracts/run-6c5rEY/report.json)通过。后续仅手册/换行整理，最终核心已重新构建核对交付；无实际客户端验收。
+- 文档：版本统一 0.13.1；README、CHANGELOG、SECURITY、架构/配置指南与仓内 Skill 对齐；计划仅保留暂缓的客户端关口和条件性后续工作。77 个变更文档本地链接、代码围栏核对通过。历史日志追加而非改写，生成证据仍在忽略目录内。
+- 作者反证自审覆盖旧缓存假阳性、词法不确定的假零结果、长字面量取消、未知工具后的连接可用、impact 字段/别名保持，以及部分移动后真实文件位置；不等同独立模型或人工审核。剩余边界：有限词法、文本引用、干净机器/长期耐久性及实际消费者均不扩大声明。
+- 发布流程：工作分支 codex/local-text-e4-stabilization；本地通过后推送本版本 PR，等待对应 head 的 Node 22/24、真实 Roslyn/E4 及有效 CodeQL 全部通过再合并。远端完成情况以 PR/Actions 回执为准，此条写入时尚未推送，不提前声明 CI 已绿。

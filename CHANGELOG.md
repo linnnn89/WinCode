@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.1
+
+- Mask comments/literals before local declarations, add TSX/JSX scanning and scoped context, preserve original signatures/lines and invalidate legacy declaration caches. Uncertain lexical boundaries are incomplete and uncached; text references remain heuristic.
+- Share the existing C# masker with UI source mapping; bound script interpolation/JSX nesting and preserve cancellation checkpoints.
+- Report unknown tools as JSON-RPC InvalidParams during normal admission. Known tool errors retain matching JSON text/structuredContent and domain recovery details. Extend error acceptance and run it in Node 22 CI.
+- Return impact analysis once as JSON, retaining formattedReport and both tool names. Consumers reading a second Markdown block must use formattedReport instead.
+- Align guides with direct Roslyn delivery and current error contracts. Actual-client Roslyn acceptance remains explicitly deferred by the user.
+
+## 0.13.0
+
+- Retire external Serena and default to local-text, with explicitly configured direct Roslyn for C# semantics. Exact snapshot locations flow through references, impact and refactoring.
+- Include the complete Code Host/BuildHost delivery and real Roslyn verification in Windows CI. Add workspace recovery, trash partial outcomes and input/encoding consistency checks.
+- Begin unified JSON tool errors; protocol and continuous acceptance follow-up is recorded in 0.13.1.
+
 ## 0.12.5
 
 - Handle the real Serena 1.7/FastMCP structuredContent.result string envelope before parsing symbols or references. Preserve error, empty-result, malformed and shortened-response semantics; do not discard unknown envelope metadata or silently prefer text over unsupported structured data.

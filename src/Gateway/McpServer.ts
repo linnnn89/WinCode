@@ -1,4 +1,4 @@
-import { Server } from '@modelcontextprotocol/server';
+import { Server, ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { ToolRouter, WorkspaceRecoveryRequiredError } from '../Core/ToolRouter.js';
 import { WINCODE_VERSION } from '../Core/Config.js';
@@ -28,22 +28,22 @@ export class WinCodeMcpServer {
           this.router.isShuttingDown ? 'restart_gateway' : 'none');
       }
       const definition = this.registry.resolve(name);
+      if (!definition) throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown tool: ${name}`);
       const context: ToolExecutionContext = { router: this.router, signal, tools: this.registry.list(), schemaHash: this.registry.schemaHash };
       let args: Record<string, unknown>;
       try {
         args = this.registry.prepare(name, input, context);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return definition?.invalidArguments?.(message) ??
-          toolErrorResult(definition ? 'INVALID_ARGUMENT' : 'UNKNOWN_TOOL', message, definition ? 'correct_arguments' : 'select_tool');
+        return definition.invalidArguments?.(message) ?? toolErrorResult('INVALID_ARGUMENT', message, 'correct_arguments');
       }
       let acquired = false;
       try {
-        if (!definition!.switchesWorkspace) {
-          await this.router.acquireRequestSlot(signal, definition!.allowDuringWorkspaceRecovery);
+        if (!definition.switchesWorkspace) {
+          await this.router.acquireRequestSlot(signal, definition.allowDuringWorkspaceRecovery);
           acquired = true;
         }
-        return await definition!.execute(args, context);
+        return await definition.execute(args, context);
       } catch (error) {
         // 根变化后的失败必须携带真实恢复状态；取消不能掩盖已发生的部分状态变更。
         const recovery = error instanceof WorkspaceRecoveryRequiredError ? error.recovery : this.router.workspaceRecoveryState;

@@ -25,6 +25,7 @@ export class CodeQueryError extends Error {
   constructor(readonly errorCode: string, message: string) { super(message); this.name = 'CodeQueryError'; }
 }
 export const LOCAL_TEXT_LIMITATIONS: string[] = [
+  '声明扫描屏蔽注释、字符串及 JSX 元素（含插值）；复杂词法/语法不保证完整，无法可靠定界的文件标记 lexical-uncertainty。引用仍为文本线索。',
   '本地正则扫描仅作为文本检索降级方案，不保证符号身份、重载区分、跨文件引用完整性或安全重命名。',
   '本地正则扫描无法替代完整 Roslyn/TypeScript LSP 语义层面的跨文件重命名与重载解析。',
   '未找到引用不得直接解释为“无影响”或“低风险”。',

@@ -399,7 +399,7 @@ export class ContextManager {
           const stat = await fs.stat(full);
           if (!stat.isFile()) { fileIssues.push({ path: file, reason: 'not-file' }); continue; }
           if (stat.size >= 500_000) { fileIssues.push({ path: file, reason: 'file-too-large' }); continue; }
-          if (!['.cs', '.ts', '.js', '.py'].includes(path.extname(file).toLowerCase())) {
+          if (!['.cs', '.ts', '.tsx', '.js', '.jsx', '.py'].includes(path.extname(file).toLowerCase())) {
             fileIssues.push({ path: file, reason: 'unsupported-symbol-language' }); continue;
           }
           const source = await fs.readFile(full, { encoding: 'utf8', signal: operation?.signal });
@@ -571,6 +571,7 @@ export class ContextManager {
   }
 
   private readIssue(error: unknown): string {
+    if ((error as NodeJS.ErrnoException)?.code === 'TEXT_LEXICAL_UNCERTAINTY') return 'lexical-uncertainty';
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return 'not-found';
     return error instanceof Error && error.message.includes('outside-workspace') ? 'outside-workspace' : 'unreadable';
   }

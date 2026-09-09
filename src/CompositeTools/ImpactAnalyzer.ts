@@ -8,6 +8,7 @@ import {
   computeTypeMatchStats,
   FindSymbolsResult,
   FindReferencesResult,
+  type CodeSource,
 } from '../Core/CodeQueries.js';
 import { WinCodeConfig } from '../Core/Config.js';
 
@@ -28,7 +29,7 @@ export interface ImpactReport {
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN';
   riskReason: string;
   confidence: 'HIGH' | 'MEDIUM' | 'UNCERTAIN';
-  source: 'serena-mcp' | 'serena-adapter-fallback' | 'unknown';
+  source: CodeSource | 'unknown';
   analysisCompleteness: 'semantic' | 'degraded' | 'unindexed' | 'incomplete';
   limitations: string[];
   uniqueResolution: boolean;
@@ -46,7 +47,7 @@ export interface ImpactReport {
 }
 
 interface QueryAssessment {
-  source: 'serena-mcp' | 'serena-adapter-fallback' | 'unknown';
+  source: CodeSource | 'unknown';
   queryComplete: boolean;
   queryError?: string;
   unique: boolean;
@@ -205,12 +206,12 @@ export class ImpactAnalyzer {
     }
 
     let refs: SymbolReference[] = [];
-    if (assessment.unique && assessment.queryComplete && !assessment.truncated &&
+    // 精确 Roslyn 定位允许收集局部引用；风险/置信度仍保留 queryComplete=false 的 UNKNOWN 限制。
+    if (assessment.unique && (assessment.queryComplete || matchedSymbol?.location) && !assessment.truncated &&
         typeof this.serena.findReferencesDetailed === 'function') {
-      const refRes: FindReferencesResult = await this.serena.findReferencesDetailed(
-        matchedSymbol?.namePath ?? symbolName,
-        matchedSymbol?.file, operation
-      );
+      const refRes: FindReferencesResult = matchedSymbol?.location ? await this.serena.findReferencesDetailed(
+        matchedSymbol.name, matchedSymbol.file, operation, matchedSymbol.location
+      ) : await this.serena.findReferencesDetailed(matchedSymbol?.namePath ?? symbolName, matchedSymbol?.file, operation);
       refs = refRes.references || [];
       if (refRes.source) assessment.source = refRes.source;
       if (refRes.queryComplete === false) {
@@ -393,7 +394,7 @@ export class ImpactAnalyzer {
   ): ImpactReport['analysisCompleteness'] {
     if (!declared) return 'unindexed';
     if (!assessment.queryComplete || assessment.truncated) return 'incomplete';
-    if (assessment.source === 'serena-mcp') return 'semantic';
+    if (assessment.source === 'serena-mcp' || assessment.source === 'roslyn') return 'semantic';
     return 'degraded';
   }
 
@@ -418,8 +419,8 @@ export class ImpactAnalyzer {
       const msg = '未找到引用不得直接解释为“无影响”或“低风险”，也不得视为可安全删除。';
       if (!seen.has(msg)) out.push(msg);
     }
-    if (assessment.source === 'serena-mcp' && (!assessment.queryComplete || assessment.truncated)) {
-      const msg = 'Serena 已返回结果，但查询不完整或可能截断，可信度不能只看供应方。';
+    if ((assessment.source === 'serena-mcp' || assessment.source === 'roslyn') && (!assessment.queryComplete || assessment.truncated)) {
+      const msg = '语义提供方已返回结果，但查询不完整或可能截断，可信度不能只看供应方。';
       if (!seen.has(msg)) out.push(msg);
     }
     return out;
@@ -527,7 +528,7 @@ export class ImpactAnalyzer {
     if (!assessment.unique || !assessment.queryComplete || assessment.truncated || referencesCount === 0) {
       return 'UNCERTAIN';
     }
-    if (assessment.source === 'serena-mcp') {
+    if (assessment.source === 'serena-mcp' || assessment.source === 'roslyn') {
       return 'HIGH';
     }
     return 'MEDIUM';

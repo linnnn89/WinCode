@@ -173,7 +173,6 @@ it('shutdown waits for the active switch and rejects its queued queries', async 
   const events: string[] = [];
   router.workspace.openWorkspace = async () => { entered(); await blocked; return {} as any; };
   router.cache.computeWorkspaceFingerprint = async () => 'fixture';
-  (router as any).bindWatch = () => {};
   router.repomix.dispose = async () => { events.push('dispose'); };
   router.repomix.initialize = async () => { events.push('initialize'); };
   router.serena.resetConnection = async () => {};

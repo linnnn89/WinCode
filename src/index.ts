@@ -3,6 +3,8 @@
 import { getDefaultConfig, WINCODE_VERSION } from './Core/Config.js';
 import { ToolRouter } from './Core/ToolRouter.js';
 import { WinCodeMcpServer } from './Gateway/McpServer.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 async function main() {
   let workspaceRoot = process.cwd();
@@ -17,6 +19,21 @@ async function main() {
   }
 
   const config = getDefaultConfig(workspaceRoot);
+  // 此文件是用户显式选择的启动配置，不从目标仓库自动发现或接受 MCP 参数指定执行程序。
+  const roslynIndex = args.indexOf('--roslyn-config');
+  if (roslynIndex >= 0) {
+    const file = args[roslynIndex + 1];
+    if (!file || !path.isAbsolute(file)) throw new Error('--roslyn-config requires an absolute JSON file path.');
+    const handle = await fs.open(file, 'r');
+    try {
+      const buffer = Buffer.alloc(16385);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      if (bytesRead > 16384) throw new Error('Roslyn configuration exceeds 16 KiB.');
+      const options = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+      if (options?.enabled !== true) throw new Error('Explicit Roslyn configuration must set enabled=true.');
+      config.adapters.roslyn = options;
+    } finally { await handle.close(); }
+  }
   if (args.includes('--development')) config.adapters.flaui.hostMode = 'development';
   const router = new ToolRouter(config);
   const server = new WinCodeMcpServer(router);

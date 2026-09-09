@@ -97,6 +97,14 @@ export class AbortError extends Error {
   }
 }
 
+/** A retained cleanup failure cannot be recovered by reusing the same runtime. */
+export class GatewayRestartRequiredError extends AggregateError {
+  constructor(errors: unknown[], message: string) {
+    super(errors, message);
+    this.name = 'GatewayRestartRequiredError';
+  }
+}
+
 /**
  * Serializes a critical section. Callers queue; there is no OS thread pool.
  * Cancels queue waiting. Once fn starts, it owns cooperative cancellation and cleanup;

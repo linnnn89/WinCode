@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import { stripVTControlCharacters } from 'node:util';
 import { IAdapter, AdapterHealth, AdapterLastError } from './IAdapter.js';
 import { WinCodeConfig, getDefaultTimeouts } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';
@@ -208,7 +209,7 @@ export class RepomixAdapter implements IAdapter {
     // A disabled request must neither read a CLI snapshot nor join an enabled CLI pack.
     const allowCli = this.config.adapters.repomix.useCli;
     const policy = allowCli ? 'cli-enabled' : 'builtin-only';
-    const cacheKey = `repomix_pack_v4_${policy}_${this.config.adapters.repomix.customCliPath ?? ''}_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
+    const cacheKey = `repomix_pack_v5_${policy}_${this.config.adapters.repomix.customCliPath ?? ''}_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
     const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
 
     const cached = await this.cache.get<RepomixPackResult>(cacheKey, fingerprint);
@@ -304,12 +305,14 @@ export class RepomixAdapter implements IAdapter {
         cwd: root,
         windowsHide: true,
         shell: false,
-        stdio: ['ignore', 'ignore', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       this.trackProcess(proc);
 
       let stderr = '';
+      let stdout = '';
+      proc.stdout?.on('data', (d) => { stdout = (stdout + d.toString()).slice(-16384); });
       proc.stderr?.on('data', (d) => { stderr = (stderr + d.toString()).slice(-4096); });
 
       const packTimeoutMs = this.config.timeouts?.repomixPackMs ?? 30_000;
@@ -349,13 +352,17 @@ export class RepomixAdapter implements IAdapter {
             const content = await fs.readFile(tempOutputFile, 'utf-8');
             await fs.unlink(tempOutputFile).catch(() => {});
 
-            // Count files from content headers
-            const fileMatches = content.match(/File: |<file path=/g) || [];
-            const fileCount = fileMatches.length;
+            // Output bodies and format explanations can contain fake file headers.
+            // Use the CLI's separate count; an unsupported/missing summary falls
+            // back instead of inventing a nonzero count for an empty snapshot.
+            const counts = [...stripVTControlCharacters(stdout).matchAll(/^\s*Total Files: (\d+(?:,\d{3})*) files\s*$/gm)];
+            const fileCount = counts.length === 1 ? Number(counts[0][1].replaceAll(',', '')) : NaN;
+            if (!Number.isSafeInteger(fileCount) || fileCount < 0)
+              throw new Error('Repomix CLI did not provide a supported file-count summary.');
 
             resolve({
               content,
-              fileCount: fileCount || 1,
+              fileCount,
               totalCharacters: content.length,
               fromCache: false,
               source: 'repomix-cli',

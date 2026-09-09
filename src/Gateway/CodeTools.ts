@@ -1,6 +1,7 @@
 import { defineTool, jsonResult } from './ToolDefinition.js';
 import { contextResponse } from './ContextResponse.js';
 import { validateContextScope, type PreparedContextOptions } from '../Core/Context.js';
+import type { SymbolLocation } from '../Core/CodeQueries.js';
 
 export const CODE_TOOLS = [
   defineTool<PreparedContextOptions>({
@@ -79,7 +80,7 @@ export const CODE_TOOLS = [
   }),
   defineTool<{ query: string; kind?: string }>({
     name: 'wincode_find_code_symbol',
-    description: 'Locates code symbols with signatures and line numbers. Uses Serena when handshake and project activation succeed; otherwise local text scan. Result includes source, queryComplete, uniqueTypeMatch, and limitations.',
+    description: 'Locates code declarations with signatures and positions using the configured provider. Direct Roslyn returns snapshot-bound location objects for exact reference selection; old locations expire after edits/reloads/switches. Inspect source, queryComplete, truncation and limitations.',
     inputSchema: {
       type: 'object', additionalProperties: true,
       properties: {
@@ -97,9 +98,9 @@ export const CODE_TOOLS = [
   }, {
     execute: async (args, { router, signal }) => jsonResult(await router.findCodeSymbols(args.query, args.kind, signal), true),
   }),
-  defineTool<{ symbolName: string; relativePath?: string }>({
+  defineTool<{ symbolName: string; relativePath?: string; symbolLocation?: SymbolLocation }>({
     name: 'wincode_find_references',
-    description: 'Finds all call sites and usages of a specified symbol across the repository. Uses Serena semantic references when available; degrades to local text retrieval with explicit limitations annotation (text retrieval does not guarantee symbol identity or cross-file reference completeness).',
+    description: 'Queries references within the configured provider scope. For direct Roslyn pass a returned declaration location as symbolLocation and its name as symbolName; simple names return candidates without choosing a potentially ambiguous overload. Stale locations must be searched again. Zero or incomplete references do not imply safe deletion.',
     inputSchema: {
       type: 'object', additionalProperties: true,
       properties: {
@@ -111,15 +112,27 @@ export const CODE_TOOLS = [
           type: 'string',
           description: 'Defining file relative to the workspace. Pair it with the full namePath for precise references; omitted paths are resolved only from a complete unique semantic candidate.',
         },
+        symbolLocation: {
+          type: 'object', additionalProperties: true, required: ['snapshotId', 'project', 'file', 'position'],
+          properties: {
+            snapshotId: { type: 'string', pattern: '^[a-f0-9]{32}$' },
+            project: { type: 'string', minLength: 1, maxLength: 4096 },
+            file: { type: 'string', minLength: 1, maxLength: 4096 },
+            position: { type: 'integer', minimum: 0 },
+          },
+          description: 'Copy the location returned by the current Roslyn symbol search. project/file are workspace-relative; position is a zero-based UTF-16 offset. This is not a durable ID. Serena instances reject this field.',
+        },
       },
       required: ['symbolName'],
     },
   }, {
-    execute: async (args, { router, signal }) => jsonResult(await router.findCodeReferences(args.symbolName, args.relativePath, signal), true),
+    execute: async (args, { router, signal }) => jsonResult(await (args.symbolLocation ?
+      router.findCodeReferences(args.symbolName, args.relativePath, signal, args.symbolLocation) :
+      router.findCodeReferences(args.symbolName, args.relativePath, signal)), true),
   }),
   defineTool<{ target: string }>({
     name: 'analyze_change_impact',
-    description: 'Estimates change blast radius from uniquely resolved symbols. Confidence depends on unique resolution and query completeness, not on source=serena-mcp alone. Zero references yield UNKNOWN, never safe-to-delete.',
+    description: 'Estimates change blast radius from uniquely resolved symbols. Confidence depends on unique resolution and query completeness, not on provider alone. Zero or incomplete references yield UNKNOWN, never safe-to-delete.',
     inputSchema: {
       type: 'object', additionalProperties: true,
       properties: {

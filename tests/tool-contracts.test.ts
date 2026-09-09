@@ -205,7 +205,7 @@ it('rejects declared enum, range and nested type violations before admission', a
 it('validates directory and trash lexical scope before admission while preserving trash errors', async () => fixture(async (client, router, admissions) => {
   let calls = 0;
   router.listDirectory = async () => { calls++; return {} as any; };
-  router.moveToTrash = async () => { calls++; return { success: true, trashPath: '', message: '' }; };
+  router.moveToTrash = async () => { calls++; return { success: true, trashPath: '', message: '', outcome: 'completed' }; };
   for (const requested of ['../outside', 'src/../inside']) {
     const result = await client.callTool({ name: 'wincode_list_directory', arguments: { path: requested } });
     assert.equal(result.isError, true, requested);

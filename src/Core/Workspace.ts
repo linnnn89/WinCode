@@ -3,8 +3,25 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { WinCodeConfig } from './Config.js';
+import { randomUUID } from 'node:crypto';
 
 const execAsync = promisify(exec);
+
+export interface TrashMoveResult {
+  success: boolean;
+  trashPath: string;
+  message: string;
+  outcome: 'completed' | 'not_moved' | 'partial';
+  failureStage?: 'validation' | 'prepare' | 'move' | 'metadata';
+  errorCode?: 'TRASH_NOT_MOVED' | 'TRASH_METADATA_FAILED';
+  originalPath?: string;
+  metadataPath?: string;
+}
+
+export function invalidTrashResult(message: string): TrashMoveResult {
+  return { success: false, trashPath: '', message, outcome: 'not_moved',
+    failureStage: 'validation', errorCode: 'TRASH_NOT_MOVED' };
+}
 
 export interface ProjectIdentity {
   name: string;
@@ -940,45 +957,56 @@ export class WorkspaceManager {
    * Safe file deletion policy: Moves files to the project trash directory.
    * Only accepts non-empty relative paths strictly within the workspace.
    */
-  async moveToTrash(relativeFilePath: string, reason?: string): Promise<{ success: boolean; trashPath: string; message: string }> {
+  async moveToTrash(relativeFilePath: string, reason?: string): Promise<TrashMoveResult> {
     try { validateTrashPath(relativeFilePath, this.root, this.config.trashDir); }
     catch (error) {
-      return { success: false, trashPath: '', message: error instanceof Error ? error.message : String(error) };
+      return invalidTrashResult(error instanceof Error ? error.message : String(error));
     }
     const targetPath = path.resolve(this.root, relativeFilePath);
 
-    // 5. Realpath boundary check: resolve symlinks and Windows junctions to prevent escaping via links
-    const realRoot = await this.getRealPath(this.root);
-    const realTarget = await this.getRealPath(targetPath);
-    const realTrash = await this.getRealPath(this.config.trashDir);
-
-    if (!this.isPathInside(realRoot, realTarget)) {
-      return {
-        success: false,
-        trashPath: '',
-        message: `Failed to move file to trash: Target path "${relativeFilePath}" resolves outside the workspace via symlink or junction.`,
-      };
-    }
-
-    if (this.isPathInsideOrEqual(realTrash, realTarget)) {
-      return {
-        success: false,
-        trashPath: '',
-        message: 'Failed to move file to trash: Cannot move items from or within the trash directory.',
-      };
-    }
-
-    // All checks passed without side-effects -> proceed to file operations
-    await fs.mkdir(this.config.trashDir, { recursive: true });
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = path.basename(targetPath);
-    const trashFileName = `${timestamp}_${fileName}`;
-    const destinationPath = path.join(this.config.trashDir, trashFileName);
-
+    let failureStage: NonNullable<TrashMoveResult['failureStage']> = 'validation';
+    let destinationPath = '';
+    let moved = false;
     try {
-      await fs.rename(targetPath, destinationPath);
+      // Resolve symlinks and Windows junctions before any move.
+      const realRoot = await this.getRealPath(this.root);
+      const realTarget = await this.getRealPath(targetPath);
+      const realTrash = await this.getRealPath(this.config.trashDir);
 
+      if (!this.isPathInside(realRoot, realTarget)) {
+        return invalidTrashResult(`Failed to move file to trash: Target path "${relativeFilePath}" resolves outside the workspace via symlink or junction.`);
+      }
+
+      if (this.isPathInsideOrEqual(realTrash, realTarget)) {
+        return invalidTrashResult('Failed to move file to trash: Cannot move items from or within the trash directory.');
+      }
+
+      failureStage = 'prepare';
+      await fs.mkdir(this.config.trashDir, { recursive: true });
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = path.basename(targetPath);
+      const prefix = `${timestamp}_${randomUUID()}_`;
+      // Bound both the payload name and its metadata sibling. UTF-8 bytes also
+      // bound UTF-16 units on Windows; iterate code points to avoid splitting them.
+      const nameBudget = 255 - Buffer.byteLength(prefix + '.meta.json');
+      let displayName = '';
+      let nameBytes = 0;
+      for (const character of fileName) {
+        const bytes = Buffer.byteLength(character);
+        if (nameBytes + bytes > nameBudget) break;
+        displayName += character;
+        nameBytes += bytes;
+      }
+      displayName = displayName.replace(/[. ]+$/, '') || 'file';
+      const trashFileName = prefix + displayName;
+      destinationPath = path.join(this.config.trashDir, trashFileName);
+
+      failureStage = 'move';
+      await fs.rename(targetPath, destinationPath);
+      moved = true;
+
+      failureStage = 'metadata';
       const metaPath = path.join(this.config.trashDir, `${trashFileName}.meta.json`);
       await fs.writeFile(
         metaPath,
@@ -995,14 +1023,21 @@ export class WorkspaceManager {
 
       return {
         success: true,
+        outcome: 'completed', originalPath: targetPath, metadataPath: metaPath,
         trashPath: destinationPath,
         message: `File safely moved to trash: ${path.relative(this.root, destinationPath)}`,
       };
-    } catch (err: any) {
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
       return {
         success: false,
-        trashPath: destinationPath,
-        message: `Failed to move file to trash: ${err?.message || String(err)}`,
+        outcome: moved ? 'partial' : 'not_moved', failureStage,
+        errorCode: moved ? 'TRASH_METADATA_FAILED' : 'TRASH_NOT_MOVED',
+        originalPath: targetPath, trashPath: moved ? destinationPath : '',
+        ...(moved ? { metadataPath: `${destinationPath}.meta.json` } : {}),
+        message: moved
+          ? `File was moved to ${destinationPath}, but metadata was not completed: ${detail}. Preserve this path; do not retry the move or assume it was rolled back.`
+          : `Failed to move file to trash: ${detail}`,
       };
     }
   }

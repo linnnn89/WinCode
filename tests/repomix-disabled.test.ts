@@ -85,6 +85,7 @@ if (args.includes('--version')) { console.log('fixture-1'); process.exit(0); }
 fs.writeFileSync(path.join(process.cwd(), 'started.json'), JSON.stringify({pid:process.pid,args,cwd:process.cwd()}));
 if (args.includes('--compress')) { setInterval(() => {}, 1000); }
 else fs.writeFileSync(args[args.indexOf('-o') + 1], JSON.stringify({args,cwd:process.cwd()}));
+console.log('  Total Files: 1 files');
 `);
   try { await run(adapter, config, root); }
   finally {
@@ -117,6 +118,31 @@ it('discovers installed package bin metadata without invoking npm or PATH wrappe
   delete config.adapters.repomix.customCliPath;
   await adapter.initialize();
   assert.equal((await adapter.packWorkspace()).source, 'repomix-cli');
+}));
+
+for (const count of [0, 2, 1234]) {
+  it(`CLI summary reports ${count} files independently of body headers`, async () => realCliFixture(async (adapter, config) => {
+    await fs.writeFile(config.adapters.repomix.customCliPath!, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('fixture-1'); process.exit(0); }
+fs.writeFileSync(args[args.indexOf('-o') + 1], 'File: fake\\n## File: fake\\n<file path="fake">');
+console.log('  Total Files: ${count.toLocaleString('en-US')} files');
+`);
+    await adapter.initialize();
+    const result = await adapter.packWorkspace();
+    assert.equal(result.source, 'repomix-cli');
+    assert.equal(result.fileCount, count);
+  }));
+}
+
+it('missing CLI count degrades instead of inventing a packed file', async () => realCliFixture(async (adapter, config) => {
+  const script = await fs.readFile(config.adapters.repomix.customCliPath!, 'utf8');
+  await fs.writeFile(config.adapters.repomix.customCliPath!, script.replace("console.log('  Total Files: 1 files');", ''));
+  await adapter.initialize();
+  const result = await adapter.packWorkspace();
+  assert.equal(result.source, 'builtin-fallback');
+  assert.match(adapter.lastError?.message ?? '', /file-count summary/);
 }));
 
 for (const invalid of ['missing.cjs', 'wrapper.cmd', 'relative.cjs']) {

@@ -5,6 +5,7 @@ import { SerenaAdapter } from '../src/Adapters/SerenaAdapter.js';
 import { CacheManager } from '../src/Core/Cache.js';
 import { getDefaultConfig } from '../src/Core/Config.js';
 import { killProcessTree } from '../src/Core/ResourceManager.js';
+import { ToolRouter } from '../src/Core/ToolRouter.js';
 
 // Explicit opt-in: use an already installed, isolated Serena command. Never install prerequisites here.
 const [command, ...prefixArgs] = process.argv.slice(2);
@@ -118,6 +119,51 @@ try {
     assert.equal(found.source, 'serena-adapter-fallback'); assert.equal(found.queryComplete, false);
     assert.equal(inactive.getUpstreamStatus().projectActive, false);
     return { found, health: inactive.getUpstreamStatus() };
+  });
+  await stage('real Router A-B-A switches rebind upstream and cached query evidence', async () => {
+    const workspaces = [path.join(root, 'switch-a'), path.join(root, 'switch-b')];
+    for (const [index, directory] of workspaces.entries()) {
+      await fs.mkdir(path.join(directory, '.serena'), { recursive: true });
+      await fs.copyFile('global.json', path.join(directory, 'global.json'));
+      await fs.writeFile(path.join(directory, '.serena/project.yml'), `project_name: switch-${index}\nlanguage_servers: [csharp]\nread_only: true\n`);
+      await fs.writeFile(path.join(directory, 'Fixture.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>');
+      await fs.writeFile(path.join(directory, `Unique${index}.cs`), 'public class Marker {}\n' +
+        [0, 1, 2].map(round => `public class Probe${round} {}\n`).join(''));
+    }
+    const routeConfig = getDefaultConfig(workspaces[0]);
+    routeConfig.adapters.serena.customCommand = command;
+    routeConfig.adapters.serena.customArgs = [...prefixArgs, 'start-mcp-server', '--project-from-cwd',
+      '--enable-web-dashboard', 'false', '--open-web-dashboard', 'false', '--enable-gui-log-window', 'false', '--log-level', 'WARNING'];
+    routeConfig.adapters.flaui.enabled = false;
+    routeConfig.adapters.repomix.useCli = false;
+    const router = new ToolRouter(routeConfig);
+    const results = [], ownedPids: number[] = [];
+    try {
+      await router.initialize();
+      for (const [round, index] of [0, 1, 0].entries()) {
+        await router.openWorkspace(workspaces[index]);
+        await router.acquireRequestSlot();
+        try {
+          const result = await router.findCodeSymbols('Marker');
+          // Returning to A may legitimately reuse A's cache without a process.
+          // A fresh query additionally proves that the new connection binds A.
+          const fresh = await router.findCodeSymbols(`Probe${round}`);
+          const pid = (router.serena as any).serenaPid as number;
+          if (pid && !ownedPids.includes(pid)) ownedPids.push(pid);
+          assert.equal(result.source, 'serena-mcp'); assert.equal(result.queryComplete, true);
+          assert.deepEqual(result.symbols.map(symbol => [symbol.name, symbol.file]), [['Marker', `Unique${index}.cs`]]);
+          assert.equal(fresh.source, 'serena-mcp'); assert.equal(fresh.queryComplete, true);
+          assert.deepEqual(fresh.symbols.map(symbol => [symbol.name, symbol.file]), [[`Probe${round}`, `Unique${index}.cs`]]);
+          assert.equal(router.workspaceRecoveryState, null);
+          results.push({ workspace: workspaces[index], pid, result, fresh });
+        } finally { router.endRequest(); }
+      }
+      assert.equal(ownedPids.length, 3);
+      return { results, ownedPids };
+    } finally {
+      await router.dispose();
+      for (const pid of ownedPids) assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    }
   });
   assert.equal(await fs.readFile(path.join(root, 'Service.cs'), 'utf8'), source);
   report.passed = true;

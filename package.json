@@ -12,12 +12,16 @@
     "build": "node scripts/build.mjs",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts --development",
-    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts tests/agent-efficiency-benchmark.test.ts tests/workspace-summary.test.ts tests/runtime-identity.test.ts tests/runtime-contract.test.ts tests/context-coverage.test.ts tests/serena-identity.test.ts tests/ui-code-candidates.test.ts tests/skill-sync.test.ts tests/serena-fallback.test.ts tests/repomix-disabled.test.ts tests/workspace-watch-close.test.ts tests/workspace-lifecycle.test.ts tests/tool-contracts.test.ts tests/architecture-boundaries.test.ts tests/lifecycle-cancellation.test.ts tests/delivery-contract.test.ts",
+    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts tests/agent-efficiency-benchmark.test.ts tests/workspace-summary.test.ts tests/runtime-identity.test.ts tests/runtime-contract.test.ts tests/context-coverage.test.ts tests/serena-identity.test.ts tests/ui-code-candidates.test.ts tests/skill-sync.test.ts tests/serena-fallback.test.ts tests/repomix-disabled.test.ts tests/workspace-watch-close.test.ts tests/workspace-lifecycle.test.ts tests/failure-recovery.test.ts tests/tool-contracts.test.ts tests/architecture-boundaries.test.ts tests/lifecycle-cancellation.test.ts tests/delivery-contract.test.ts tests/roslyn-contracts.test.ts",
     "test:verify": "tsx tests/verify.ts",
     "benchmark:agent": "tsx scripts/benchmark-agent-efficiency.ts",
     "test:benchmark": "tsx --test tests/agent-efficiency-benchmark.test.ts",
     "test:product": "tsx scripts/verify-product-tasks.ts",
     "test:serena-real": "tsx scripts/verify-serena-real.ts",
+    "test:repomix-real": "tsx scripts/verify-repomix-real.ts",
+    "test:mixed-load": "tsx scripts/verify-mixed-load.ts",
+    "test:error-contracts": "tsx scripts/verify-error-contracts.ts",
+    "test:roslyn-host": "node scripts/verify-roslyn-host.mjs",
     "test:tavern-context": "tsx scripts/verify-tavern-context.ts",
     "test:e2e": "tsx scripts/test-mcp-client.ts",
     "typecheck": "tsc -p tsconfig.test.json",
@@ -26,7 +30,8 @@
     "test:ui-query": "tsx scripts/verify-ui-query.ts",
     "test:ui-code": "tsx --test tests/ui-code-runtime.test.ts",
     "skill:check": "node scripts/sync-skill.mjs",
-    "skill:sync": "node scripts/sync-skill.mjs --apply"
+    "skill:sync": "node scripts/sync-skill.mjs --apply",
+    "test:roslyn-gateway": "node scripts/verify-roslyn-gateway.mjs"
   },
   "keywords": [
     "mcp",

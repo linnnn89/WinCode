@@ -1,5 +1,5 @@
 import { defineTool, jsonResult } from './ToolDefinition.js';
-import { validateWorkspaceDirectoryOptions, validateTrashPath, type WorkspaceOpenOptions, type WorkspaceDirectoryOptions } from '../Core/Workspace.js';
+import { validateWorkspaceDirectoryOptions, validateTrashPath, invalidTrashResult, type WorkspaceOpenOptions, type WorkspaceDirectoryOptions } from '../Core/Workspace.js';
 import { RUNTIME_IDENTITY } from '../Core/RuntimeIdentity.js';
 import { WINCODE_VERSION } from '../Core/Config.js';
 import { contractHash } from './ContractHash.js';
@@ -63,6 +63,7 @@ export const WORKSPACE_TOOLS = [
       },
     },
   }, {
+    allowDuringWorkspaceRecovery: true,
     validate: (args, context) => {
       if (args.toolName !== undefined && !context.tools.some(tool => tool.name === args.toolName))
         throw new Error(`Tool is not registered in this instance: ${args.toolName}`);
@@ -77,7 +78,9 @@ export const WORKSPACE_TOOLS = [
           ...(selectedTool ? { tool: { name: selectedTool.name, inputSchema: selectedTool.inputSchema,
             schemaHash: contractHash(selectedTool.inputSchema) } } : {}) },
         platform: process.platform, workspace: router.config.workspaceRoot, timestamp: new Date().toISOString(), health,
+        codeProvider: health.codeProvider,
         adapters: {
+          ...(health.roslyn ? { roslyn: health.roslyn } : {}),
           serena: { available: true, source: health.serena.handshakeOk ? 'installed' : 'fallback',
             details: `commandFound=${health.serena.commandFound}; handshakeOk=${health.serena.handshakeOk}; projectActive=${health.serena.projectActive === null ? 'unprobed' : health.serena.projectActive}; semanticQueryUsable=${health.serena.semanticQueryUsable}; mode=${health.serena.mode}`,
             upstream: { commandFound: health.serena.commandFound, handshakeOk: health.serena.handshakeOk,
@@ -105,7 +108,7 @@ export const WORKSPACE_TOOLS = [
   }),
   defineTool<Record<string, never>>({
     name: 'wincode_diagnose_project',
-    description: 'Diagnoses project health, Windows/.NET SDK readiness, solution files, Serena/Repomix status, and a lightweight runtime snapshot (uptime, cache, child processes). dotnet --version is not semantic analysis.',
+    description: 'Diagnoses project health, Windows/.NET SDK readiness, solution files, configured code provider/Repomix status, and a lightweight runtime snapshot. dotnet --version or a live Host does not prove complete semantic evidence.',
     inputSchema: {
       type: 'object', additionalProperties: true,
       properties: {},
@@ -131,7 +134,7 @@ export const WORKSPACE_TOOLS = [
       required: ['filePath'],
     },
   }, {
-    invalidArguments: message => jsonResult({ success: false, trashPath: '', message }, true, true),
+    invalidArguments: message => jsonResult(invalidTrashResult(message), true, true),
     validate: (args, { router }) => validateTrashPath(args.filePath, router.config.workspaceRoot, router.config.trashDir),
     execute: async (args, { router }) => {
       const result = await router.moveToTrash(args.filePath, args.reason);

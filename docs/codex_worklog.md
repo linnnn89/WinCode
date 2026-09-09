@@ -527,3 +527,140 @@
 
 - 用户要求上传至 linnnn89/WinCode；沿用既有 PR、必需检查通过后合并流程。本次仅提交当前九份 Markdown 变更，不变更软件版本或运行环境。
 - 上传前确认 origin 地址正确、本地 main 与 origin/main 一致、无其他打开的 PR，git diff --check 通过。实际远端检查及合并结果以该 PR 回执为准。
+
+## 2026-09-09 09:57 — 拉取最新版与架构建议计划对照（北京时间）
+
+- 用户要求拉取 linnnn89/WinCode 最新仓库并根据“架构分析优化建议”总结下一步计划。确认精确根目录 D:/CODEX PROJECT/WinCode MCP、origin 地址和干净 main 后，执行 git pull --ff-only，从 580e75a 更新至 bbc20ffe99d34842bc68aac213d5fe6989327118（0.12.5）；HEAD 与 origin/main 差异计数 0/0。
+- 读取引用对话的两轮完整问答，对照 Registry、CI、代码证据、项目图/影响分析、UI 源码候选、缓存 watcher 和既有 E1–E4 计划。发现多项建议已有基础实现，更新既有计划书的核对基线并增补差距表、执行顺序、验收与待决范围。
+- 建议先做 E1–E3 可靠性验证，再通过 E4 渐进整理契约，之后验证有限语义关系与更深 UI 候选链；增量索引按性能证据决定。明确候选映射不等于运行时绑定、引用不等于调用图，未把历史测试数字作为本轮结果。
+- 本轮仅同步仓库和整理计划；没有修改生产代码、安装依赖、运行构建/回归、控制目标应用、重连客户端或推送远端。计划实施和重要路线仍待后续授权。
+
+## 2026-09-09 — 启动 E1/E2 故障注入，依赖同步待确认（北京时间）
+
+- 用户要求开始进行。新增 scripts/verify-failure-recovery.ts，设计 11 个工作区切换阶段/取消用例及 2 个 trash 失败用例；禁用外部适配器，使用 test-tmp 下唯一生成目录，记录根、会话、watcher、请求准入与文件实际位置，不将缺陷行为固化为通过的回归断言。
+- 实际执行 node node_modules/tsx/dist/cli.mjs scripts/verify-failure-recovery.ts，在模块导入阶段因 ERR_MODULE_NOT_FOUND: @modelcontextprotocol/client 退出；13 个用例均未执行，未复现或修复任何故障。Node 实测 v24.19.0；已有 node_modules 不满足拉取后的 0.12.5 依赖。
+- 锁文件为 v3，含 46 个包条目（包括平台可选包），核心 client/server 均为 2.0.0；安装脚本标记出现在 esbuild/fsevents。建议在项目根执行 npm ci --no-audit --no-fund，同步锁定依赖；需要网络及本地 node_modules 重建，实际下载量未核实，不涉及全局安装。
+- USER_DECISION_REQUIRED：用户协作契约第四节要求安装依赖事先确认，本次开始实施不明确包含依赖同步；先请求上述操作授权。生产代码未变更，故障脚本运行验证未完成；git diff --check 通过。
+
+## 2026-09-09 10:22 — E1/E2 修复及 E3 小样本（北京时间）
+
+- 用户授权项目内重建依赖；npm ci --no-audit --no-fund 成功安装 20 个当前平台适用包。npm 提示 esbuild postinstall 未获 allowScripts 授权，本轮未修改其脚本授权；现有平台包足以执行 tsx 和编译。package-lock.json 未变更。
+- 修复前故障报告 test-tmp/failure-recovery/run-MaSxLX/report.json：13 个用例、15 条症状记录（不是 15 个独立缺陷）。用户随后明确选择：变更前失败保留旧根，变更后失败阻止业务请求、重新打开恢复；trash 部分完成保留实际位置，不自动移回，并保留旧响应字段。
+- ToolRouter 记录恢复状态，覆盖根准备后的取消和各绑定阶段失败；MCP 返回 WORKSPACE_RECOVERY_REQUIRED，hello 被动可读，同根重新打开也完整初始化，恢复失败保持阻止。Workspace 返回 completed/not_moved/partial 与失败阶段，目录准备/移动失败不声称已有目标；元数据失败保留实际路径。同名文件加入 UUID 避免同时间戳目的路径碰撞，不实施自动回滚。
+- 新增 tests/failure-recovery.test.ts 并纳入 npm test 清单；更新仓内代码/诊断手册、既有计划与路线图，未同步全局 Skill 或重连客户端。13 个原故障用例修复后报告零问题（test-tmp/failure-recovery/run-zRs9nX/report.json）。回归测试首次 8 项失败来自错误预期 resetConnection 只调用一次；核对 Serena.initialize 会 dispose/reset 后，修正为现有两次调用事实，未改变生产生命周期。随后 37 项针对性测试通过；增补同名碰撞测试后的故障恢复与 Skill 测试 16/16 通过，最终 typecheck 通过。
+- scripts/verify-mixed-load.ts 小样本：test-tmp/mixed-load/run-cE5x6P/report.json；80 次记录的 Core 操作、10 轮、10 个真实 Node 模拟上游进程，963 ms，结束时无自有子进程残留。未发现被断言检查的跨根证据/占用泄漏；RSS 134→137 MiB、heapUsed 34→42 MiB，未观察稳定平台，不宣称无内存泄漏。真实 Serena/Repomix、Windows 句柄和子进程 RSS 未覆盖。
+- npm run check 实际通过 typecheck、build-gateway，restore-host 因 SDK 10.0.303 缺失退出；报告 test-tmp/check/2026-09-09T02-18-41-301Z-core/report.json。未修改 global.json，本机已装 10.0.302。生产 stdio 实测通过（15 工具、契约及构建身份一致），不代表 Codex 当前连接或 UI Host 已更新。
+- 全量 npm test 实际为 327 项、324 通过、3 失败（日志 test-tmp/recovery-regression-20260909-101859.log；此时尚未添加最后的同名碰撞用例）。两项 C# 夹具明确受 SDK 缺失阻塞；FlaUI 缓存健康测试依赖 Release Host 的路径解析，当前产物缺失，断言 available=true 失败。保留失败，不跳过或弱化测试。E1/E2 生产代码已实现，但完整交付关口尚未通过。
+- USER_DECISION_REQUIRED：为完成交付检查，已询问是否可在项目内隔离安装锁定 SDK 10.0.303 并恢复 NuGet 依赖；等待答复。没有全局环境修改、版本发布、Git 提交/推送或远端变更。E4 其余契约统一及语义/UI 深化仍未实施。
+
+## 2026-09-09 10:34 — 项目隔离 SDK 与核心交付关口完成（北京时间）
+
+- 用户明确授权项目内隔离安装 SDK 10.0.303 并恢复锁定 NuGet 依赖。先按 [微软安装脚本文档](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-install-script) 获取官方脚本，指定版本、x64、项目 .deps/dotnet-10.0.303 和 NoPath；脚本长时间未进入可观察的下载阶段，停止该自有安装进程，未反复重试。
+- 官方 releases.json 确认 ZIP 地址 https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.303/dotnet-sdk-10.0.303-win-x64.zip。使用 curl 有界下载 297570534 字节，SHA-512 与官方元数据一致：ad4ef6202e55babde1c65e1be7b468c3ecb738ccc2fb8bd3c2bb408a4f45d247c8c5a5f57fedc54ebee7cb5fc4f487772997f2d053010d2e1903b974cc64216d；解压至同一项目目录，dotnet --version 实测 10.0.303。
+- 验证子进程环境：DOTNET_ROOT/DOTNET_ROOT_X64 指向项目 .deps/dotnet-10.0.303，PATH 仅在当前 PowerShell 子进程前置该目录；DOTNET_CLI_HOME、NUGET_PACKAGES、NUGET_HTTP_CACHE_PATH 分别指向项目 .deps/dotnet-cli-home、.deps/nuget-packages、.deps/nuget-http-cache。设置 CLI 遥测退出、关闭 ASP.NET 证书生成与全局工具 PATH 添加；未修改系统 SDK、持久 PATH、global.json 或包锁文件。
+- 执行 node scripts/check.mjs（npm run check 的实际入口），12 个阶段全部通过：typecheck、Gateway 编译、3 项 locked restore、Host publish、2 项夹具 build、核心回归、生产 stdio、交付清单生成及校验。报告 test-tmp/check/2026-09-09T02-32-50-227Z-core/report.json；328 tests / 328 pass / 0 fail / 0 skipped，耗时约 60 秒。此前 3 项环境相关失败均消失。
+- 交付清单 matched=true，contentId=d70c6fe34050340486b82b79a2c8a232e4d0f8e54818cf5e18e1b25ebe77b35e。更新既有计划与路线图，E1/E2 标记本地核心交付验收完成；E3 真实上游/更长采样、E4 其余契约及语义/UI 方向仍待后续工作。
+- 本轮未修改生产代码或测试，未运行不相关的真实桌面闭环、全局 Skill 部署、客户端重连、远端 CI 或 Git 提交/推送。普通新终端仍默认使用系统 SDK；重跑检查须在其子进程中使用上述项目 SDK 环境。git diff --check 通过；核心验收不等同真实桌面、上游兼容性或长时间稳定性证明。
+
+## 2026-09-09 10:54 — 复核问题获准修复与完整复验（北京时间）
+
+- 用户先要求只读复核，再明确“同意修复”。隔离复核报告 test-tmp/review-d92e747f05e04a0e8ca7d17bd66db159/observations.json 证明：内部 client.close 一次失败后，3 次 workspace_open 均失败且 close 只执行一次；190 字符文件名移动后元数据失败、200 字符无法移动，旧命名均成功；底层 fs.watch 创建失败仍曾允许切换提交。复核阶段未修改生产代码。
+- 获准后新增 GatewayRestartRequiredError 表达被保留、无法在原实例恢复的清理失败。Serena 内部关闭失败及 watcher 关闭失败返回 restart_gateway；ToolRouter 对永久状态直接拒绝重复 workspace_open，保留原会话与失败信息。提示用户先检查 Gateway 自有资源清理后按客户端正常流程重启；未自动重启、清除失败记录或终止目标应用。一般绑定失败仍允许重新打开恢复。
+- bindWatch 及切换提交前检查实际 watcher 绑定；原生创建失败和初始化期间异步 watcher 错误均进入恢复状态。原 watcher 关闭失败与创建失败分别测试，不以替换整个 bindWatch/resetConnection 代替底层异常验证。
+- trash 保留 UUID 防碰撞，展示用 basename 按完整 Unicode 码点及 UTF-8 字节预算截短，为 .meta.json 预留空间；去掉截短后尾部点/空格，完整原路径继续保存在响应与元数据。测试覆盖 183、184、190、193、194、200、220、255 字符 ASCII、中文及 emoji，逐项验证正文、元数据和源文件位置。
+- 改写 verify-mixed-load.ts：在真实自有 Node 模拟上游 RPC 已开始后发起切换，用受控调度确认旧根与请求占用，再触发运行中取消或观察上游退出。5 轮取消、5 轮退出，共 70 次 Core 操作、10 个自有进程、1934 ms，全部交错断言通过且无自有进程残留。报告 test-tmp/mixed-load/run-ftSuQB/report.json；只证明受控交错，不宣称耐久性、真实 Serena/Repomix 兼容或无内存泄漏。
+- 针对性恢复/watcher 测试 23/23，typecheck 通过。第一次完整检查 test-tmp/check/2026-09-09T02-52-33-897Z-core/report.json 为 333 项中 332 通过、1 失败：stage1-cleanup 的关闭时序夹具把 bindWatch 置空，不符合新增实际绑定校验。移除空 mock、使用隔离目录真实 watcher，保持原时序/拒绝/清理断言；该文件 11/11 通过，未弱化生产检查。
+- 最终完整检查 test-tmp/check/2026-09-09T02-54-08-398Z-core/report.json：333/333、0 失败/0 跳过，生产 stdio、锁定构建和交付清单均通过。contentId=0b2dd10f93c67daee51a764429d7c9d30028c113b0f31d22a162f87471c91bbb，matched=true。沿用项目隔离 SDK/缓存环境，未增加依赖或修改版本锁。
+- 更新仓内代码/诊断手册及现有计划、路线图，未部署全局 Skill、重连客户端、提交/推送或运行真实桌面检查。E1/E2 复核补修完成；E3 真实上游与长期趋势、E4 其余统一契约及语义/UI 深化仍属后续工作。git diff --check 通过。
+
+## 2026-09-09 11:20 — E3 环境与真实验收、E4 盘点（北京时间）
+
+- 用户要求继续完成待办，随后明确“补齐环境”。保留现有架构与 E3 100 次/5 分钟预算；没有启动新架构、独立 Agent 或长期压力服务。E4 涉及公共字段，先完成 10 个响应样例和兼容方案，再通过问题请求确认，当前仍待答复。
+- verify-mixed-load 增加可选间隔、指定自有 PID 的 Windows Get-Process 句柄/工作集/私有字节采样及逐轮进度。实际 70 次 Core 操作、10 轮、97235 ms，报告 test-tmp/mixed-load/run-NUo0VL/report.json；采样全部可用、无缺失 PID，每轮结束句柄 234，dispose 后 233，无自有上游残留。工作集前两轮从约 119.8 降至 107.2 MiB，第 2–9 轮约 103.4→105.2 MiB；小幅增长不能判为泄漏，也不能证明长期平台。自有子进程工作集约 53.9–56.4 MiB，采样进程同步结束；不是持续高负载或峰值 RSS。
+- 隔离安装：uv 复用已有工具，下载 Python 3.13.15 到 .deps/python；Serena v1.7.0 tag 与 commit 949a27ef1e5fda1a6e7b561e777bcece345c6ffd 一致，uv sync --frozen --no-dev --no-editable 安装 75 包到 .deps/serena-venv，缓存 .deps/uv-cache。Repomix 1.18.0 使用项目子目录 npm install --save-exact --ignore-scripts --no-audit --no-fund，171 包；真实压缩验证证明本次不需要执行安装脚本。两个依赖锁及版本/目录大小回执在 .deps/environment-receipt-20260909.json；主 package-lock、global.json 未改。
+- 首次 Serena 直接 exe 连接后查询 15 秒超时，报告 test-tmp/serena-acceptance/1788923155570-17692/report.json。查明 SDK 子进程默认白名单不传 SERENA_HOME/DOTNET_CLI_HOME 等；上游在用户目录新建 .serena。新增 scripts/serena-isolated-launcher.py，在导入前明确设置项目路径；只改变测试启动环境，不扩大全局环境继承或生产公共接口。根据上游日志“configuration file not found, autogenerating”、全部文件的创建时间与精确两文件清单核对，将本次 .serena 归档 .deps/serena-first-attempt；确认用户目录路径不再存在。未删除或覆盖用户已有配置。
+- 通过该启动器执行 project index 预热专用生成 C# 项目。Serena 使用其固定 Roslyn 5.5.0-2.26078.4 和 SHA-256 校验下载；预热成功。后续测试保留生产默认超时，没有为通过验收加大超时。新组件加缓存逻辑文件大小 751061663 字节，约 716 MiB（包括可能重复计数的硬链接，不是物理磁盘占用；不含此前 SDK/NuGet）。
+- 真实 Serena 原 7 项通过后增补 Router A→B→A。初版用 Marker 查询 Marker0 时命中文件节点，改为不同文件中的同名精确类；下一版把回到 A 的合法缓存命中错误地要求产生第 3 个进程，改为同时检查重复查询及每轮新的 Probe 查询，保留跨根文件名断言并确实触发 3 次连接。最终 8/8 通过，报告 test-tmp/serena-acceptance/1788923903497-28124/report.json；自有 PID 均退出。
+- 新增 verify-repomix-real。首个生成根受到父仓 test-tmp 的 Git ignore 影响导致空包，增加独立 git init 后确认两个文件确实打包；发现生产使用 /File: |<file path=/ 把摘要说明也算入文件，导致 0→1、2→3。修复为有界排空 stdout、从独立 CLI 摘要取总数；无受支持摘要时显式降级，不再使用 fileCount||1。缓存键 v4→v5 防止复用错误计数。新增 0/2/1234、正文伪标题、缺失摘要回归；Repomix 套件 19/19、typecheck 通过。
+- Repomix 验收补正两处夹具：文件改动后等待实际 WorkspaceWatch 失效（单独 Adapter 没有 Router watcher），取消后等待 ChildProcess close 通知再核对退出（系统终止回执可能先于 Node close 事件）。未放宽计数、内容或清理断言。最终 10/10：Markdown/XML/plain、真实 Tree-sitter 压缩、空包、缓存、候选、取消/超时与清理；报告 test-tmp/repomix-acceptance/中文 & (real)-hCTcgs/report.json。命令 test:repomix-real/test:mixed-load/test:error-contracts 纳入 package.json，均显式 opt-in，不自动安装。
+- E4 盘点报告 test-tmp/error-contracts/run-0L5l8H/report.json：10 场景通过；未知工具/代码范围/普通异常还是纯文本，UI 与执行中取消有 errorCode，关闭前拒绝使用旧 reason 形状，歧义和预算/降级为有边界证据。计划书列出映射、例子与建议：仅失败增加 structuredContent，保留旧 content 和成功字段；不从错误文字猜测类型、不把部分证据统一变成失败。USER_DECISION_REQUIRED 已提交，未擅自改公共响应。
+- 核心检查 test-tmp/check/2026-09-09T03-16-01-647Z-core/report.json 337/337、0 跳过、生产 stdio 通过；随后 Skill 计数说明变更使旧交付指纹失配，属正确检查，正在冻结文档后刷新完整交付。未运行无关真实桌面、全局 Skill 部署、客户端重连、Git 提交/推送。E3 按原有有界验收完成，未授权的耐久/语义图/UI 研究不升级为本轮必做缺项。
+- 最终完整交付报告 test-tmp/check/2026-09-09T03-21-13-851Z-core/report.json：12 阶段全部成功，337/337、0 失败/0 跳过，生产 stdio 与交付清单通过；buildId=3eab83432c39697dab8aa5a7e3ab5cfc7ccf690c7467cb110b22e39736c4803e。按专用命令/路径筛查 Python/Node/Roslyn 未发现本次上游残留，用户 .serena 路径保持不存在。git diff --check 通过。反证自审：正文伪标题不能影响计数；回到旧根复用其自身缓存合法，另以新查询验证实际重连，不能单凭进程数认定污染。仍是作者自审，未宣称独立审核；E4 公共字段确认仍待用户决定。
+
+## 2026-09-09 — 直接 Roslyn 集成设计与 E4 利弊说明（北京时间）
+
+- 用户确认开始设计绕过 Serena 的直接 Roslyn 集成，并要求详细解释此前 E4 兼容方向。本轮只读核对生产调用链后更新既有计划书；没有新增生产依赖、实现 Host、切换提供方或清理已安装上游。当前主分支/未提交实现保持原状。
+- 发现已有 CodeQueries 接口可复用，但 source、namePath/重载序号、ImpactAnalyzer 来源判断和健康/生命周期仍耦合 Serena。建议同一产品内自有 WinCode.Code.Host + Roslyn 库，Gateway 通过内部 stdio 调用；不添加另一款用户注册的 MCP。对比复用现有一次请求 UIA Host、独立自有语义 Host、Node/.NET 桥接，提出生命周期隔离的具体理由和构建交付成本。
+- 设计首版 C# SDK 项目、显式单配置/TFM、声明/引用/消歧和有边界的影响证据。记录目标 SDK/依赖前置条件、设计时 MSBuild 求值的信任边界、源生成器/根外文件限制、快照身份与失效、取消/切换清理、无 Serena 环境验收、公共 source/ID 迁移。新增依赖精确版本与资源大小在原型阶段验证，未用语言服务器版本冒充 Roslyn 库版本，未把设计稿写成已完成能力。
+- 官方核对：Roslyn SymbolFinder 接受符号、Solution 和取消信号；微软项目系统说明设计时构建运行附加 targets 并按 TFM/配置分别取值；MSBuild Locator 的 .NET 与 .NET Framework 发现范围不同。相关链接放在计划书对应段落。未调用实际用户项目的设计时构建，也未运行目标应用。
+- E4 对比三种文本/结构化迁移策略。纠正此前“附加字段即可完全兼容”的潜在过度承诺：MCP 建议同时保留结构化 JSON 文本镜像，客户端只读 content 时看不到新增侧字段，严格字段/数组长度校验也可能受影响；字段多一份还需维护一致性与实际模型可见性。建议首批省略含义容易混淆的统一 retryable=false，取消采用检查状态优先；未知工具协议行为暂不混改，成功/歧义/预算结果保持现有语义。
+- 反证自审：即使 Roslyn API 查询返回零引用，缺少项目/生成文档或动态调用仍不能推断无影响；即使 SDK 接受 structuredContent，也不能推断当前 Codex 模型能读取它。本轮未跑代码测试；只做 Markdown 结构、链接和 git diff 检查，不把此前 337 项通过算成本轮重新执行。Roslyn 的具体加载/迁移策略及修订 E4 字段仍是待决事项，不重复询问已明确的直接集成总方向。
+- 文档检查：两份计划的本地链接/代码围栏通过，git diff --check 通过。历史工作日志有 3 个指向本地未携带 test-tmp 回执的链接（1788793544719-3736、1788794274918-25708、tavern-host-acceptance-20260908），已在 HEAD 历史内容中确认存在；没有伪造补回执或改写历史证据。新增设计段落未引入失效本地链接。
+
+## 2026-09-09 — 社区实践与第一性原理复核（北京时间）
+
+- 用户要求复核直接 Roslyn 与 E4 建议并参考优秀网友经验。本轮以当前工作树、微软文档、csharp-ls、RoslynMcp 作者实测/设计记录、MCP SDK 问题及修复为依据；链接与适用边界增订在既有计划书末尾。社区经验不当作共识，未借用其他项目的性能数字承诺 WinCode 收益。
+- 保留自有 Code Host 直接调用 Roslyn 库的方向；收缩首个验证为隔离两项目、单配置的加载/消歧/跨项目引用闭环，先证明主要不确定性，再定公共身份参数和接入。借鉴语义精度与文本广度互补的经验，不要求全部简单查询加载完整工作区，不照搬仍在设计中的多客户端守护服务。
+- 当前代码复核发现 WorkspaceWatch 忽略 obj/bin，默认 150 ms 防抖后才通知；与前案要求 assets 变更重载不一致。新增文件的引用会使“只校验返回文件”遗漏反证。记录了立即标记待更新、按加载输入失效和新增/删除文件集合的验收要求；这是未实现设计的缺口，不报告为已复现的 Roslyn 生产故障。
+- E4 将“保留旧文本 + structuredContent”从默认建议改为有实际旧消费者需求时的过渡。推荐终态是单一错误对象生成 JSON 文本及可选结构化副本；优先稳定错误码、可读原因和已知恢复动作，保留部分完成/实际位置。仓内未见已知工具依赖旧错误前缀的消费分支，但未知工具有文本断言，外部客户端需求仍未知，未擅自迁移契约。
+- 已运行项目现有 client/server 2.0.0 的隔离 InMemoryTransport 探针：正常成功通过，缺少或不匹配成功 structuredContent 被拒，isError=true 的两种错误均原样到达，JSON 文本与结构化对象相等；5/5 通过。[脚本](../test-tmp/review-20260909/e4-sdk-output-schema.mjs)及[回执](../test-tmp/review-20260909/e4-sdk-output-schema-report.json)。因此撤回“必须先有全工具成功/失败联合 schema”的过强推断，保留“失败专用 schema 不能代表成功输出”的判断。只覆盖项目所用低层 Server/Client，不代表高层服务器或 Codex 展示已验收。
+- 反证自审：不可变 Solution 不等于实时磁盘快照；准确返回一个方法也不等于完整理解任务；收到错误码不等于可安全原样重试。现有 E1/E2 决策继续保留。此为作者复核及公开来源对照，不冒充独立模型审查。
+- 本轮只更新既有计划/路线图/工作日志，生成本地隔离探针和回执；未改生产实现、安装依赖、执行真实项目设计时构建、推送或重连。旧回归 337/337 未重跑，不算本轮验证；具体项目执行政策、公共身份/source、E4 文本兼容仍为 USER_DECISION_REQUIRED。
+- 文档验证：3 份 Markdown 代码围栏平衡；新增复核段及路线图共 9 个本地链接均存在，git diff --check 通过。没有重新校验或补造历史工作日志中之前记录的缺失回执。
+
+## 2026-09-09 12:18 — 直接 Roslyn Host 第一阶段实现（北京时间）
+
+- 用户同意按复核方向开始；本阶段只实现已提出的两项目、单配置原型。新增 tools/WinCode.Code.Host/Program.cs、csproj、NuGet 锁，以及 scripts/verify-roslyn-host.mjs 和 npm run test:roslyn-host。现有未提交改动保留，Gateway 默认提供方及 E4 未改。
+- 直接使用 Roslyn 5.9.0 与 Locator 1.11.2，加载真实 MSBuild 项目模型；根据项目/文档/UTF-16 位置得到符号，验证重载和跨项目引用，复用固定 Solution。实现输入帧限制、路径约束、请求超时、输出截断、关闭/EOF、加载诊断和不完整标记。显式项目求值许可在初始化前校验；本次只执行生成夹具的设计时求值。
+- 构建首次因 Locator 的 MSBL001 失败：传递的 Microsoft.Build.Framework 17.11.48 被复制到运行目录。按其规则增加显式编译引用 ExcludeAssets=runtime/PrivateAssets=all 后通过；没有禁用检查。验收脚本最初误用 build --locked-mode，修正为 RestoreLockedMode=true；首个语义测试误将空 bin 目录等同于编译产物，实际目录无文件，改为验证 App/Lib 的输出文件为空。失败回执仍保留于 test-tmp/roslyn-host/fixture-fhTskw 和 fixture-1FKEin。
+- 更新过时 WorkspaceFailed 订阅为 RegisterWorkspaceFailedHandler；诊断集合使用 ConcurrentQueue，避免事件线程与输出枚举竞态。编译前排除 AnalyzerReference，并明确报告排除数；没有将缺少生成源码的结果标为完整。用户要求函数/接口注释后，补齐中文 XML/JSDoc 和内部协议契约，包括坐标、错误、生命周期与执行边界；此要求持续适用于后续代码。
+- 最终[验收回执](../test-tmp/roslyn-host/fixture-4E9UyF/report.json) 18 场景通过，构建 0 警告/0 错误；冷就绪 2832.6 ms，有效首查 382 ms，热查落在整数计时 0 ms 档，工作集 125616128 字节。热查的 0 不代表零耗时，冷启动包含测试驱动开销，这些单夹具数字不是跨项目基准。锁定包 22 个，包元数据声明均为 MIT；Host 构建输出 112 文件/26859048 字节，不是最终发布体积或新增存储占用。
+- 进程清理反证：早期描述将 BuildHost 一并称为已验证，进一步检查回执发现采样只捕获 Host 与 conhost；已修正场景名称并记录 buildHostObserved=false，仅对观测到的 PID/创建时间作退出断言，未把短寿命未采样进程算作通过。完整辅助进程及 Gateway 硬取消回收仍待接入阶段验证。
+- 反证自审：MSBuild 设计时求值可以创建空目录；路径过滤不能约束自定义 targets 的执行；唯一符号/合法零引用不代表全项目完整，当前排除 12 个 SDK 分析器/生成器引用并标记 diskFreshnessVerified=false。固定快照原型不处理新增文件或 obj/assets 失效；没有宣称完整替代 Serena。未执行核心 TypeScript 全回归或真实客户端重连，也未安装全局依赖、提交或推送。
+
+## 2026-09-09 12:23 — 同步 Skill 接口手册（北京时间）
+
+- 用户要求同步新版接口的 Skill 建议，避免旧手册误导调用。按 skill-creator 检查并更新既有 SKILL.md、references/code.md、references/diagnostics.md；不新增手册分支或修改工具实现，UI 手册保持当前内容。
+- 区分接口基线 0.12.5 与本地手册修订日期；明确 Gateway 仍使用 Serena 路径、Code Host 为实验性独立协议。补充原型启动许可、请求字段、UTF-16 单位、预算、固定快照及生成代码限制，禁止将原型字段误传到 MCP；维护验收入口不作为日常工具不可用时的绕行方式。
+- 明确 E4 尚未统一结构，读取真实 isError/content/可选领域字段，不要求所有错误存在 structuredContent。保留 E1 工作区恢复与 E2 部分完成政策。移除历史机器 I:/WinCode 作为当前安装路径的断言，改为从实际客户端配置取得路径；补充接口变更、手册同步、实际 Schema 和实例身份的维护顺序。
+- 检查当前用户 .codex/skills/wincode、.agents/skills/wincode 及历史 C:/Users/40218/.agents/skills/wincode 均不存在；未猜测目标或创建新安装。此次更新的是仓库四份受管文件中的三份，未声称客户端已加载或 MCP 已重连。
+- 验证：既有 skill-sync 与 tool-contracts 测试 11/11 通过；quick_validate 首次遇 Windows 默认 GBK 解码错误，改用同一 Python 的 -X utf8 后通过，未改变系统编码配置。手册引用、代码围栏与 git diff --check 通过。反证自审：文档复制成功仍可能连接旧 Gateway，已保留实际 Schema/运行身份核对；未用本地测试替代当前客户端兼容验收。
+
+## 2026-09-09 — README 中英双语 MCP 配置说明（北京时间）
+
+- 按用户要求补充使用时选择项目与启动时指定项目两种 JSON/图形界面配置，统一使用通用占位路径，不写入用户真实路径。
+- 明确省略整个 --workspace 参数对、默认进程目录及查询前 workspace_open 的要求；说明单实例单活动工作区与多项目并发边界。保留其他未提交修改。
+- 验证：对照当前启动参数解析及 SessionManager；4 个 JSON 配置可解析，中英示例一致，参数数量、代码围栏、README 个人路径筛查和 git diff --check 通过。反证自审：未指定项目并不代表自动跟随聊天项目，已明确提示。仅修改文档，未运行服务连接或代码回归测试。
+
+## 2026-09-09 13:01 — Roslyn Host 变化失效、重载与请求生命周期（北京时间）
+
+- 用户同意开始后，继续已确认的直接 Roslyn 方向，本次完成 Host 内部一致性阶段。保留全部已有未提交修改；新增 WorkspaceInputs.cs、WorkspaceSession.cs，重构 Program.cs 为输入控制和串行操作队列，扩展既有验收脚本，不引入新依赖或改动 Gateway 提供方。
+- 对工作区文件集合、源码、obj/assets、项目及常规祖先配置、实际加载的文档/元数据做有界内容校验。查询前后复核，变化或读取失败不返回旧引用；编译前固定文档文本。单次上限 20000 条目/5000 文件/128 MiB、单文件 32 MiB，重解析路径拒绝。监听事件不防抖；不能推导任意外部 targets 输入或全磁盘原子保证。
+- 内部 JSON 行协议 v2 增加 reload/cancel。重载从开始起失效，失败不恢复旧快照；global.json/监听/清理故障要求新进程。最多等待 8 项、重复活动 id 拒绝、预算包含排队、关闭取消并排空后释放。排队超时的 reload 在触碰状态前停止；已开始的重载失败留在失效状态。中文 XML/JSDoc 说明函数、字段单位、资源所有权和恢复边界。
+- 失败及修复：fixture-zJcQj0 的加载检查把 MSBuild 自身 obj 写入当作不稳定，改为加载阶段比较内容并单独监测配置代次；查询阶段仍检查读取窗口内事件。fixture-B9sBfo 在重命名后继续读取旧文档路径，改为旧查询失效、reload 去掉消失的旧额外输入并重新发现项目集合。fixture-ijEjh2 发现 OpenProjectAsync 对损坏 XML 可返回部分项目，改为读取结构化 workspace.Diagnostics，按 Failure 拒绝 ready；不按语言文本猜错，也不把源码编译错误等同于项目加载失败。失败回执保留。
+- 最终 `npm run test:roslyn-host` [回执](../test-tmp/roslyn-host/fixture-09LFFy/report.json) 为 42 场景通过，锁定构建 0 警告/0 错误。新测试验证立即编辑、新增/重命名/删除、assets、真实条件编译、Compile 项移除、损坏后修复、主动取消、排队超时/重复 id/背压、活动请求 EOF，以及 SDK 变化要求重启；19 帧突发全部得到结果。此前的 35/40 项是中间测试，不与最终数量相加。
+- 本次冷就绪 4057.0 ms，首个有效引用 484 ms、热查 136 ms、工作集 184123392 字节，初始校验 195 文件/6163683 字节；构建 112 文件/26891268 字节。内容校验增加查询成本，单夹具样本不证明通用性能提升或长期资源稳定。退出采样仅观测 Host/conhost，buildHostObserved=false，不声称完整 BuildHost 回收已验证。
+- 按 skill-creator 同步 SKILL.md、references/code.md、references/diagnostics.md；普通 MCP 参数与实验操作明确分开。现有 skill-sync/tool-contracts 11/11、UTF-8 Skill 验证、JS 语法及 git diff --check 通过。受查的本机 .codex/.agents 与历史安装目标均不存在，未创建全局 Skill、改客户端配置或声称已重连。
+- 反证自审：仅返回文件哈希会漏掉新文件新增调用，因此本次纳入文件集合并以真实新增调用验证；仅检查取消结果无法证明超时包含排队，因此用已过期的排队 reload 加后续旧身份成功查询验证没有提前破坏工作区。queryComplete/diskFreshnessVerified 仍为 false，生成器与任意外部输入覆盖未补齐。监听溢出、Dispose 故障注入、生产进程树硬回收及 A→B→A 接入未验证；这是作者自审，不是独立审核。
+- 更新既有计划/路线图，后续为公共身份/source 与 Gateway 接入、E4、最终交付及无 Serena 环境验收。本次未重跑核心 337 项或刷新生产交付清单，不将独立 Host 测试当成生产链路已替换。没有提交、推送或安装全局依赖。
+
+## 2026-09-09 13:46 — Roslyn 接入现有 MCP 与自有进程生命周期验收（北京时间）
+
+- 用户同意开始后，实施此前建议的公共定位、Adapter/Gateway 接入与端到端验收阶段。新增 RoslynAdapter、RoslynHostClient、OwnedProcessJob、真实 MCP 验收脚本及 7 项契约回归，复用现有 CodeQueries、请求锁、ResourceManager 和 E1 恢复策略。保留已有 README、E1/E2 等未提交修改；无新依赖、全局配置变更、用户项目求值、提交或推送。
+- 启动新增 `--roslyn-config <绝对 JSON 路径>`，有界读取用户显式指定的配置；需 enabled/项目求值许可、根内入口 csproj、明确 Configuration/TFM、已有 dotnet/Host 路径。只在配置启用时选 Roslyn，hello 不求值；不自动采用仓内配置，也不通过普通工具参数选择可执行程序。Host 子进程单独设置匹配的 DOTNET_ROOT/DOTNET_HOST_PATH，不改全局环境；Roslyn 路径不初始化/查询外部 Serena，显式文件范围的文本能力仍复用本地解析。
+- 保持 15 个 MCP 工具名。符号搜索返回 source=roslyn、location；引用工具新增可选 symbolLocation={snapshotId,project,file,position}，原 symbolName 保留并核对匹配。重载/同名返回候选，旧 Serena 序号身份明确拒绝。Host v2 新增 symbols，按实际语义符号去重 partial；指定文件范围时选择该文件中的声明，避免跳到范围外的另一半声明。两类查询提供 semanticContext 的范围、检查点与排除数；准确调用 span 不等于全仓完整性，影响报告保留 UNCERTAIN/UNKNOWN。
+- 生命周期：编辑后旧身份失败，下一次显式搜索才重载，失败业务请求不自动重放；工作区同根重开/A→B→A 关闭旧 Host。传输有界帧、ID/信封校验、取消监听清理与 1 秒协作宽限，超时/初始加载未响应可硬回收。真实关闭/协议错误在进程退出后仍保留清理失败，进入 E1 restart_gateway 阻止后续业务；纯关闭超时在确认硬回收成功后可完成释放。初次项目加载失败按预期失败启动清理，不能把退出码 1 错判成永久恢复失败；损坏项目修复后可显式搜索恢复。
+- Windows Host 在初始化 MSBuild 前加入自有匿名、不继承句柄的 Job，KILL_ON_JOB_CLOSE 在 Host 退出/崩溃时回收继承的后代；句柄保持到进程结束，避免在关闭确认前误杀自身。依据微软 [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects) 与 [JOBOBJECT_EXTENDED_LIMIT_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_extended_limit_information)，未增加 P/Invoke 包或第三方服务。此为自有资源机制，不能约束自定义 targets 通过外部服务创建的进程，也不是项目执行沙盒。
+- 失败与修正：首批 62 项定向回归有 1 项失败，ImpactAnalyzer 把额外 undefined 传给旧 Serena 三参数调用；改为仅有 Roslyn 定位时使用第四参数，原断言保持，相关 40/40 后通过。MCP 首两轮 [run-3dIsQZ](../test-tmp/roslyn-gateway/run-3dIsQZ/report.json)、[run-yb8YjT](../test-tmp/roslyn-gateway/run-yb8YjT/report.json) 误把 Gateway 自己的 conhost 计入切换时必须退出的 Host 树；核对父进程后，改为切换检查 Code Host 子树、最终退出检查整个 Gateway 树，仍逐一核对 PID/创建时间。之后 12 场景中间回执通过，最终增加加载失败修复场景至 13；不把中间数量相加。
+- 最终 `npm run test:roslyn-gateway` [回执](../test-tmp/roslyn-gateway/run-nP7SpF/report.json) 13 场景全部通过。使用生产 dist/index.js 与新的 SDK stdio 客户端，生成 A/B 两套项目夹具，覆盖精确重载、partial 文件范围、TS 显式上下文、错误位置/旧身份、编辑、A→B→A、初始加载损坏与修复、真实 MSBuild 中取消/崩溃/超时和关闭。后三项各观测 7 个实际自有进程（Host、BuildHost、受控 target 的 cmd/node 及控制台），均确认退出，恢复搜索成功；无 Serena/Python 启动。受控 target 只运行夹具自有等待脚本，不执行目标应用。
+- 最终 `npm run check` [回执](../test-tmp/check/2026-09-09T05-41-07-067Z-core/report.json) 12 阶段成功，344/344、0 失败/取消/跳过；锁定恢复、UIA Host 构建、生产 stdio、15 工具 schema 与现有交付清单验证通过。buildId=1c62d2c8e4b10ff345eba1721745a81998368ef3413eef399b000b9fbdac1aa6，delivery contentId=7bafc6bc5d8eb872618bc4cc2b25352491a5a43c1c0d6fe22d0304429e8084ee。现有清单仍是 Gateway/UIA Host/受管 Skill，不把其成功冒充 Code Host 正式交付。构建使用项目内 SDK 10.0.303 与缓存，仅当前命令环境生效。
+- 本轮早期独立 Host [42 场景回执](../test-tmp/roslyn-host/fixture-whR9f2/report.json) 通过；其后的 scoped partial 与接入修订由上述最终 MCP 场景和核心回归验证，未声称旧 42 项在最终状态重跑。代码/接口新增中文说明，按 skill-creator 同步 SKILL.md、references/code.md、references/diagnostics.md；Skill/工具/Roslyn 定向测试 18/18 与 Python UTF-8 quick_validate 通过。未找到既有受查 Skill 安装目标，没有新建全局安装或声称当前 Codex 已加载新版。
+- 反证自审：引用位置准确但加载图缺少反向依赖/生成器时仍不能判安全删除；因此 semanticContext 与 queryComplete=false 保留，ImpactAnalyzer 只提供已证实的有界证据。Host 崩溃时只确认父进程退出不足以证明释放，因此测试在真实 MSBuild target 阻塞期间采样 BuildHost 和后代再验证退出。初始加载失败也不能误触发永久清理失败，最终 MCP 增加损坏/修复实证。以上是作者自审，未进行独立模型/人工审核。
+- 更新既有计划、路线图和本日志。下一阶段为 E4 公共错误迁移、Code Host/Roslyn/BuildHost 正式打包与指纹、无 Serena/Python 干净环境及实际客户端验收，再推进默认后端迁移。当前 SDK 风格单入口/配置/TFM、ProjectReference 可达图和生成夹具证据，不涵盖任意 `.sln`、外部自定义输入/服务创建进程、非 Windows 或真实用户项目。E4 文本兼容及真实项目求值政策仍需在对应范围确认；本轮已有接入授权无需重复申请。
+- 收尾核对生产 ToolDefinition 中的实际工具名，并修正计划新增段的简称；3 份计划/日志的代码围栏、18 个本地链接检查通过，`git diff --check` 通过。仅补记非受管文档后再次 `npm run delivery:verify`，上述 contentId 仍 matched=true；没有因文档记录重复执行全套构建或扩展测试范围。
+
+## 2026-09-09 — 当前工作版本提交与推送准备（北京时间）
+
+- 用户明确要求将当前版本推送 GitHub；纳入当前 README、稳定性/恢复机制、Roslyn Host/Gateway 接入、验证脚本与既有文档改动，不升级版本号。目标 origin/main。
+- 推送前 npm run typecheck 通过，git diff --check 通过；43 个待提交文件的常见凭据标记及大文件筛查未发现命中，构建产物和测试临时目录由现有忽略规则排除。
+- npm test 执行失败：日志报告当前可发现的 .NET SDK 为 10.0.302，缺少 global.json 锁定的 10.0.303，ui-query-check 无法启动。未安装 SDK、放宽版本锁或将历史通过结果作为本轮验证。日志位于本地 test-tmp/pre-push-tests.log。本次推送保存当前工作版本，不表示完整回归或发布验收通过。

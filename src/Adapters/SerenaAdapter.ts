@@ -9,6 +9,7 @@ import { WINCODE_VERSION, WinCodeConfig, WinCodeTimeouts, getDefaultTimeouts } f
 import { CacheManager } from '../Core/Cache.js';
 import {
   ResourceManager,
+  GatewayRestartRequiredError,
   TimeoutError,
   killProcessTree,
   toExternalOpFailure,
@@ -1046,7 +1047,7 @@ export class SerenaAdapter implements IAdapter {
       try { await this.closeClientAndTransport(client, transport); } catch (error) { failures.push(error); }
       if (failures.length) {
         this.recordError('error', new Error('Serena cleanup failed; the reset result remains failed.'), false);
-        throw new AggregateError(failures, 'Serena reset failed.');
+        throw new GatewayRestartRequiredError(failures, 'Serena reset failed; restart the Gateway after checking cleanup.');
       }
     } finally {
       this.disposing = false;

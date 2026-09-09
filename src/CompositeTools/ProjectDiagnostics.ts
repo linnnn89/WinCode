@@ -1,10 +1,10 @@
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { WorkspaceManager, ProjectIdentity } from '../Core/Workspace.js';
 import { WinCodeConfig } from '../Core/Config.js';
 import { AdapterHealthQuery } from '../Core/AdapterStatus.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface DiagnosticItem {
   category: 'Environment' | 'Project' | 'Dependencies' | 'Windows';
@@ -52,7 +52,8 @@ export class ProjectDiagnostics {
 
     // Check .NET SDK availability — presence is not semantic analysis capability
     try {
-      const { stdout } = await execAsync('dotnet --version', {
+      const executable = this.config.adapters.roslyn?.enabled ? this.config.adapters.roslyn.dotnetPath : 'dotnet';
+      const { stdout } = await execFileAsync(executable, ['--version'], {
         windowsHide: true,
         timeout: this.config.timeouts?.dotnetMs ?? 5000,
       });
@@ -73,7 +74,10 @@ export class ProjectDiagnostics {
     if (this.serena) {
       const health = await this.serena.checkHealth();
       const up = health.upstream;
-      if (up?.mode === 'connected' && up.semanticQueryUsable) {
+      if (this.config.adapters.roslyn?.enabled) {
+        items.push({ category: 'Dependencies', status: health.available ? 'PASS' : 'WARN',
+          message: `Direct Roslyn: ${health.details ?? 'state unavailable'}. Query completeness must be checked separately.` });
+      } else if (up?.mode === 'connected' && up.semanticQueryUsable) {
         items.push({
           category: 'Dependencies',
           status: 'PASS',

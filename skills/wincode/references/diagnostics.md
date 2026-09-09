@@ -16,9 +16,9 @@
 
 仅遇到故障或用户要求时调用 wincode_hello_world({}) 查看适配器、工作区及 runtime；环境问题再用 wincode_diagnose_project({})。健康成功不证明 Serena 语义连接成功；watcher 停止、最近超时和清理错误如实报告，不自动安装依赖或循环重启。
 
-工具不可用：先确认客户端是否启用了 wincode MCP；已保存配置通常需重新加载客户端/会话。Skill 不负责注册 MCP。当前本机安装路径为 I:/WinCode，STDIO 启动配置：
+工具不可用：先确认客户端是否启用了 wincode MCP；已保存配置通常需重新加载客户端/会话。Skill 不负责注册 MCP。安装路径取实际客户端配置，不沿用历史机器的 I:/WinCode。STDIO 配置结构（占位路径需替换）：
 - 命令：node
-- 独立参数：I:/WinCode/dist/index.js、--workspace、I:/WinCode
+- 独立参数：<WinCode安装目录>/dist/index.js、--workspace、<目标工作区绝对路径>
 
 不要把 codex mcp add 整条终端命令填入启动命令。不要重复注册或静默修改配置。VERSION_MISMATCH 可能表示新网关配了旧 Host，局部查询/状态要求 inspectionVersion=2；按授权重新构建发布。HOST_UNAVAILABLE 时检查已配置 Host 路径/发布产物；构建或环境变更按用户授权执行。
 
@@ -27,7 +27,7 @@
 需要手动检查时执行已有只读脚本：
 
 ```powershell
-pwsh -NoProfile -File I:/WinCode/scripts/check-ui-audit.ps1
+pwsh -NoProfile -File "<WinCode安装目录>/scripts/check-ui-audit.ps1"
 ```
 
 仅用户明确需要桌面弹窗时加 -Desktop；不例行弹窗。日志只有 start 表示结果未知；本地日志不是防篡改证据。清理须获得授权、停止相关调用并保留用户需要的记录，不能为了恢复取证静默删除。
@@ -35,3 +35,17 @@ pwsh -NoProfile -File I:/WinCode/scripts/check-ui-audit.ps1
 从 0.12.2 起，生产模式仅使用发布的 Release Host，缺失时明确不可用；`npm run dev`（`--development`）才允许 Debug/dotnet-run 回退。`customHostPath` 是显式配置覆盖，不是 MCP 请求字段。Host 响应的 `hostIdentity` 来自实际程序集，包含 version、informationalVersion、configuration 与 framework；旧 Host 未提供身份时不能推定版本一致。
 
 仓内 `npm run check` 执行锁定构建、核心回归和生产 stdio，生成并校验 `dist/delivery-manifest.json`；`npm run check:desktop` 单独运行隔离桌面闭环。`npm run delivery:verify` 检查 Gateway、发布 Host 全部文件及四份受管手册的一致性，不启动 Host，也不验证另一个客户端实例或签名真实性。构建要求 Node 24（22 兼容）和 `global.json` 中锁定的 SDK；缺少环境时按授权安装，不自动修改环境。
+
+WORKSPACE_RECOVERY_REQUIRED 表示切换中途失败后工作区一致性尚未确认。此时业务工具被拒绝；被动 hello 仍可读取 health.workspaceRecovery，status=recovery_required。先检查 recoveryAction：workspace_open 表示可按原任务指定路径重新打开，只有完整重置/初始化及 watcher 绑定成功才恢复请求；同一路径也执行完整恢复。restart_gateway 表示清理失败被当前实例保留，重新打开无法恢复；先检查 Gateway 自有资源的清理情况，再按客户端正常流程重启 Gateway，不自动重启或终止目标应用。永久失败后的 workspace_open 不再反复改变根或会话。不要只修改路径字段、反复重试业务请求或把旧适配器状态当成已切换成功。CANCELLED 若附带 workspaceRecovery，同样按其 recoveryAction 处理；切换变更前失败且状态未改变时仍保留旧工作区。
+
+E4 统一错误表达尚未实施：当前可能收到 isError=true 的纯文本，也可能是 content 中的 JSON；不能要求所有失败都含 structuredContent、统一 recoveryAction 或 retryable。先保留 isError 和原始内容，只在实际存在时读取 errorCode、workspaceRecovery、trash outcome/实际位置。结构化字段缺失不等于成功，取消或失败也不代表副作用已回滚；部分完成不原样重试。JSON 文本与 structuredContent 同源的方案是后续迁移方向，不能套用到旧连接。
+
+直接 Roslyn Host 与 UIA Host 是不同组件。新 Gateway 的 hello.codeProvider 和 health.roslyn 报告显式选择的提供方、已知观察、processAlive、snapshotId 及重载/重启/清理状态；hello 不启动 Roslyn 或执行项目，进程存活不等于当前磁盘语义已验证。ready 是内部握手帧，UIA 的 VERSION_MISMATCH、inspectionVersion 等不能套到 Code Host。当前 npm run check / delivery:verify 不替代 test:roslyn-host/test:roslyn-gateway，也不证明 Code Host 已纳入正式发布包。
+
+Code Host 内部协议 v2 的失败包含 success=false、errorCode 和 error，且不附带旧引用。SNAPSHOT_STALE/INPUTS_CHANGED 要求等写入稳定后显式 reload，再用新身份定位；PROJECT_LOAD_FAILED 表示结构化 MSBuild 加载失败，先修复项目输入，再 reload，不能继续使用最后一次成功快照。源码的 compilationErrors 可随有用的部分引用返回，不能据此宣称完整。
+
+Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回，不代表 E4 已覆盖所有工具。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，再显式搜索；同根打开也关闭旧 Host 后重新选择 SDK。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
+
+INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项目路径；HOST_PROTOCOL_ERROR 检查 Host 与 Gateway 的协议版本，不绕过校验。LEGACY_SYMBOL_ID 要求重新搜索 Roslyn 身份；UNSUPPORTED_SYMBOL_LOCATION 表示该实例使用 Serena；SYMBOL_MISMATCH 表示名称和定位不一致。INPUT_BUDGET_EXCEEDED 先缩小受支持范围，不能接受截断指纹。内部 BUSY 表示队列已满，DUPLICATE_REQUEST 要求新的 id；CANCELLED 是目标终止结果，取消确认不替代它。OUTSIDE_WORKSPACE/UNSUPPORTED_LINK 拒绝越界或链接路径，不放松校验来恢复。
+
+维护接口变更时，同步检查 Gateway 工具定义、相应 references 手册、实际客户端 Schema 和已安装四份受管文件；更新源码手册后运行 skill:sync，再以 skill:check 校验。仍须单独确认 MCP 实例的版本/构建/Schema，不能用手册同步代替重连。公共接口尚未发布时，只记录实验边界，不提前把新参数加入 MCP 规范字段表。

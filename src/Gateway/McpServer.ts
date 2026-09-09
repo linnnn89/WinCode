@@ -1,8 +1,9 @@
 import { Server } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
-import { ToolRouter } from '../Core/ToolRouter.js';
+import { ToolRouter, WorkspaceRecoveryRequiredError } from '../Core/ToolRouter.js';
 import { WINCODE_VERSION } from '../Core/Config.js';
 import { AbortError } from '../Core/ResourceManager.js';
+import { CodeQueryError } from '../Core/CodeQueries.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { jsonResult, type ToolExecutionContext } from './ToolDefinition.js';
 
@@ -39,15 +40,21 @@ export class WinCodeMcpServer {
       let acquired = false;
       try {
         if (!definition!.switchesWorkspace) {
-          await this.router.acquireRequestSlot(signal);
+          await this.router.acquireRequestSlot(signal, definition!.allowDuringWorkspaceRecovery);
           acquired = true;
         }
         return await definition!.execute(args, context);
       } catch (error) {
         if (error instanceof AbortError || (error instanceof Error && error.name === 'AbortError') || signal?.aborted) {
           return jsonResult({ schemaVersion: '1.0', protocolVersion: '1.0', success: false,
-            errorCode: 'CANCELLED', errorMessage: 'Tool call was cancelled.' }, true, true);
+            errorCode: 'CANCELLED', errorMessage: 'Tool call was cancelled.',
+            ...(this.router.workspaceRecoveryState ? { workspaceRecovery: this.router.workspaceRecoveryState } : {}) }, true, true);
         }
+        if (error instanceof WorkspaceRecoveryRequiredError)
+          return jsonResult({ success: false, errorCode: 'WORKSPACE_RECOVERY_REQUIRED',
+            errorMessage: error.message, workspaceRecovery: error.recovery }, true, true);
+        if (error instanceof CodeQueryError)
+          return jsonResult({ success: false, errorCode: error.errorCode, errorMessage: error.message }, true, true);
         return { content: [{ type: 'text' as const, text: `Tool Execution Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
       } finally {
         if (acquired) this.router.endRequest();

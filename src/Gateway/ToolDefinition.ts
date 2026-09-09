@@ -12,6 +12,7 @@ export interface ToolDefinition {
   tool: Tool;
   aliases?: Array<{ name: string; listed: boolean; description?: string }>;
   switchesWorkspace?: boolean;
+  allowDuringWorkspaceRecovery?: boolean;
   invalidArguments?: (message: string) => CallToolResult;
   validate?: (args: Record<string, unknown>, context: ToolExecutionContext) => void;
   execute: (args: Record<string, unknown>, context: ToolExecutionContext) => Promise<CallToolResult>;

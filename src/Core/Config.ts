@@ -31,6 +31,21 @@ export interface WinCodeCacheLimits {
   fingerprintMemoMs: number;
 }
 
+/** 显式选择直接 Roslyn；入口与单配置随当前工作区解释，不会自动 restore 或回退到 Serena。 */
+export interface RoslynConfig {
+  enabled: boolean;
+  allowProjectEvaluation: boolean;
+  /** 工作区内入口 csproj 的相对路径；工作区切换后使用新根中的同一路径。 */
+  project: string;
+  configuration: string;
+  targetFramework: string;
+  /** 已安装可执行文件与已构建 Host 的绝对路径；不运行下载器或 shell 包装器。 */
+  dotnetPath: string;
+  hostPath: string;
+  loadTimeoutMs?: number;
+  queryTimeoutMs?: number;
+}
+
 export interface WinCodeConfig {
   workspaceRoot: string;
   cacheDir: string;
@@ -39,6 +54,7 @@ export interface WinCodeConfig {
   timeouts: WinCodeTimeouts;
   cacheLimits: WinCodeCacheLimits;
   adapters: {
+    roslyn?: RoslynConfig;
     repomix: {
       useCli: boolean;
       /** Absolute installed JavaScript CLI entry (.js/.cjs/.mjs), never a shell wrapper. */

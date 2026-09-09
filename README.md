@@ -38,32 +38,49 @@ npm run check
 npm run delivery:verify
 ```
 
-Add WinCode as a stdio MCP server in your agent client configuration:
+Add WinCode as a stdio MCP server in your agent client configuration (for clients that support `mcpServers`). Choose either startup mode below.
+
+**Choose a project when needed:** If the target project is not yet known, or you want to query different projects in sequence, configure only the server entry point:
 
 ```json
 {
   "mcpServers": {
     "wincode": {
       "command": "node",
-      "args": ["~/WinCode/dist/index.js", "--workspace", "~/target-project"]
+      "args": ["C:/path/to/WinCode/dist/index.js"]
     }
   }
 }
 ```
 
-> **Path Note:** `~` is a placeholder. Replace `~/WinCode` with your absolute installation path (e.g., `I:/WinCode`), and `~/target-project` with your target repository's absolute path. Do not copy `~` literally if your client does not expand shell tildes.
+Without `--workspace`, WinCode initially uses the server process's current working directory, which may differ from your intended project. Before querying, ask the agent to call `workspace_open` with the target project's absolute path, for example `workspace_open({"path":"C:/path/to/project"})`. Repeat this when switching projects; the server installation path stays the same. One server process has one active workspace, so calls sharing that process must not interleave queries for different projects. For concurrent independent projects, configure separate server instances with distinct names and explicit workspace paths.
+
+**Specify a project at startup:** Add `--workspace` followed by the project directory:
+
+```json
+{
+  "mcpServers": {
+    "wincode": {
+      "command": "node",
+      "args": ["C:/path/to/WinCode/dist/index.js", "--workspace", "C:/path/to/project"]
+    }
+  }
+}
+```
+
+> **Path note:** All paths above are illustrative placeholders. Replace them with your actual absolute installation and project paths. The server entry point and the project directory serve different purposes and need not be in the same directory.
 
 For graphical configuration interfaces:
 
-| Field | Value |
-| --- | --- |
-| Name / Type | `wincode` / `stdio` |
-| Command | `node` |
-| Argument 1 | `~/WinCode/dist/index.js` |
-| Argument 2 | `--workspace` |
-| Argument 3 | `~/target-project` |
+| Field | Choose a project when needed | Specify a project at startup |
+| --- | --- | --- |
+| Name / Type | `wincode` / `stdio` | `wincode` / `stdio` |
+| Command | `node` | `node` |
+| Argument 1 | `C:/path/to/WinCode/dist/index.js` | `C:/path/to/WinCode/dist/index.js` |
+| Argument 2 | Omit | `--workspace` |
+| Argument 3 | Omit | `C:/path/to/project` |
 
-Add each argument as a separate entry. Ensure `node` is available in PATH, or specify its absolute executable path.
+Add each argument as a separate entry, without extra surrounding quotes even when a path contains spaces. To defer project selection, remove both `--workspace` and its value; do not leave an empty value. Ensure `node` is available in PATH, or specify its absolute executable path. No additional environment variables are required for this basic configuration.
 
 For prompt engineering and token-efficient skill routing, refer to the optional [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md).
 
@@ -231,32 +248,49 @@ npm run check
 npm run delivery:verify
 ```
 
-在 Agent 客户端配置文件中添加 stdio MCP 服务（以支持 `mcpServers` 的客户端为例）：
+在 Agent 客户端配置文件中添加 stdio MCP 服务（以支持 `mcpServers` 的客户端为例），可按需要选择以下两种启动方式。
+
+**使用时再选择项目：**如果暂时不确定目标项目，或需要依次查询多个项目，只配置服务入口：
 
 ```json
 {
   "mcpServers": {
     "wincode": {
       "command": "node",
-      "args": ["~/WinCode/dist/index.js", "--workspace", "~/target-project"]
+      "args": ["C:/path/to/WinCode/dist/index.js"]
     }
   }
 }
 ```
 
-> **路径说明：**配置中的 `~` 仅为路径占位符。请将 `~/WinCode` 替换为你本地安装 WinCode 的绝对路径（如 `I:/WinCode`），将 `~/target-project` 替换为待分析项目的绝对路径。若客户端不支持自动展开波浪号，请勿直接照抄 `~`。
+省略 `--workspace` 时，WinCode 初始使用服务进程的当前工作目录，它不一定是你要分析的项目。查询前，让 Agent 调用 `workspace_open` 并传入目标项目的绝对路径，例如 `workspace_open({"path":"C:/path/to/project"})`。换项目时再次调用即可，服务安装路径无需修改。一个服务进程只有一个活动工作区，共享该进程的调用不能交错查询不同项目；如需同时独立查询多个项目，应配置名称不同、各自明确指定工作区路径的服务实例。
+
+**启动时指定项目：**添加 `--workspace`，并在其后填写项目目录：
+
+```json
+{
+  "mcpServers": {
+    "wincode": {
+      "command": "node",
+      "args": ["C:/path/to/WinCode/dist/index.js", "--workspace", "C:/path/to/project"]
+    }
+  }
+}
+```
+
+> **路径说明：**以上路径均为通用占位示例，请替换为实际的安装目录和项目目录绝对路径。服务入口与待分析项目目录用途不同，不必位于同一个目录。
 
 若通过图形界面添加：
 
-| 配置字段 | 填写内容 |
-| --- | --- |
-| 服务名称 / 类型 | `wincode` / `stdio` |
-| 启动命令 | `node` |
-| 参数 1 | `~/WinCode/dist/index.js` |
-| 参数 2 | `--workspace` |
-| 参数 3 | `~/target-project` |
+| 配置字段 | 使用时再选择项目 | 启动时指定项目 |
+| --- | --- | --- |
+| 服务名称 / 类型 | `wincode` / `stdio` | `wincode` / `stdio` |
+| 启动命令 | `node` | `node` |
+| 参数 1 | `C:/path/to/WinCode/dist/index.js` | `C:/path/to/WinCode/dist/index.js` |
+| 参数 2 | 不添加 | `--workspace` |
+| 参数 3 | 不添加 | `C:/path/to/project` |
 
-注意每个参数独立添加为一行。确保系统环境变量 PATH 中包含 `node`，或直接填写 node.exe 的绝对路径。
+每个参数独立添加为一行，路径包含空格时也无需额外加引号。使用时再选择项目，应同时删除 `--workspace` 及其值，不要保留空值。确保系统环境变量 PATH 中包含 `node`，或直接填写 node.exe 的绝对路径。这一基础配置无需额外设置环境变量。
 
 如需配合 Agent Skill 获得低 Token 开销的精准任务路由，请参阅可选的 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。
 

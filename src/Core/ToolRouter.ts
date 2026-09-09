@@ -5,6 +5,8 @@ import { WorkspaceManager, WorkspaceOpenOptions, WorkspaceDirectoryOptions } fro
 import { ContextManager, PreparedContextOptions } from './Context.js';
 import { RepomixAdapter } from '../Adapters/RepomixAdapter.js';
 import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
+import { RoslynAdapter } from '../Adapters/RoslynAdapter.js';
+import { CodeQueryError, type SymbolLocation } from './CodeQueries.js';
 import { FlaUiAdapter } from '../Adapters/FlaUiAdapter.js';
 import { UiInspectRequest, UiInspectResult } from './UiContracts.js';
 import { reviewUi, UiReviewResult } from '../CompositeTools/UiReview.js';
@@ -13,16 +15,36 @@ import { ImpactAnalyzer } from '../CompositeTools/ImpactAnalyzer.js';
 import { RefactorAssistant } from '../CompositeTools/RefactorAssistant.js';
 import { ProjectDiagnostics } from '../CompositeTools/ProjectDiagnostics.js';
 import { ExtensionManager } from '../Extensions/ExtensionManager.js';
-import { Mutex, ResourceManager, AbortError, TimeoutError } from './ResourceManager.js';
+import { Mutex, ResourceManager, AbortError, TimeoutError, GatewayRestartRequiredError } from './ResourceManager.js';
 import { SessionManager, WorkspaceSession } from './SessionManager.js';
 import { WorkspaceWatch } from './WorkspaceWatch.js';
 import { AdapterLastError } from './AdapterStatus.js';
 import { type OperationContext, checkOperation } from './OperationContext.js';
 
+export interface WorkspaceRecovery {
+  activeWorkspace: string;
+  attemptedWorkspace: string;
+  phase: string;
+  message: string;
+  recoveryAction: 'workspace_open' | 'restart_gateway';
+}
+
+export class WorkspaceRecoveryRequiredError extends Error {
+  constructor(readonly recovery: WorkspaceRecovery) {
+    super(recovery.recoveryAction === 'restart_gateway'
+      ? 'Workspace cleanup could not be confirmed. Check Gateway-owned resource cleanup and restart the Gateway; workspace_open cannot recover this instance.'
+      : 'Workspace consistency is unconfirmed. Call workspace_open to complete recovery.');
+    this.name = 'WorkspaceRecoveryRequiredError';
+  }
+}
+
 export interface RuntimeHealth {
+  codeProvider: 'serena' | 'roslyn';
+  roslyn?: ReturnType<RoslynAdapter['getKnownHealth']>;
   resourceCleanup: ReturnType<ResourceManager['getCloseReport']>;
   version: string;
-  status: 'online' | 'shutting_down';
+  status: 'online' | 'shutting_down' | 'recovery_required';
+  workspaceRecovery: WorkspaceRecovery | null;
   uptimeMs: number;
   startedAt: string;
   activeWorkspace: string | null;
@@ -66,6 +88,7 @@ export class ToolRouter {
   context: ContextManager;
   repomix: RepomixAdapter;
   serena: SerenaAdapter;
+  roslyn?: RoslynAdapter;
   flaui: FlaUiAdapter;
   architecture: ArchitectureAnalyzer;
   impact: ImpactAnalyzer;
@@ -83,18 +106,28 @@ export class ToolRouter {
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private readonly watch = new WorkspaceWatch();
   private watchRegistered = false;
+  private workspaceRecovery: WorkspaceRecovery | null = null;
   private readonly codeOperations = new Set<AbortController>();
 
   private async runCode<T>(signal: AbortSignal | undefined, work: (operation: OperationContext) => Promise<T>): Promise<T> {
     const controller = new AbortController();
     const cancel = () => controller.abort();
-    const budget = this.config.timeouts.serenaConnectMs + this.config.timeouts.serenaCallMs + this.config.timeouts.fileScanMs;
+    const budget = (this.roslyn?.operationBudgetMs ?? (this.config.timeouts.serenaConnectMs + this.config.timeouts.serenaCallMs)) + this.config.timeouts.fileScanMs;
     const operation = { signal: controller.signal, deadline: Date.now() + budget };
     const timer = setTimeout(() => controller.abort(new TimeoutError('operation', budget)), budget);
     this.codeOperations.add(controller);
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted || this.shuttingDown) cancel();
     try { checkOperation(operation); const result = await work(operation); checkOperation(operation); return result; }
+    catch (error) {
+      // 查询清理失败同样会留下不可信的自有 Host 状态；按 E1 阻止后续业务，不能只返回一次错误。
+      if (this.roslyn && error instanceof GatewayRestartRequiredError) {
+        this.workspaceRecovery = { activeWorkspace: this.config.workspaceRoot, attemptedWorkspace: this.config.workspaceRoot,
+          phase: 'roslyn-cleanup', message: error.message.slice(0, 1024), recoveryAction: 'restart_gateway' };
+        throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
+      }
+      throw error;
+    }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); this.codeOperations.delete(controller); }
   }
 
@@ -111,18 +144,23 @@ export class ToolRouter {
     this.workspace = new WorkspaceManager(config);
     this.repomix = new RepomixAdapter(config, this.cache, this.resources);
     this.serena = new SerenaAdapter(config, this.cache, this.resources);
+    if (config.adapters.roslyn?.enabled)
+      this.roslyn = new RoslynAdapter(config, this.resources, (content, file) => this.serena.findSymbolsInContent(content, file));
     this.flaui = new FlaUiAdapter(config, this.resources);
-    this.context = new ContextManager(config, this.workspace, this.repomix, this.serena);
-    this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
-    this.impact = new ImpactAnalyzer(this.serena, this.config);
-    this.refactor = new RefactorAssistant(this.workspace, this.serena, this.impact);
-    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.serena);
+    this.context = new ContextManager(config, this.workspace, this.repomix, this.code);
+    this.architecture = new ArchitectureAnalyzer(this.workspace, this.code);
+    this.impact = new ImpactAnalyzer(this.code, this.config);
+    this.refactor = new RefactorAssistant(this.workspace, this.code, this.impact);
+    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.code);
     this.extensions = new ExtensionManager(config);
   }
 
   get isShuttingDown(): boolean {
     return this.shuttingDown;
   }
+
+  /** 提供方在构造时显式选择；Roslyn 失败不触发 Serena RPC。 */
+  private get code(): SerenaAdapter | RoslynAdapter { return this.roslyn ?? this.serena; }
 
   get inFlightRequests(): number {
     return this.inFlight;
@@ -132,12 +170,19 @@ export class ToolRouter {
     return this.switchingPromise !== null;
   }
 
-  findCodeSymbols(query: string, kind?: string, signal?: AbortSignal) {
-    return this.runCode(signal, operation => this.serena.findSymbolsDetailed(query, kind, undefined, operation));
+  get workspaceRecoveryState(): WorkspaceRecovery | null {
+    return this.workspaceRecovery ? { ...this.workspaceRecovery } : null;
   }
 
-  findCodeReferences(symbolName: string, relativePath?: string, signal?: AbortSignal) {
-    return this.runCode(signal, operation => this.serena.findReferencesDetailed(symbolName, relativePath, operation));
+  findCodeSymbols(query: string, kind?: string, signal?: AbortSignal) {
+    return this.runCode(signal, operation => this.code.findSymbolsDetailed(query, kind, undefined, operation));
+  }
+
+  /** 精确位置只属于 Roslyn；旧提供方收到该字段必须明确拒绝，不能忽略后再猜符号。 */
+  findCodeReferences(symbolName: string, relativePath?: string, signal?: AbortSignal, location?: SymbolLocation) {
+    if (location && !this.roslyn) throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'This instance uses Serena; Roslyn symbolLocation is unsupported.');
+    return this.runCode(signal, operation => this.roslyn ? this.roslyn.findReferencesDetailed(symbolName, relativePath, operation, location) :
+      this.serena.findReferencesDetailed(symbolName, relativePath, operation));
   }
 
   prepareContext(options: PreparedContextOptions, signal?: AbortSignal) {
@@ -172,7 +217,7 @@ export class ToolRouter {
     return this.workspace.listDirectory(options);
   }
 
-  async acquireRequestSlot(signal?: AbortSignal): Promise<void> {
+  async acquireRequestSlot(signal?: AbortSignal, allowDuringRecovery = false): Promise<void> {
     if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
     if (signal?.aborted) throw new AbortError('The tool call was cancelled.');
     while (this.switchingPromise) {
@@ -197,6 +242,7 @@ export class ToolRouter {
       if (signal?.aborted) throw new AbortError('The tool call was cancelled.');
     }
     if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
+    if (this.workspaceRecovery && !allowDuringRecovery) throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
     this.beginRequest();
   }
 
@@ -223,7 +269,7 @@ export class ToolRouter {
     this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
     await this.cache.initialize();
     await this.repomix.initialize();
-    await this.serena.initialize();
+    if (!this.roslyn) await this.serena.initialize();
     await this.flaui.initialize();
     await this.extensions.initializeAll();
     const fp = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
@@ -240,14 +286,22 @@ export class ToolRouter {
   }
 
   private async bindWatch(workspaceRoot: string): Promise<void> {
-    await this.watch.stop();
+    try { await this.watch.stop(); }
+    catch (error) { throw new GatewayRestartRequiredError([error], 'Workspace watcher cleanup failed; restart the Gateway after checking cleanup.'); }
     this.watch.start(workspaceRoot, () => {
       this.cache.noteFilesystemChange(workspaceRoot);
     });
+    this.assertWatchBound(workspaceRoot);
     if (!this.watchRegistered) {
       this.resources.register('disposable', 'workspace-watch', () => this.watch.stop());
       this.watchRegistered = true;
     }
+  }
+
+  private assertWatchBound(workspaceRoot: string): void {
+    const status = this.watch.getStatus();
+    if (!status.active || status.root !== path.resolve(workspaceRoot))
+      throw new Error(`Workspace watcher binding failed: ${status.lastError?.message ?? 'no active watcher for the requested workspace'}`);
   }
 
   /**
@@ -259,6 +313,8 @@ export class ToolRouter {
       if (this.shuttingDown) {
         throw new Error('WinCode is shutting down; workspace_open rejected.');
       }
+      if (this.workspaceRecovery?.recoveryAction === 'restart_gateway')
+        throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
 
       if (!this.switchingPromise) {
         this.switchingPromise = new Promise<void>((resolve) => {
@@ -266,6 +322,9 @@ export class ToolRouter {
         });
       }
 
+      const previousRoot = this.config.workspaceRoot;
+      let rootPrepared = false;
+      let phase = 'drain';
       try {
         // Wait for existing in-flight queries on the old workspace to settle before re-binding
         const drainTimeout = this.config.timeouts?.shutdownMs ?? 8_000;
@@ -277,22 +336,28 @@ export class ToolRouter {
         }
 
         const resolved = path.resolve(targetPath);
-        const previousRoot = this.config.workspaceRoot;
         const sameWorkspace =
-          Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
+          !this.workspaceRecovery && this.watch.getStatus().active && Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
 
+        phase = 'fingerprint';
         const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
         checkOperation({ signal });
+        phase = 'workspace';
         const result = await this.workspace.openWorkspace(targetPath, options);
+        rootPrepared = true;
+        checkOperation({ signal });
 
         if (sameWorkspace) {
+          phase = 'refresh';
+          // 同根 workspace_open 是显式恢复入口；停止旧 Host 后由下一次搜索按新 SDK/输入加载。
+          if (this.roslyn) { phase = 'roslyn-reset'; await this.roslyn.resetConnection(); }
           const previousFp = this.session.current?.fingerprint ?? null;
           this.session.touch();
           this.session.setFingerprint(fp);
           if (previousFp && previousFp !== fp) {
             this.cache.invalidateFingerprint(resolved);
             this.cache.setNamespace(this.config.workspaceRoot);
-            this.serena.markProjectStale();
+            if (!this.roslyn) this.serena.markProjectStale();
           }
           return result;
         }
@@ -300,18 +365,47 @@ export class ToolRouter {
         // Keep the process cache directory; isolate by namespace so we do not
         // write `.cache/wincode` into every opened repo, and so project A
         // symbols cannot be read as project B.
+        phase = 'cache';
         this.cache.invalidateFingerprint(previousRoot);
         this.cache.setNamespace(this.config.workspaceRoot);
+        phase = 'session';
         this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
         this.session.setFingerprint(fp);
+        phase = 'watch';
         await this.bindWatch(this.config.workspaceRoot);
+        checkOperation({ signal });
 
+        phase = 'repomix-dispose';
         await this.repomix.dispose();
-        await this.serena.resetConnection();
+        checkOperation({ signal });
+        phase = this.roslyn ? 'roslyn-reset' : 'serena-reset';
+        await (this.roslyn ? this.roslyn.resetConnection() : this.serena.resetConnection());
+        checkOperation({ signal });
+        phase = 'repomix-initialize';
         await this.repomix.initialize();
-        await this.serena.initialize();
+        checkOperation({ signal });
+        phase = 'serena-initialize';
+        if (!this.roslyn) await this.serena.initialize();
+        checkOperation({ signal });
+        phase = 'composites';
         this.bindCompositeTools();
+        checkOperation({ signal });
+        phase = 'watch-confirmation';
+        this.assertWatchBound(this.config.workspaceRoot);
+        // Publish readiness only after every participant has completed rebinding.
+        this.workspaceRecovery = null;
         return result;
+      } catch (error) {
+        if (rootPrepared || this.config.workspaceRoot !== previousRoot || this.workspaceRecovery) {
+          this.workspaceRecovery = {
+            activeWorkspace: this.config.workspaceRoot, attemptedWorkspace: path.resolve(targetPath),
+            phase, message: (error instanceof Error ? error.message : String(error)).slice(0, 1024),
+            recoveryAction: error instanceof GatewayRestartRequiredError ? 'restart_gateway' : 'workspace_open',
+          };
+          if (!signal?.aborted && !(error instanceof AbortError))
+            throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
+        }
+        throw error;
       } finally {
         const resolve = this.resolveSwitching;
         this.switchingPromise = null;
@@ -322,11 +416,11 @@ export class ToolRouter {
   }
 
   private bindCompositeTools(): void {
-    this.context = new ContextManager(this.config, this.workspace, this.repomix, this.serena);
-    this.architecture = new ArchitectureAnalyzer(this.workspace, this.serena);
-    this.impact = new ImpactAnalyzer(this.serena, this.config);
-    this.refactor = new RefactorAssistant(this.workspace, this.serena, this.impact);
-    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.serena);
+    this.context = new ContextManager(this.config, this.workspace, this.repomix, this.code);
+    this.architecture = new ArchitectureAnalyzer(this.workspace, this.code);
+    this.impact = new ImpactAnalyzer(this.code, this.config);
+    this.refactor = new RefactorAssistant(this.workspace, this.code, this.impact);
+    this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.code);
   }
 
   async waitForIdle(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
@@ -357,7 +451,10 @@ export class ToolRouter {
 
     return {
       version: WINCODE_VERSION,
-      status: this.shuttingDown ? 'shutting_down' : 'online',
+      codeProvider: this.roslyn ? 'roslyn' : 'serena',
+      ...(this.roslyn ? { roslyn: this.roslyn.getKnownHealth() } : {}),
+      status: this.shuttingDown ? 'shutting_down' : this.workspaceRecovery ? 'recovery_required' : 'online',
+      workspaceRecovery: this.workspaceRecovery ? { ...this.workspaceRecovery } : null,
       uptimeMs: Date.now() - this.startedAt,
       startedAt: new Date(this.startedAt).toISOString(),
       activeWorkspace: this.config.workspaceRoot,
@@ -450,6 +547,7 @@ export class ToolRouter {
         () => this.watch.stop(),
         () => this.repomix.dispose(),
         () => this.serena.dispose(),
+        () => this.roslyn?.dispose(),
         () => this.flaui.dispose(),
         () => this.extensions.disposeAll(),
         () => this.cache.flush(),

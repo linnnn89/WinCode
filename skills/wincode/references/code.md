@@ -2,6 +2,48 @@
 
 以下为 MCP 工具名和参数；以客户端实际 Schema 为准。
 
+## 后端与实验接口边界
+
+默认 Gateway 使用 SerenaAdapter 或明确标记的本地文本降级；显式启用 Roslyn 的实例通过相同工具提供 C# 声明、引用和影响证据，不启动 Serena/Python，也不在失败后偷偷切回 Serena。`hello.codeProvider` 标明实例选择；`source` 按实际响应读取，不能根据仓库中存在 Host 推断当前连接已经更新。
+
+Roslyn 调用顺序：用 wincode_find_code_symbol 搜索（query 最长 256 字符），根据 signature、file 和 location.project 选择具体声明；再把该项的 name 作为 symbolName、完整 location 对象作为 symbolLocation 传给 wincode_find_references。location 包含 snapshotId（32 位小写十六进制）、project/file（工作区内相对路径）和 position（非负零基 UTF-16）。不手工猜偏移；同名/重载返回候选，不能自动选第一项。简单名称查询在当前不完整范围下只返回候选，单候选也需明确定位；candidatesTruncated=true 时 candidateCount 可能缺省，不能当作全量计数。
+
+编辑、重载或工作区切换会使 location 失效。SNAPSHOT_STALE/INPUTS_CHANGED 后，下一次显式符号搜索执行所需重载；失败请求不自动重放。若编辑后直接搜索，首个请求也可能报告过期，再显式搜索恢复。HOST_RESTART_REQUIRED 按诊断手册重新打开工作区。Serena 实例明确拒绝 symbolLocation；Serena 的 namePath/重载序号不能迁移为 Roslyn 身份。semanticContext 保留快照、输入检查点、排除生成器数和范围，queryComplete=false 时零引用仍不能证明可删除。
+
+维护者可用启动参数 `--roslyn-config <配置 JSON 的绝对路径>` 显式选择；不从目标仓库自动发现执行配置。JSON 对应宿主 WinCodeConfig.adapters.roslyn，最多 16 KiB，示例路径须替换成已安装/已构建的实际文件：
+
+```json
+{
+  "enabled": true,
+  "allowProjectEvaluation": true,
+  "project": "App/App.csproj",
+  "configuration": "Debug",
+  "targetFramework": "net10.0",
+  "dotnetPath": "C:/dotnet/dotnet.exe",
+  "hostPath": "C:/WinCode/tools/WinCode.Code.Host/bin/Release/net10.0/WinCode.Code.Host.dll"
+}
+```
+
+allowProjectEvaluation 表示允许 MSBuild 设计时求值执行项目 targets，须符合用户授权；不会自动 restore 或下载 SDK。project 是相对当前工作区的固定入口；A→B 切换后使用 B 中同一路径，缺失就报错，不猜其他项目。配置和 TFM 当前固定于实例，要改变它们需更新启动配置并重启 Gateway。dotnetPath/hostPath 必须为绝对普通文件，重解析路径不支持；子进程使用指定 dotnet 的安装根，不改系统环境。可选 loadTimeoutMs 为 1–120000（默认 120000），queryTimeoutMs 为 1–60000（默认 30000），不属于 MCP 请求参数。
+
+维护验收使用 `npm run test:roslyn-host`（独立 Host）和 `npm run test:roslyn-gateway`（已构建 Gateway 的真实 stdio MCP）。要求已有项目内 SDK `.deps/dotnet-10.0.303`，会构建 Host、还原生成夹具并写入 test-tmp；Gateway 脚本还会在生成的 targets 中启动受控测试子进程，验证取消/崩溃/超时。它们不是日常工具不可用时的替代调用，不证明发布包或当前 Codex 连接已更新。环境变更须在用户授权范围内。
+
+原型通过独立进程的 JSON 行协议 v2 工作，非 MCP tools/call：启动参数为 `--allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK`；加载后 ready 帧给出 protocolVersion=2 和 snapshot。项目求值可能执行 targets，不自动 restore；本维护验收只使用获准的生成夹具。协议及启动方式以源码 `tools/WinCode.Code.Host/Program.cs` 注释为准，尚非稳定公共接口。
+
+| 内部 operation | 请求与结果 |
+| --- | --- |
+| `symbols` | 必填 id、snapshot、query，可选 kind/file；最多返回 200 个声明，totalFound/truncated 说明截断，location 给出可用于引用的当前快照定位。超时与 references 相同 |
+| `references` | 必填 id、snapshot、project、file、position；project/file 是工作区内路径，position 为零基 UTF-16 偏移。返回 line/column 一基，start/length 零基 UTF-16。timeoutMs 为 1–60000，默认 30000；limit 为 1–1000，默认 100，只约束返回条数 |
+| `reload` | 必填 id；固定根、入口项目、配置和 TFM 内重新求值，成功返回新的 ready/snapshot，调用者须重新定位符号。timeoutMs 为 1–120000，默认 120000；开始重载后失败或取消不会恢复旧身份 |
+| `cancel` | 必填 id、targetId；cancellationRequested 仅确认是否向活动目标发出了取消，目标仍有独立结果，不代表立即完成或回滚 |
+| `shutdown` | 必填 id；停止接纳、取消并排空请求、释放工作区后才返回成功。stdin EOF 同样清理，但没有 shutdown 确认帧 |
+
+每帧还须包含 operation；id 为 1–128 字符且活动期间不可重复。队列最多等待 8 项，满时 BUSY；timeoutMs 从接纳起计算，包含排队，Host 本身执行协作取消。Gateway 超时/取消先等待目标收尾，超过 1 秒宽限才回收自有 Host 进程树；初次加载尚不能接收 cancel 时直接回收。Windows Host 在加载前绑定自有 Job，以覆盖普通子进程继承的退出行为；这不是沙盒，也不约束 targets 通过外部服务启动的进程。请求帧最多 65536 个 UTF-16 字符，Node 接收帧最多 1 Mi 字符，超长使通道失效。SDK/global.json、监听或资源释放故障可能要求新进程，不能循环 reload。
+
+Host 监听变化并在查询前后比较输入内容指纹，变化时丢弃结果并要求显式 reload。freshness.status=checked 仅覆盖其声明的工作区文件、已加载文档/元数据及祖先常规配置；包括新增文件与 obj/assets，默认排除 bin/node_modules 等目录，但显式加载的输入仍检查。预算为最多 20000 个枚举条目、5000 个文件、总计 128 MiB、单文件 32 MiB；超过即失败，不接受截断快照。不支持重解析路径。
+
+自定义 targets 的任意外部输入和整个磁盘原子快照尚未验证，所以仍保留 diskFreshnessVerified=false、externalCustomInputsVerified=false。queryComplete 当前为 false；排除的分析器/生成器、加载及编译诊断须保留，零引用不证明安全删除。普通 MCP 请求使用下方规范字段；snapshotId 仅出现在 symbolLocation/semanticContext 内，不单独作为顶层参数发送。未知字段可能被忽略，成功响应不证明新参数生效。TS/JS/Python 的限定文件文本取证仍走 prepare_context，不把 Roslyn 声明搜索当成多语言语义服务。
+
 ## 规范字段
 
 兼容容忍模式允许额外字段，但会忽略它们，不能据“调用成功”判断参数已经生效。例如 `scopeFile`、`scope_files` 均不是 `scopeFiles`，`symbolName` 不能代替查符号工具的 `query`。未知字段不能补足缺失必填项；已知字段填错类型、空白必填值或违反范围规则仍会报错。下面列出的名称区分大小写，未列出的参数不应发送。
@@ -12,7 +54,7 @@
 | `wincode_list_directory` | 无 | `path`: 非空字符串，默认 `.`；`maxDepth`: 整数 1–5；`maxEntries`: 整数 1–500；`maxOutputChars`: 整数 2048–32768；`includeIgnored`: 布尔值 |
 | `wincode_analyze_workspace` | 无 | `maxDepth`: 数字，默认 2 |
 | `wincode_find_code_symbol` | `query`: 非空字符串 | `kind`: 字符串，常用 `class/interface/method/function/type/enum`；此工具未声明文件范围参数，指定文件取证改用下面的 `scopeFiles` |
-| `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 字符串，表示符号的**定义文件**，不表示只搜索该文件中的引用 |
+| `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 定义文件相对路径；`symbolLocation`: Roslyn 搜索返回的 location 对象（snapshotId/project/file/position 均必填，路径各最长 4096）；同时提供 relativePath 时必须与 location.file 一致 |
 | `analyze_change_impact` | `target`: 非空字符串 | 无 |
 | `wincode_plan_refactoring` | `target`、`goal`: 非空字符串 | 无 |
 | `wincode_safe_move_to_trash` | `filePath`: 工作区内相对路径字符串 | `reason`: 字符串；该工具实际移动文件，须符合用户授权 |
@@ -83,6 +125,8 @@ lineRanges 为闭区间、1 起始行号，最多 8 个文件，每文件一个�
 
 metrics.selectedFiles 是选择数，packedFiles 是打包器实际处理数（片段模式为片段数），returnedFiles 是返回正文覆盖数；打包器缺少正文位置时为 null。relatedFiles.bodyStatus 表示 complete/partial/omitted/unknown；片段模式的 complete 仅表示该片段完整，不表示整个文件完整。小预算先裁辅助列表，metadataTruncated 提示列表可能不全。
 
+Repomix CLI 的 fileCount 使用独立运行摘要中的文件数，不从正文中的 File 标题估算；空包可以为 0。若已安装 CLI 的摘要格式不受支持或被配置静默隐藏，则明确降级为 builtin-fallback，并在适配器 lastError 记录原因。CLI 快照计数正确不代表其每个正文都有 WinCode 可用的位置映射。
+
 bodyStatusScope 明确该字段描述 displayed-snippet 或 packed-file。symbol 请求返回声明附近窗口，symbolCoverage=unknown；即使 bodyStatus=complete 也不能认定整个方法完整。若所需逻辑仍在后方，可使用该证据的 nextRequest 续读最多 80 行；补读从最终尾行之后开始，半截尾行会完整重读。它不推测方法结束位置、不证明调用链完整，fileLineCount 仅为读取时的行数；编辑后重新定位。EOF 不再建议补读，最大预算无法读取完整长行时转用文件读取工具。
 
 2000 是首轮建议预算；证据不足再定向补充，确需文件正文才设 includeFullText=true。中文任务优先附上明确符号。startLine/endLine 是本次片段实际覆盖行，line 是其中的符号声明行；locationKind=file-start 只说明读到文件开头，evidenceInsufficient=false 不保证已取得回答问题所需的代码。完整模式的 packedContent 是正文，候选元数据不保证打包结果完整。
@@ -94,3 +138,7 @@ bodyStatusScope 明确该字段描述 displayed-snippet 或 packed-file。symbol
 若已有影响报告，直接据此规划，不为获得通用清单再次调用 plan_refactoring。该工具仍会做影响分析；它返回的 evidence 保留歧义、降级和 UNKNOWN，不代表已经执行重构。
 
 仅在用户授权移除文件时使用 wincode_safe_move_to_trash({filePath:"相对路径",reason:"原因"})；它会实际移动文件。重构计划本身不执行修改。
+
+trash 响应保留 success/trashPath/message，并用 outcome 区分 completed（移动及元数据完成）、not_moved（本次未移动）、partial（已移动但元数据未完成）。partial 的 errorCode=TRASH_METADATA_FAILED、failureStage=metadata，originalPath/trashPath/metadataPath 给出原位置、实际移动位置及预期元数据位置；metadataPath 不证明元数据完整。立即保留并告知用户实际 trashPath，不把 success=false 当作未执行，不重复移动或自动移回。not_moved 的 trashPath 为空，errorCode=TRASH_NOT_MOVED；先检查 failureStage 和文件实际状态。重启不会自动补写元数据或推断原路径；丢失 partial 响应时，本实现不保证自动恢复原目录映射。
+
+回收站目标名含唯一标识，过长的原文件名展示部分会截短，以给元数据文件名预留空间；完整原路径保存在 originalPath 和成功写入的元数据中。恢复时使用这些路径，不从截短的目标名推断原文件名或扩展名。

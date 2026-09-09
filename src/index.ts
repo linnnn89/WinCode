@@ -39,23 +39,29 @@ async function main() {
   const server = new WinCodeMcpServer(router);
 
   let shuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (shuttingDown) return;
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = (signal: string, exitCode = 0): Promise<void> => {
+    if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
-    console.error(`[WinCode Gateway] ${signal}: shutting down...`);
-    const force = setTimeout(() => {
-      console.error('[WinCode Gateway] Shutdown timed out; exiting.');
-      process.exit(1);
-    }, config.timeouts.shutdownMs);
-    force.unref();
-    try {
-      await server.stop();
-      process.exit(0);
-    } catch (err) {
-      console.error('[WinCode Gateway] Error during shutdown:', err);
-      process.exit(1);
-    }
+    shutdownPromise = (async () => {
+      console.error(`[WinCode Gateway] ${signal}: shutting down...`);
+      const force = setTimeout(() => {
+        console.error('[WinCode Gateway] Shutdown timed out; exiting.');
+        process.exit(1);
+      }, config.timeouts.shutdownMs);
+      force.unref();
+      try {
+        await server.stop();
+        process.exit(exitCode);
+      } catch (err) {
+        console.error('[WinCode Gateway] Error during shutdown:', err);
+        process.exit(1);
+      }
+    })();
+    return shutdownPromise;
   };
+
+  server.onDisconnect = () => { void shutdown('transport closed'); };
 
   process.on('SIGINT', () => {
     void shutdown('SIGINT');
@@ -63,20 +69,28 @@ async function main() {
   process.on('SIGTERM', () => {
     void shutdown('SIGTERM');
   });
+  process.stdin.once('end', () => { void shutdown('stdin EOF'); });
+  process.stdin.once('close', () => { void shutdown('stdin closed'); });
+  process.stdin.once('error', () => { void shutdown('stdin error'); });
+  process.stdout.once('error', () => { void shutdown('stdout error'); });
+  // The client may close its diagnostic pipe too; logging must not recursively crash shutdown.
+  process.stderr.on('error', () => {});
   process.on('uncaughtException', (err) => {
-    console.error('[WinCode Gateway] Uncaught exception (gateway stays up unless shutdown fails):', err);
+    console.error('[WinCode Gateway] Uncaught exception:', err);
+    void shutdown('uncaughtException', 1);
   });
   process.on('unhandledRejection', (err) => {
-    console.error('[WinCode Gateway] Unhandled rejection (gateway stays up):', err);
+    console.error('[WinCode Gateway] Unhandled rejection:', err);
+    void shutdown('unhandledRejection', 1);
   });
 
   try {
     await server.start();
     console.error(`[WinCode Gateway] v${WINCODE_VERSION} ready.`);
   } catch (err) {
+    if (shuttingDown) { await shutdownPromise; return; }
     console.error('[WinCode Gateway] Fatal error starting server:', err);
-    await server.stop().catch(() => {});
-    process.exit(1);
+    await shutdown('startup failed', 1);
   }
 }
 

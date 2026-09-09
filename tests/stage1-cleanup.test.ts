@@ -164,7 +164,7 @@ it('cleanup does not follow an overflow directory junction', async () => isolate
   } finally { await fs.unlink(link); }
 }));
 
-it('shutdown waits for the active switch and rejects its queued queries', async () => isolated(async root => {
+it('shutdown cancels the active switch before rebinding and rejects its queued queries', async () => isolated(async root => {
   const router = new ToolRouter(getDefaultConfig(root));
   let release!: () => void;
   let entered!: () => void;
@@ -182,8 +182,8 @@ it('shutdown waits for the active switch and rejects its queued queries', async 
   const shutdown = router.dispose();
   assert.deepEqual(events, []);
   release();
-  await Promise.all([switching, shutdown, rejected]);
-  assert.deepEqual(events, ['dispose', 'initialize', 'dispose']);
+  await Promise.all([assert.rejects(switching, /cancelled/i), shutdown, rejected]);
+  assert.deepEqual(events, ['dispose']);
   assert.equal(router.inFlightRequests, 0);
   assert.equal(router.resources.isDisposed, true);
   await assert.rejects(router.acquireRequestSlot(), /shutting down/);

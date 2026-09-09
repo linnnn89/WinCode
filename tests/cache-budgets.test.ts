@@ -30,12 +30,14 @@ describe('cache-budgets', () => {
     await fs.rm(testCacheDir, { recursive: true, force: true }).catch(() => { });
   });
   describe('Cache', () => {
-    it('TTL still expires entries', async () => {
+    it('TTL still expires entries', async t => {
       const cache = new CacheManager(path.join(testCacheDir, 'ttl'));
       await cache.initialize();
+      let now = Date.now();
+      t.mock.method(Date, 'now', () => now);
       await cache.set('t', { n: 1 }, { ttlMs: 40 });
       assert.ok(await cache.get('t'));
-      await new Promise((r) => setTimeout(r, 60));
+      now += 60;
       assert.strictEqual(await cache.get('t'), null);
     });
 

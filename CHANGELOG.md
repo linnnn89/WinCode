@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.2
+
+- Exit the production stdio entry on EOF/closed pipes, unify shutdown events and terminate on process-level fatal errors. Connect transport before initialization so disconnect can cancel startup.
+- Cancel startup/workspace rebinding and all MCP request signals on shutdown; prevent late resources from restarting the runtime.
+- Share the existing eight-second shutdown budget across owners, retain failures and attempt independent owned-process cleanup even when an adapter hangs.
+- Add actual dist-entry EOF tests and lifecycle regression coverage. Abnormal termination and idle-resource reclamation continue in the next iteration.
+- Synchronize previously audited Skill and configuration guidance. Actual Codex-client Roslyn acceptance still awaits a refreshed connection.
+
 ## 0.13.1
 
 - Mask comments/literals before local declarations, add TSX/JSX scanning and scoped context, preserve original signatures/lines and invalidate legacy declaration caches. Uncertain lexical boundaries are incomplete and uncached; text references remain heuristic.

@@ -15,7 +15,7 @@ import { ImpactAnalyzer } from '../CompositeTools/ImpactAnalyzer.js';
 import { RefactorAssistant } from '../CompositeTools/RefactorAssistant.js';
 import { ProjectDiagnostics } from '../CompositeTools/ProjectDiagnostics.js';
 import { ExtensionManager } from '../Extensions/ExtensionManager.js';
-import { Mutex, ResourceManager, AbortError, TimeoutError, GatewayRestartRequiredError } from './ResourceManager.js';
+import { Mutex, ResourceManager, AbortError, TimeoutError, GatewayRestartRequiredError, withTimeout } from './ResourceManager.js';
 import { SessionManager, WorkspaceSession } from './SessionManager.js';
 import { WorkspaceWatch } from './WorkspaceWatch.js';
 import { AdapterLastError } from './AdapterStatus.js';
@@ -93,6 +93,8 @@ export class ToolRouter {
   private shuttingDown = false;
   private inFlight = 0;
   private disposePromise: Promise<void> | null = null;
+  private initialization: Promise<void> | null = null;
+  private readonly shutdownController = new AbortController();
   private readonly workspaceLock = new Mutex();
   private switchingPromise: Promise<void> | null = null;
   private resolveSwitching: (() => void) | null = null;
@@ -150,6 +152,12 @@ export class ToolRouter {
 
   get isShuttingDown(): boolean {
     return this.shuttingDown;
+  }
+
+  get shutdownSignal(): AbortSignal { return this.shutdownController.signal; }
+
+  private assertActive(): void {
+    if (this.shuttingDown) throw new AbortError('WinCode is shutting down; operation cancelled.');
   }
 
   /** 提供方在构造时显式选择；Roslyn 失败不触发 Serena RPC。 */
@@ -251,7 +259,11 @@ export class ToolRouter {
   }
 
   async initialize(): Promise<void> {
-    try { await this.initializeOnce(); }
+    try {
+      this.assertActive();
+      this.initialization ??= this.initializeOnce();
+      await this.initialization;
+    }
     catch (error) {
       try { await this.dispose(); }
       catch (cleanup) { throw new AggregateError([error, cleanup], 'Initialization and cleanup failed.'); }
@@ -262,12 +274,15 @@ export class ToolRouter {
   private async initializeOnce(): Promise<void> {
     this.cache.setNamespace(this.config.workspaceRoot);
     this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
-    await this.cache.initialize();
-    await this.repomix.initialize();
-    if (!this.roslyn) await this.text.initialize();
-    await this.flaui.initialize();
-    await this.extensions.initializeAll();
+    for (const initialize of [() => this.cache.initialize(), () => this.repomix.initialize(),
+      () => this.roslyn ? Promise.resolve() : this.text.initialize(), () => this.flaui.initialize(),
+      () => this.extensions.initializeAll()]) {
+      this.assertActive();
+      await initialize();
+      this.assertActive();
+    }
     const fp = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
+    this.assertActive();
     this.session.setFingerprint(fp);
     await this.bindWatch(this.config.workspaceRoot);
 
@@ -283,6 +298,7 @@ export class ToolRouter {
   private async bindWatch(workspaceRoot: string): Promise<void> {
     try { await this.watch.stop(); }
     catch (error) { throw new GatewayRestartRequiredError([error], 'Workspace watcher cleanup failed; restart the Gateway after checking cleanup.'); }
+    this.assertActive();
     this.watch.start(workspaceRoot, () => {
       this.cache.noteFilesystemChange(workspaceRoot);
     });
@@ -304,6 +320,7 @@ export class ToolRouter {
    * provider cleanup/reinitialization and cache namespace changes.
    */
   async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, signal?: AbortSignal) {
+    signal = signal ? AbortSignal.any([signal, this.shutdownSignal]) : this.shutdownSignal;
     return this.workspaceLock.runExclusive(async () => {
       if (this.shuttingDown) {
         throw new Error('WinCode is shutting down; workspace_open rejected.');
@@ -511,6 +528,8 @@ export class ToolRouter {
   async dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.shuttingDown = true;
+    this.shutdownController.abort();
+    this.resources.seal();
     for (const controller of this.codeOperations) controller.abort();
     this.disposePromise = this.disposeOnce();
     // Retain the settled result: repeated callers must not see success after failed cleanup.
@@ -519,32 +538,44 @@ export class ToolRouter {
 
   private async disposeOnce(): Promise<void> {
     this.shuttingDown = true;
-    // Let any active switch finish before disposing the resources it binds.
-    return this.workspaceLock.runExclusive(async () => {
-      const drainMs = Math.min(3_000, this.config.timeouts?.shutdownMs ?? 8_000);
-      const drained = await this.waitForIdle(drainMs);
+    const budget = this.config.timeouts?.shutdownMs ?? 8_000;
+    const deadline = Date.now() + budget;
+    const softDeadline = deadline - Math.min(2_000, budget / 4);
+    const failures: unknown[] = [];
+    const attempt = async (name: string, work: () => Promise<unknown> | void, limit: number) => {
+      try { await withTimeout(Promise.resolve().then(work), Math.max(1, limit), name); }
+      catch (error) { failures.push(error); }
+    };
+    // A stuck initializer/switch cannot monopolize the process-wide exit deadline.
+    await attempt('shutdown-drain', async () => {
+      await this.initialization?.catch(() => {});
+      await this.switchingPromise?.catch(() => {});
+      const drained = await this.waitForIdle(Math.max(1, Math.min(3_000, softDeadline - Date.now())));
+      if (!drained) throw new Error('Requests did not settle before shutdown.');
+    }, Math.min(3_000, (softDeadline - Date.now()) / 3));
+    const drained = failures.length === 0;
       if (this.pruneTimer) {
         clearInterval(this.pruneTimer);
         this.pruneTimer = null;
       }
-      const failures: unknown[] = [];
-      if (!drained) failures.push(new Error(`Requests did not settle within shutdown drain (${drainMs}ms).`));
       // Every owner gets a cleanup attempt even if a previous adapter failed.
       // Keep ordering: adapters stop producing work before queued cache writes drain.
-      for (const cleanup of [
+      const cleanups = [
         () => this.watch.stop(),
         () => this.repomix.dispose(),
         () => this.text.dispose(),
         () => this.roslyn?.dispose(),
         () => this.flaui.dispose(),
         () => this.extensions.disposeAll(),
-        () => this.cache.flush(),
+        // Never race a cache flush against an initializer or request that failed to drain.
+        () => drained ? this.cache.flush() : Promise.resolve(),
         () => this.session.close(),
-        () => this.resources.dispose(),
-      ]) {
-        try { await cleanup(); } catch (error) { failures.push(error); }
+      ];
+      for (const [index, cleanup] of cleanups.entries()) {
+        await attempt(`shutdown-owner-${index}`, cleanup, (softDeadline - Date.now()) / (cleanups.length - index));
       }
+      // Independent ownership cleanup still runs when an adapter has hung or thrown.
+      await attempt('shutdown-owned-resources', () => this.resources.dispose(deadline), deadline - Date.now());
       if (failures.length) throw new AggregateError(failures, 'One or more gateway resources failed to close.');
-    });
   }
 }

@@ -4,7 +4,9 @@
 
 从 0.12.4 起 Repomix 健康探测和打包都由当前 Node 可执行文件直接启动已安装的 JavaScript CLI；不经过 cmd、npx 或 PATH 包装脚本，也不下载包。默认按目标工作区和 WinCode 安装目录的 Node 模块路径读取 repomix/package.json 的 bin 入口；不搜索 npx 缓存或 npm 自定义全局前缀。非标准安装需在宿主 WinCodeConfig.adapters.repomix.customCliPath 提供绝对 .js/.cjs/.mjs 路径；该字段不是 MCP 工具参数，不能传给 hello/prepare_context。显式路径无效时返回 builtin fallback，不执行另一份安装；useCli=false 仍完全禁止探测和启动。执行已安装脚本不提供沙盒或脚本可信性保证。
 
-`hello` 从 0.12.1 起只读取版本、能力和已知状态，不启动上游、CLI 或 UI Host 探测进程。`health.healthObservation` 区分 `known/unknown` 并给出 `observedAt`；`unknown`、`available:null` 或 `commandFound:null` 表示尚未探测，不能解释为不可用。配置禁用属于已知策略，但观察时间可为 null。已知健康结果可能陈旧，需要当前检查时调用现有 `wincode_diagnose_project({})`，不向 hello 添加未声明的 force/probe 字段。
+`hello` 从 0.12.1 起只读取版本、能力和已知状态，不启动上游、CLI 或 UI Host 探测进程。`health.healthObservation` 区分 `known/unknown` 并给出 `observedAt`；`unknown` 或 `available:null` 表示尚未探测，不能解释为不可用。配置禁用属于已知策略，但观察时间可为 null。已知健康结果可能陈旧，需要当前检查时调用现有 `wincode_diagnose_project({})`，不向 hello 添加未声明的 force/probe 字段。
+
+`wincode_diagnose_project` 会检查 SDK 并主动探测 Repomix/UIA；对 Roslyn 只读取已有加载状态，不会启动 Code Host 或执行项目加载。已授权配置 Roslyn 后，首次明确的符号搜索才触发加载。`health.healthObservation` 当前包含 text/repomix/flaui；Roslyn 的观察时间与快照状态在 `health.roslyn`，不要按旧 Serena 字段判断。
 
 代码查询、引用、上下文、影响分析和重构建议接收 MCP 客户端取消信号；停止后续扫描/打包，等待当前读操作或自有上游进程清理后释放请求占用。Roslyn 取消会传播到自有 Host；若合作取消未及时完成，则按既有超时策略清理自有进程树，不宣称其他请求已成功。磁盘单次 OS I/O 不能保证瞬时中断。工作区切换在等待和提交前可取消；已开始提交切换时完成一致性收尾，不声称已回滚。
 
@@ -44,7 +46,7 @@ WORKSPACE_RECOVERY_REQUIRED 表示切换中途失败后工作区一致性尚未�
 
 Roslyn 运行中已观察到的加载、查询或清理错误也纳入 health.lastAdapterError，provider=roslyn；health.roslyn.health.lastError 保留对应观察。lastError 是历史最后一次失败，不表示每次 hello 都执行了健康探测，也不能据此自行重放业务请求。工作区完整重置后观察清空。
 
-Code Host 内部协议 v2 的失败包含 success=false、errorCode 和 error，且不附带旧引用。SNAPSHOT_STALE/INPUTS_CHANGED 要求等写入稳定后显式 reload，再用新身份定位；PROJECT_LOAD_FAILED 表示结构化 MSBuild 加载失败，先修复项目输入，再 reload，不能继续使用最后一次成功快照。源码的 compilationErrors 可随有用的部分引用返回，不能据此宣称完整。
+Code Host 内部协议 v2 的失败包含 success=false、errorCode 和 error，且不附带旧引用。SNAPSHOT_STALE/INPUTS_CHANGED 在内部协议层要求等写入稳定后显式 reload，再用新身份定位；MCP 客户端应重新调用 wincode_find_code_symbol，由适配器执行所需重载，不存在 wincode_reload 工具；PROJECT_LOAD_FAILED 表示结构化 MSBuild 加载失败，先修复项目输入，再 reload，不能继续使用最后一次成功快照。源码的 compilationErrors 可随有用的部分引用返回，不能据此宣称完整。
 
 Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回；失败的 JSON 文本与 structuredContent 一致，仍保留领域差异。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，再显式搜索；同根打开也关闭旧 Host 后重新选择 SDK。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
 
@@ -54,3 +56,7 @@ INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项
 
 
 `npm run test:error-contracts` 使用生成夹具验证错误、部分完成与恢复；Node 22 CI 执行该专项并保存有界报告。UI 图片场景使用注入响应，只验证序列化，不冒充真实屏幕验收。
+
+## 连接关闭（0.13.2）
+
+正式入口在 stdin EOF/close、传输关闭或管道错误时停止接收请求，取消初始化和活动操作，并按统一 8 秒预算清理自有资源。关闭失败保留非零退出结果；缓存写入不能无限延迟退出。不能把此行为等同于 Codex 当前连接已更新，也不能承诺强杀 Gateway 时所有后代均受同一个 Windows Job 保护。升级后刷新对应 MCP 连接，不必一概重启整个 Codex。

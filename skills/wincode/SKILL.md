@@ -5,7 +5,7 @@ description: 使用 WinCode MCP 分析 Windows/.NET 工作区，或读取桌面�
 
 # WinCode
 
-源码契约：0.13.1（LocalText 词法边界与 E4 错误契约，见对应手册）；手册修订：2026-09-09。外部 Serena 入口与旧 source 已退役，不能将此版本号当作当前连接已升级。安装内容可用 `node scripts/sync-skill.mjs <安装目录绝对路径>` 核对；仅维护时执行。以当前连接实际 Schema 为准。
+源码契约：0.13.2（连接退出与限时资源清理，见对应手册）；手册修订：2026-09-09。外部 Serena 入口与旧 source 已退役，不能将此版本号当作当前连接已升级。安装内容可用 `node scripts/sync-skill.mjs <安装目录绝对路径>` 核对；仅维护时执行。以当前连接实际 Schema 为准。
 
 默认以本地文本模式启动，source=local-text；明确配置 Roslyn 后，才通过 WinCode.Code.Host 提供 C# 语义证据。搜索返回的 location 可作为引用、影响分析和重构工具的 symbolLocation；不要猜测定位、复用旧快照或使用已退役的 namePath。内部 reload/cancel 不是 MCP 工具字段。配置与验收边界见代码手册。
 

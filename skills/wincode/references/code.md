@@ -8,7 +8,7 @@
 
 ## 后端与能力边界
 
-默认 Gateway 使用 WinCode 内置文本能力，`source=local-text`，健康状态明确 semanticConfigured=false。显式启用 Roslyn 后使用直接 Code Host，失败会报错，不会偷偷改换提供方。外部 Serena 连接配置、启动器及旧 `serena-adapter-fallback` 来源已退役；旧调用方须适配。`hello.codeProvider` 标明实例选择，不能根据仓库中存在 Host 推断当前连接已更新。
+默认 Gateway 使用 WinCode 内置文本能力，查询结果 `source=local-text`。`hello.health.text.semanticConfigured=false` 只描述文本适配器，即使启用 Roslyn 仍为 false；整个实例的提供方看 `hello.codeProvider`，Roslyn 状态看 `hello.health.roslyn`。显式启用 Roslyn 后使用直接 Code Host，失败会报错，不会偷偷改换提供方。外部 Serena 连接配置、启动器及旧 `serena-adapter-fallback` 来源已退役；旧调用方须适配。`hello.codeProvider` 标明实例选择，不能根据仓库中存在 Host 推断当前连接已更新。
 
 Roslyn 调用顺序：用 wincode_find_code_symbol 搜索（query 最长 256 字符），根据 signature、file 和 location.project 选择具体声明；再把该项的 name 作为 symbolName、完整 location 对象作为 symbolLocation 传给 wincode_find_references。location 包含 snapshotId（32 位小写十六进制）、project/file（工作区内相对路径）和 position（非负零基 UTF-16）。不手工猜偏移；同名/重载返回候选，不能自动选第一项。简单名称查询在当前不完整范围下只返回候选，单候选也需明确定位；candidatesTruncated=true 时 candidateCount 可能缺省，不能当作全量计数。
 
@@ -31,7 +31,7 @@ Roslyn 调用顺序：用 wincode_find_code_symbol 搜索（query 最长 256 字
 
 allowProjectEvaluation 表示允许 MSBuild 设计时求值执行项目 targets，须符合用户授权；不会自动 restore 或下载 SDK。project 是相对当前工作区的固定入口；A→B 切换后使用 B 中同一路径，缺失就报错，不猜其他项目。配置和 TFM 当前固定于实例，要改变它们需更新启动配置并重启 Gateway。dotnetPath/hostPath 必须为绝对普通文件，重解析路径不支持；子进程使用指定 dotnet 的安装根，不改系统环境。可选 loadTimeoutMs 为 1–120000（默认 120000），queryTimeoutMs 为 1–60000（默认 30000），不属于 MCP 请求参数。
 
-维护验收使用 `npm run test:roslyn-host`（独立 Host）和 `npm run test:roslyn-gateway`（真实 stdio MCP）。维护脚本按显式 WINCODE_DOTNET_PATH、项目 .deps、DOTNET_HOST_PATH、PATH 顺序寻找已安装 SDK，并核对 global.json 的精确版本；不下载安装。当前要求 10.0.303。这些脚本只还原生成夹具，保留 test-tmp 报告；Gateway 验收使用完整发布目录的异地副本。此验收不证明当前 Codex 连接已更新或无 SDK 的机器可运行。
+维护验收使用 `npm run test:roslyn-host`（独立 Host）和 `npm run test:roslyn-gateway`（真实 stdio MCP）。维护脚本按显式 WINCODE_DOTNET_PATH、项目 .deps、DOTNET_HOST_PATH、PATH 顺序寻找已安装 SDK，并核对 global.json 的精确版本；不下载安装。当前要求 10.0.303。这些脚本会锁定还原并构建/发布 WinCode Code Host，也会还原生成的测试夹具，保留 test-tmp 报告；不还原用户目标应用。现有 NuGet 缓存缺包时还原可能访问包源，不能将“不下载 SDK”理解成完全离线。Gateway 验收使用完整发布目录的异地副本。此验收不证明当前 Codex 连接已更新或无 SDK 的机器可运行。
 
 `additionalInputs` 是可选启动配置，默认空数组。例如自定义构建读取现存的 `schema.yaml` 和非标准导入 `build-inputs/custom.rules`，可填 `["schema.yaml","build-inputs/custom.rules"]`。最多 32 个工作区相对文件路径，数组 JSON 最长 4096 个 UTF-16 字符；不接受根外/绝对路径、重复项、目录、通配符或链接。缺失项报 INPUT_UNAVAILABLE，不静默删除；创建或恢复文件后再显式搜索。切换工作区后列表按新根解释，各根均须具备所列文件。修改列表需更新启动配置并重启 Gateway，普通 MCP 参数不能添加输入或获取项目执行许可。
 
@@ -60,13 +60,24 @@ Host 监听变化并在查询前后比较内容指纹，变化时丢弃结果并
 | 工具 | 必填字段 | 可选字段及类型 |
 | --- | --- | --- |
 | `workspace_open` | `path`: 非空字符串，最长 4096 | `includeTree`: 布尔值；`maxOutputChars`: 整数 2048–32768，默认 8000 |
-| `wincode_list_directory` | 无 | `path`: 非空字符串，默认 `.`；`maxDepth`: 整数 1–5；`maxEntries`: 整数 1–500；`maxOutputChars`: 整数 2048–32768；`includeIgnored`: 布尔值 |
+| `wincode_list_directory` | 无 | `path`: 非空字符串，最长 4096，默认 `.`；`maxDepth`: 整数 1–5，默认 1；`maxEntries`: 整数 1–500，默认 100；`maxOutputChars`: 整数 2048–32768，默认 8000；`includeIgnored`: 布尔值，默认 false |
 | `wincode_analyze_workspace` | 无 | `maxDepth`: 数字，默认 2 |
-| `wincode_find_code_symbol` | `query`: 非空字符串 | `kind`: 字符串，常用 `class/interface/method/function/type/enum`；此工具未声明文件范围参数，指定文件取证改用下面的 `scopeFiles` |
-| `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 定义文件相对路径；`symbolLocation`: Roslyn 搜索返回的 location 对象（snapshotId/project/file/position 均必填，路径各最长 4096）；同时提供 relativePath 时必须与 location.file 一致 |
+| `wincode_find_code_symbol` | `query`: 非空字符串 | `kind`: 字符串，按下述提供方支持范围使用；Roslyn 的 query 最长 256、kind 最长 128。此工具未声明文件范围参数，指定文件取证改用下面的 `scopeFiles` |
+| `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 定义文件相对路径（Roslyn 用于限定候选，local-text 不据此缩小引用扫描）；`symbolLocation`: Roslyn 搜索返回的 location 对象（snapshotId/project/file/position 均必填，路径各最长 4096）；同时提供 relativePath 时必须与 location.file 一致 |
 | `analyze_change_impact` | `target`: 非空字符串 | `symbolLocation`: 搜索返回的完整定位；提供时 target 必须是该符号的简单名称 |
 | `wincode_plan_refactoring` | `target`、`goal`: 非空字符串 | `symbolLocation`: 同影响分析 |
 | `wincode_safe_move_to_trash` | `filePath`: 工作区内相对路径字符串 | `reason`: 字符串；该工具实际移动文件，须符合用户授权 |
+
+`kind` 不是全语言统一的能力承诺：local-text 的 C# 模式匹配 class/struct/interface/enum/method，TS/TSX/JS/JSX 模式匹配 class/interface/enum/type/function/method，Python 模式匹配 class/function；均为有限单行声明模式。Roslyn 返回 class/interface/struct/enum/type/method/property，构造函数归入 method，`type` 筛选也匹配命名类型。Roslyn kind 大小写精确，local-text kind 忽略大小写；建议统一使用上述小写值。两种提供方的 query 都是忽略大小写的名称子串搜索；prepare_context 的 symbol 则是大小写精确匹配。
+
+Roslyn 精确调用示意（`selected` 必须是本次搜索结果中经消歧选定的项，不能照抄虚构定位）：
+
+```javascript
+wincode_find_references({symbolName: selected.name, symbolLocation: selected.location})
+wincode_analyze_change_impact({target: selected.name, symbolLocation: selected.location})
+```
+
+local-text 的 queryComplete=true 仅表示该次有界文本扫描完成，仍是 degraded，不证明语义完整；Roslyn 当前 queryComplete 始终为 false，应结合 resolution、semanticContext 和实际返回证据判断。
 
 `wincode_analyze_change_impact` 是 `analyze_change_impact` 的公布别名；`wincode_workspace_open` 是 `workspace_open` 的历史兼容别名。别名共享参数和执行规则，优先使用本连接 tools/list 公布的名称。其余字段名不接受自动拼写纠正。
 
@@ -78,7 +89,7 @@ Host 监听变化并在查询前后比较内容指纹，变化时丢弃结果并
 | `candidateFiles` | 可选字符串数组，最多 20，每项最长 1024 | 优先候选，**不排他**；与 `scopeFiles` 同用时须在其内 |
 | `scopeFiles` | 可选字符串数组，1–20，每项最长 1024 | 排他范围；不能与 `focusAreas` 同用 |
 | `symbol` | 可选字符串，最长 128，不含空白 | 大小写精确声明名；必须有 `scopeFiles`，不能与 `lineRanges` 同用 |
-| `lineRanges` | 可选对象数组，1–8 | 每项必填 `file`（字符串）、`startLine/endLine`（正整数）；1 起始闭区间、起点≤终点、每段≤500行，每文件仅一段；若有 scope，必须在 scope 内；不能与 `symbol` 或 `includeFullText:true` 同用 |
+| `lineRanges` | 可选对象数组，1–8 | 每项必填 `file`（非空字符串，最长 1024）、`startLine/endLine`（正整数）；1 起始闭区间、起点≤终点、每段≤500行，每文件仅一段；若有 scope，必须在 scope 内；不能与 `symbol` 或 `includeFullText:true` 同用 |
 | `focusAreas` | 可选字符串数组，最多 5，每项最长 1024 | 文件或目录；不支持通配符 |
 | `compress` | 可选布尔值 | 仅在全文且实际使用 CLI 时转发压缩选项；内置降级不做 AST 压缩 |
 | `outputFormat` | 可选字符串 `markdown/xml` | 默认 `markdown`，用于打包正文 |
@@ -100,7 +111,7 @@ lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details
 | 按需浏览目录 | wincode_list_directory({path: "src", maxDepth: 1, maxEntries: 100}) |
 | 项目依赖概览 | wincode_analyze_workspace({maxDepth: 2}) |
 | 找符号 | wincode_find_code_symbol({query: "Save"}) |
-| 查引用 | wincode_find_references({symbolName: "Save", relativePath: "src/Service.cs"}) |
+| 文本引用线索 / Roslyn 候选消歧 | wincode_find_references({symbolName: "Save", relativePath: "src/Service.cs"})；Roslyn 未传 symbolLocation 时只返回候选，不查询引用 |
 | 变更影响 | wincode_analyze_change_impact({target: "Service"}) |
 | 重构步骤 | wincode_plan_refactoring({target: "Service", goal: "拆分保存逻辑"}) |
 
@@ -130,7 +141,7 @@ lineRanges 为闭区间、1 起始行号，最多 8 个文件，每文件一个�
 
 维护者可运行 npm run benchmark:agent -- 1 做单轮检查，或 -- 3 做三轮对照；报告在 test-tmp/agent-efficiency。它比较十类固定脚本场景（含既有 C# 夹具）的调用、返回字符、重复显示行和证据断言，使用真实 MCP handler 与本地回退，关闭外部后端。数据不代表真实用户任务频率、模型完成率或缓存收益，不据此宣称通用提速。Schema v2 校验当前文件、行号、正文和状态，异常保留为失败记录；复用只依赖受控夹具的可信无变化事件，修改后必须重取，不能作为生产环境的新鲜度判断。
 
-仅知道文件时用 scopeFiles:["src/Service.cs"] 排他限定最多 20 个文件；它跳过全仓库符号搜索，不能与 focusAreas 同用，candidateFiles/lineRanges 必须在其内。需要声明附近片段可加 symbol:"Save"：大小写精确匹配，必须提供 scopeFiles，目前复用 C#/TS/JS/Python 本地声明模式，并非语义解析，queryComplete=false。重名、未找到或不支持语言会返回 fileIssues，不用文件开头冒充命中；可用已知行号进一步消歧。
+仅知道文件时用 scopeFiles:["src/Service.cs"] 排他限定最多 20 个文件；它跳过全仓库符号搜索，不能与 focusAreas 同用，candidateFiles/lineRanges 必须在其内。需要声明附近片段可加 symbol:"Save"：大小写精确匹配，必须提供 scopeFiles，目前复用 .cs/.ts/.tsx/.js/.jsx/.py 本地声明模式，并非语义解析，queryComplete=false。重名、未找到或不支持语言会返回 fileIssues，不用文件开头冒充命中；可用已知行号进一步消歧。
 
 metrics.selectedFiles 是选择数，packedFiles 是打包器实际处理数（片段模式为片段数），returnedFiles 是返回正文覆盖数；打包器缺少正文位置时为 null。relatedFiles.bodyStatus 表示 complete/partial/omitted/unknown；片段模式的 complete 仅表示该片段完整，不表示整个文件完整。小预算先裁辅助列表，metadataTruncated 提示列表可能不全。
 

@@ -10,18 +10,22 @@ import { toolErrorResult, codeRecoveryAction, type ToolExecutionContext } from '
 export class WinCodeMcpServer {
   private server: Server;
   private stopPromise: Promise<void> | null = null;
+  private startPromise: Promise<void> | null = null;
+  onDisconnect?: () => void;
   private readonly registry = new ToolRegistry();
 
   constructor(private readonly router: ToolRouter) {
     this.server = new Server({ name: 'wincode-agent-gateway', version: WINCODE_VERSION }, { capabilities: { tools: {} } });
+    this.server.onclose = () => this.onDisconnect?.();
     this.registerHandlers();
   }
 
   private registerHandlers(): void {
     this.server.setRequestHandler('tools/list', async () => ({ tools: this.registry.list() }));
     this.server.setRequestHandler('tools/call', async (request, ctx) => {
+      await this.startPromise?.catch(() => {});
       const { name, arguments: input = {} } = request.params;
-      const signal = ctx.mcpReq.signal;
+      const signal = ctx.mcpReq.signal ? AbortSignal.any([ctx.mcpReq.signal, this.router.shutdownSignal]) : this.router.shutdownSignal;
       if (this.router.isShuttingDown || signal?.aborted) {
         return toolErrorResult(this.router.isShuttingDown ? 'SHUTDOWN' : 'CANCELLED',
           this.router.isShuttingDown ? 'WinCode is shutting down; tool call rejected.' : 'Tool call was cancelled.',
@@ -63,10 +67,17 @@ export class WinCodeMcpServer {
     });
   }
 
-  async start(): Promise<void> {
-    await this.router.initialize();
+  start(): Promise<void> {
+    this.startPromise ??= this.startOnce();
+    return this.startPromise;
+  }
+
+  private async startOnce(): Promise<void> {
+    // Connect first so EOF can cancel even a slow initialization; tool calls await startPromise.
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+    await this.router.initialize();
+    if (this.router.isShuttingDown) throw new AbortError('Gateway startup cancelled.');
     console.error(`[WinCode Gateway] MCP Server ${WINCODE_VERSION} running on stdio transport.`);
   }
 

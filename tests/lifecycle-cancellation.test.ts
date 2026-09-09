@@ -10,8 +10,54 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { getDefaultConfig } from '../src/Core/Config.js';
 import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
-import { ResourceManager, killProcessTree } from '../src/Core/ResourceManager.js';
+import { ResourceManager, killProcessTree, withTimeout } from '../src/Core/ResourceManager.js';
 import { checkOperation } from '../src/Core/OperationContext.js';
+
+it('a stuck adapter cannot prevent other owners and a real child from closing within the shared budget', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-stuck-stop-'));
+  const config = getDefaultConfig(root); config.timeouts.shutdownMs = 600;
+  const router = new ToolRouter(config);
+  const child = cp.spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { windowsHide: true, stdio: 'ignore' });
+  const exited = once(child, 'exit');
+  router.resources.registerProcess('stuck-stop-fixture', child);
+  let closed = false;
+  t.mock.method(router.repomix, 'dispose', () => new Promise<void>(() => {}));
+  t.mock.method(router.flaui, 'dispose', async () => { closed = true; });
+  try {
+    await assert.rejects(withTimeout(router.dispose(), 2000, 'test-stop'), /resources failed/);
+    await withTimeout(exited, 1000, 'test-child-exit');
+    assert.equal(closed, true);
+    assert.equal(router.resources.childProcessCount(), 0);
+    await assert.rejects(router.dispose(), /resources failed/);
+  } finally { await killProcessTree(child); await fs.rm(root, { recursive: true, force: true }); }
+});
+
+it('shutdown during initialization prevents later stages and releases late resources', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-init-stop-'));
+  const config = getDefaultConfig(root);
+  config.adapters.flaui.enabled = false;
+  const router = new ToolRouter(config);
+  let release!: () => void, entered!: () => void, closed = 0, laterStages = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const entry = new Promise<void>(resolve => { entered = resolve; });
+  t.mock.method(router.repomix, 'initialize', async () => {
+    entered(); await gate;
+    router.resources.register('disposable', 'late-init', () => { closed++; });
+  });
+  t.mock.method(router.text, 'initialize', async () => { laterStages++; });
+  try {
+    const start = router.initialize();
+    const rejection = assert.rejects(start, /shutting down|cancelled/i);
+    await entry;
+    const stop = router.dispose();
+    release();
+    await Promise.all([rejection, stop]);
+    assert.equal(laterStages, 0);
+    assert.equal(closed, 1);
+    assert.equal((await router.getRuntimeHealth()).workspaceWatch.active, false);
+    assert.equal(router.resources.list().length, 0);
+  } finally { release(); await router.dispose(); await fs.rm(root, { recursive: true, force: true }); }
+});
 
 async function fixture(run: (router: ToolRouter, server: WinCodeMcpServer, client: Client) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-wp3-'));

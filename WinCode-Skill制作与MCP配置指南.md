@@ -1,11 +1,11 @@
 # WinCode Skill 安装、维护与 MCP 配置指南
 
-适用于 **0.13.1**，核对日期 2026-09-08（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
+适用于 **0.13.1**，核对日期 2026-09-09（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
 
 ## 1. 三个独立对象
 
 - **Skill 手册**指导 Agent 选择工具和使用规范字段，不启动服务器。
-- **磁盘交付物**包含 Gateway、原生 UI Host、构建身份和交付清单。
+- **磁盘交付物**包含 Gateway、原生 UIA/Code Host 的完整发布目录、构建身份和交付清单。
 - **MCP 连接实例**是客户端已经启动的进程；更新源码、构建或复制 Skill 都不会自动更新这个进程。
 
 架构与数据流见 [架构说明](WinCode-架构与数据流说明.md)。待办见 [当前计划](WinCode-下一轮工程化迭代计划书.md)，不要按历史计划重复安装和升级。
@@ -22,7 +22,7 @@ npm run check
 npm run delivery:verify
 ```
 
-`check` 进行类型检查、Gateway 构建、锁定 NuGet restore、Release UIA/Code Host 与控制台夹具构建、核心回归、新 stdio 验证与交付清单生成。交互桌面验收另执行 `npm run check:desktop`，需要可用 Windows 桌面。真实 Roslyn/TavernDesk 验收按对应入口执行，详见 [CONTRIBUTING](CONTRIBUTING.md)。
+`check` 进行类型检查、Gateway 构建、锁定 NuGet restore、Release UIA/Code Host 与控制台夹具构建、核心回归、新 stdio 验证与交付清单生成。交互桌面验收另执行 `npm run check:desktop`，需要可用 Windows 桌面。真实 Roslyn/TavernDesk 验收按对应入口执行，详见 [CONTRIBUTING](CONTRIBUTING.md)。Roslyn 维护脚本会锁定还原并构建/发布 Code Host，也会还原生成夹具，不还原用户目标应用；NuGet 缓存缺包时可能访问包源，不能将“不自动安装 SDK”理解为完全离线。
 
 `npm run build` 只构建 Gateway，不能单独证明原生 Host、Skill 和整个交付物一致。生产使用发布的 Release Host；`npm run dev` 才显式启用开发回退。报告位于 `test-tmp/check/`，内容哈希不是发布签名。
 
@@ -77,6 +77,8 @@ npm run skill:check -- C:/Users/40218/.agents/skills/wincode
 
 0.12.1 起 hello 不主动启动探测进程；unknown/null 表示未探测，不代表不可用。已知健康结果也可能陈旧。旧版本 hello 的行为不能套用新版说明。
 
+实例选用的代码提供方看 `hello.codeProvider`，Roslyn 状态看 `hello.health.roslyn`。`hello.health.text.semanticConfigured=false` 只描述文本适配器，即使启用 Roslyn 仍为 false。`wincode_diagnose_project` 会检查 SDK、探测 Repomix/UIA，但不主动加载 Roslyn 项目；已明确授权的 Roslyn 配置由首次符号搜索触发加载。
+
 0.13 系列已经退役外部 Serena，默认 local-text；C# 语义使用随产品交付的 Code Host，通过显式 --roslyn-config 配置入口项目、Configuration、TFM、SDK 与求值许可，字段示例见代码手册。真实 Host/MCP 验收通过也不代表实际客户端已启用 Roslyn。0.12.4 起 Repomix 直接执行已安装 JavaScript bin，不再使用 cmd/npx 包装链，也不会自动下载；非标准安装和降级边界见诊断手册。
 
 ## 6. 常见偏差
@@ -87,6 +89,9 @@ npm run skill:check -- C:/Users/40218/.agents/skills/wincode
 | 字段被忽略，结果不像预期 | 对照规范字段表和实际工具 schema；容忍未知字段并不赋予其语义 |
 | Host 缺失或身份不符 | 完整执行锁定构建和 delivery:verify；不混用旧 DLL、新 Gateway 或开发 Host |
 | Roslyn/Repomix 不可用 | 先核对 provider、显式配置、项目求值许可、已知健康和恢复动作；Roslyn 失败不会暗中换成本地文本，Repomix 降级不代表语义验收成功 |
+| Roslyn 返回候选且 references 为空 | 简单名请求未查询引用；按 signature/file/project 消歧，再传返回的 name 与完整 symbolLocation，不能当作零引用 |
+| 旧定位报 SNAPSHOT_STALE/INPUTS_CHANGED | 等待写入稳定后显式重新搜索，由适配器执行所需重载，再使用新 location；MCP 没有独立 reload 工具 |
+| 限定文件符号取证或 kind 筛选不像预期 | scopeFiles+symbol 支持 .cs/.ts/.tsx/.js/.jsx/.py，属于有限文本匹配；symbol 大小写精确。各后端 kind 类型和大小写规则以代码手册为准，不推定全语言一致 |
 | UI 查不到或出现多个目标 | 核对 PID/HWND 和大小写准确的查询；只有 complete 且 unique 才能声称唯一定位 |
 
 更新后仍无法核对客户端身份时，保留“客户端未验收”状态与实际证据，不反复尝试未声明参数。

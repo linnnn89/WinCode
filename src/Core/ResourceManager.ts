@@ -257,6 +257,10 @@ export class ResourceManager {
   private omittedCloseResults = 0;
   private readonly lateCleanups = new Set<Promise<void>>();
   private readonly lateFailures: Error[] = [];
+  private closeDeadline = Infinity;
+
+  /** Newly acquired resources must be disposed immediately, including late initialization results. */
+  seal(): void { this.disposed = true; }
 
   getCloseReport() {
     return { results: this.closeResults.map(result => ({ ...result })), omitted: this.omittedCloseResults };
@@ -270,7 +274,11 @@ export class ResourceManager {
   }
 
   private async drainLateCleanups(): Promise<void> {
-    while (this.lateCleanups.size) await Promise.all([...this.lateCleanups]);
+    while (this.lateCleanups.size) {
+      const pending = Promise.all([...this.lateCleanups]);
+      if (Number.isFinite(this.closeDeadline)) await withTimeout(pending, Math.max(1, this.closeDeadline - Date.now()), 'late-resource-cleanup');
+      else await pending;
+    }
     if (this.lateFailures.length) throw new AggregateError(this.lateFailures, 'Late resource cleanup failed.');
   }
 
@@ -327,9 +335,10 @@ export class ResourceManager {
   /**
    * Safe to call twice. Concurrent callers share the same in-flight dispose.
    */
-  async dispose(): Promise<void> {
+  async dispose(deadline = Infinity): Promise<void> {
     if (this.disposePromise) { await this.disposePromise; await this.drainLateCleanups(); return; }
     this.disposed = true;
+    this.closeDeadline = deadline;
     this.disposePromise = this.disposeOnce();
     return this.disposePromise;
   }
@@ -337,9 +346,12 @@ export class ResourceManager {
   private async disposeOnce(): Promise<void> {
     const items = Array.from(this.resources.values()).reverse();
     const failures: Error[] = [];
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
       try {
-        await item.dispose();
+        const pending = Promise.resolve().then(() => item.dispose());
+        if (Number.isFinite(this.closeDeadline))
+          await withTimeout(pending, Math.max(1, (this.closeDeadline - Date.now()) / (items.length - index)), `close-${item.owner}`);
+        else await pending;
         this.resources.delete(item.id);
         this.recordClose(item);
       } catch (error) {

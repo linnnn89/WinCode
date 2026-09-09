@@ -758,3 +758,49 @@
 - 文档：版本统一 0.13.1；README、CHANGELOG、SECURITY、架构/配置指南与仓内 Skill 对齐；计划仅保留暂缓的客户端关口和条件性后续工作。77 个变更文档本地链接、代码围栏核对通过。历史日志追加而非改写，生成证据仍在忽略目录内。
 - 作者反证自审覆盖旧缓存假阳性、词法不确定的假零结果、长字面量取消、未知工具后的连接可用、impact 字段/别名保持，以及部分移动后真实文件位置；不等同独立模型或人工审核。剩余边界：有限词法、文本引用、干净机器/长期耐久性及实际消费者均不扩大声明。
 - 发布流程：工作分支 codex/local-text-e4-stabilization；本地通过后推送本版本 PR，等待对应 head 的 Node 22/24、真实 Roslyn/E4 及有效 CodeQL 全部通过再合并。远端完成情况以 PR/Actions 回执为准，此条写入时尚未推送，不提前声明 CI 已绿。
+
+
+## 2026-09-09 21:28 — 本地 WinCode Skill 与远端同步（北京时间）
+
+- 用户恢复客户端验收后，明确要求先修复远端手册与本地 Skill 脱节。fetch 核对 origin/main 与本地均为 76b343c，四份仓内受管手册与远端一致。
+- 已安装位置为 C:/Users/40218/.agents/skills/wincode，原版本 0.12.5；使用现有 sync-skill 脚本更新 SKILL.md、references/code.md、references/diagnostics.md 到 0.13.1 契约，ui.md 原已一致。修改前完成备份，位置：C:/Users/40218/.agents/skills/.wincode-backup-9404b286-f360-42e9-b6a7-13cd35dbe39d；备份采用 .bak 后缀，不注册为重复 Skill。
+- 更新后四文件 SHA-256 与仓内一致，skill check 无差异；delivery:verify matched=true。详见[本地同步回执](../test-tmp/skill-sync-0131.json)。无新增依赖，未改 MCP 配置、未重启客户端。
+- 实际连接 hello 仍返回 0.12.5，instanceId=17625857-dbe1-48b8-9305-946629711532，wincode_find_references Schema 只有 symbolName/relativePath、没有 symbolLocation。配置仍指向 I:/WinCode/dist/index.js，当前工作区 I:/WinCode，尚未提供 --roslyn-config。因此已完成手册同步，尚未完成实际连接升级或 Roslyn 验收；后续须准备隔离验收配置并正常重连，不能向旧接口传新字段后宣称生效。
+
+
+## 2026-09-09 21:33 — Skill 功能指引与 0.13.1 实现对照（北京时间）
+
+- 用户要求确认指引与实际项目是否一致。本轮对照四份受管手册、Gateway Registry/Schema/验证器、LocalText/Context、RoslynAdapter/Host、UI 查询和恢复路径；不使用旧连接行为推定新版源码，不派生子代理。
+- 发现并修正文档差异：scopeFiles+symbol 段落漏写 TSX/JSX；简单名引用示例未提示 Roslyn 只返回候选；health.text.semanticConfigured 被误读为整个实例配置状态的风险；维护脚本实际还原/构建 Host 及生成夹具，不能称为只还原夹具或完全离线。补充不同提供方 kind/大小写与 queryComplete 边界、目录参数默认值、lineRanges.file 长度，以及 diagnose 不主动加载 Roslyn、MCP 搜索代替内部 reload 的具体操作。
+- 验证：源码与 dist 的 15 个公布工具 Schema 哈希一致，四份手册包含所有顶层规范字段；两种别名与恢复规则按源码核对。33 项现有 tool-contracts/local-text 测试全部通过；这不证明未覆盖语法或实际客户端语义。范围及字段清单见[核对回执](../test-tmp/skill-contract-audit.json)，[针对性测试输出](../test-tmp/skill-contract-audit-tests.log)。
+- 仅修订仓内 references/code.md 与 references/diagnostics.md，保持公共接口/代码不变。通过现有脚本备份并同步本地 .agents/skills/wincode，四文件相等，Skill 校验、链接/围栏、git diff --check 通过。备份为 .wincode-backup-9fd16a60-2ff6-4bb3-980e-f88fe7f01460。重新生成并验证交付清单 matched=true，contentId=517363f6087c4c8e7976f7d810ae0e70ca290ed2bf6e12a7bf2f60650a1e1694。
+- 反证自审：Roslyn 已配置时 text.semanticConfigured 仍为 false；简单名返回 references=[] 实际可能尚未查询引用。修订指引要求读取 codeProvider/health.roslyn 和 resolution/candidates，并使用真实搜索 location，避免把这两种情况误判为后端不可用或零引用。
+- 再次实际 hello：连接仍是 0.12.5、instanceId=17625857-dbe1-48b8-9305-946629711532；引用 Schema 仅 symbolName/relativePath，没有 symbolLocation。故“手册与本地 0.13.1 实现对齐”不等于“当前连接可使用新版接口”。本轮未改 MCP 配置、未执行客户端 Roslyn 验收；文档修订尚未提交远端。
+
+
+## 2026-09-09 21:34 — 将核对问题同步到项目 Skill 指南（北京时间）
+
+- 用户明确要求把发现的问题同步写入项目指南。确认前轮修订已存在于仓内 skills/wincode/references/code.md 与 diagnostics.md，并补齐根目录 WinCode-Skill制作与MCP配置指南.md 的对应说明。
+- 根指南同步健康字段归属、Roslyn 简单名候选/精确定位、过期定位恢复、TSX/JSX 与 kind 差异、维护脚本还原/网络边界；更新核对日期并补齐 Code Host 交付目录说明。参数细节继续引用受管代码手册，不另建重复字段表。
+- 本次仅增加根指南和工作记录，受管四文件未再变化，本地 Skill 与仓内一致；链接/围栏及 git diff --check 核对通过。沿用前轮已通过的 33 项针对性测试，不因说明同步重复运行代码回归。未修改 MCP 配置或推送远端。
+
+
+## 2026-09-09 21:42 — 恢复实际客户端验收并准备隔离配置（北京时间）
+
+- 用户要求继续已安排工作，沿用恢复隔离 Roslyn 验收及配置修改的明确授权。保留此前未提交文档修订；不修改生产代码、个人应用数据或真实 TavernDesk 项目。
+- 现场环境与旧记录不同：项目内 .deps/dotnet-10.0.303 已不存在，现有系统 C:/Program Files/dotnet/dotnet.exe 经维护脚本核对 SDK 10.0.303 可用；未安装或修改全局工具链。现有 wincode 参数已由此前的含 workspace 改成仅 dist/index.js，本轮以实际读取的版本备份，未恢复过时配置。
+- 生成 test-tmp/client-roslyn-20260909/workspace 的 App/Lib 项目：Debug、net10.0、C# 13，两个 Api.Save 重载及 Other.Save 同名方法；整型重载基线引用为 App/Use.cs 第 7、10 行，字符串第 8 行、其他类第 9 行。NuGet.Config 清空包源；还原/构建通过。Code Host --identity 返回 0.13.1/Release；delivery:verify matched=true。[准备回执](../test-tmp/client-roslyn-20260909/preparation.json)。
+- 仅修改 C:/Users/40218/.codex/config.toml 的 mcp_servers.wincode.args，加入隔离工作区及 --roslyn-config；其他配置字节保留。原服务器块备份于 C:/Users/40218/.codex/backups/wincode-before-client-roslyn-1b3f90fd-059b-4617-a651-42691eeaadd2.toml，未将完整宿主配置复制进项目。codex mcp get wincode --json 已读出正确新参数。[变更回执](../test-tmp/client-roslyn-20260909/client-config-change.json)。验收完成后恢复此前参数，不保留默认指向测试夹具。
+- 实际连接在配置更新前后均返回 0.12.5、instanceId=17625857-dbe1-48b8-9305-946629711532，引用 Schema 只有 symbolName/relativePath，当前工作区仍 I:/WinCode。没有调用旧版不支持的新参数，没有另起脚本模拟实际消费者通过。当前工具没有重连能力，需用户正常重启 Codex 后继续本任务；不强杀宿主或 Gateway。
+- 当前完成的是夹具构建、配置准备和读取校验；实际搜索/引用/影响/重构、stale 与恢复尚未执行。计划和路线图同步为“进行中，等待客户端重连”，不再沿用暂缓状态。
+
+
+## 2026-09-09 22:29 — 0.13.2 连接退出与限时清理（北京时间）
+
+- 用户已确认按顺序实施退出、异常终止验证及空闲回收；沿用逐版本测试、PR、合并授权，单智能体执行，无新依赖。保留并同步此前 Skill/配置指南修订。
+- RED：正式 dist/index.js 在客户端 EOF 后 9 秒仍存活；初始化期间 stop 后仍执行后续阶段；卡住的适配器令其他清理无法执行。
+- GREEN：统一 EOF/close/管道错误与退出入口；先连接传输、业务请求等待初始化；关闭取消所有 MCP 操作及初始化，晚到资源立即回收；共用 8 秒预算并为所有权清理预留时间。
+- 针对性 27 项通过。旧测试预期退出时继续完成工作区重绑，已按批准的取消行为更新为拒绝切换、只执行一次 dispose；保留失败后刷新缓存的既有行为。完整检查、PR/CI 尚待后续记录。
+- 纠正前记录：无需一概重启整个 Codex，刷新对应 MCP 连接即可；当前工具未提供已验证可调用的重连入口，未强杀用户宿主。异常进程终止和空闲回收未在本阶段宣称完成。
+
+- 完整检查第一次因已有 40ms TTL 测试在并行负载下先过期而失败（保留 2026-09-09T14-29-49-098Z-core 报告）；改用受控 Date.now，保持过期前/后断言，不延长 TTL。重跑核心 322 项：321 通过、1 可选场景跳过；桌面 35/35。正式入口及生命周期最新针对性 27/27，通过交付清单校验。

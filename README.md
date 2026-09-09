@@ -22,7 +22,7 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.13.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.13.1**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
@@ -117,6 +117,8 @@ Optionally add `candidateCodeFiles: ["ViewModels/MainWindowViewModel.cs"]` (1–
 
 ### Tool reference
 
+Local declaration search supports C#/TS/TSX/JS/JSX/Python with bounded comment/literal/JSX masking; uncertain lexical boundaries are reported as incomplete. Text references remain heuristic. Impact analysis returns one JSON text block, including formattedReport once. Known tool errors expose matching JSON text and structuredContent; unknown tools use JSON-RPC -32602 during normal admission.
+
 The default provider is `local-text`, with an explicit semantic-unconfigured status. Configure direct Roslyn to obtain compiler-backed identities. Pass a returned `location` unchanged as `symbolLocation` to references, impact, or refactoring, and use the returned plain symbol name. Old Serena namePath identities and external startup settings are retired; stale snapshots require a new explicit search.
 
 `wincode_hello_world` reports a frozen running instance ID and build fingerprint, plus a hash of the tool definitions actually registered by that instance. Pass `toolName: "wincode_prepare_context"` to inspect just that tool's input schema. Compare it with `tools/list` on the same connection. `npm run build` emits a manifest; direct `tsc`, missing/mismatched artifacts or source development mode can report `unknown`. The build fingerprint checks local output consistency, not release authenticity. Workspace changes do not change the running build.
@@ -204,7 +206,7 @@ The default `compact` response contains one JSON text block; `responseFormat: "l
 
 ### Development and validation
 
-The [CI workflow](.github/workflows/ci.yml) runs `npm run check` on pull requests and main pushes using Windows, Node.js 22/24 and .NET SDK 10.0.303. It performs locked builds, core regression, production stdio and delivery verification, and uploads bounded reports even on failure. Node 22 also runs real Roslyn Host and MCP acceptance on generated projects. Interactive desktop/UI acceptance remains separate. Check the actual run result. Main protection was verified on 2026-09-08 with required Node 22/24 and three CodeQL checks; approvals are zero under the single-maintainer policy. See [CONTRIBUTING](CONTRIBUTING.md) for enforcement and evidence boundaries.
+The [CI workflow](.github/workflows/ci.yml) runs `npm run check` on pull requests and main pushes using Windows, Node.js 22/24 and .NET SDK 10.0.303. It performs locked builds, core regression, production stdio and delivery verification, and uploads bounded reports even on failure. Node 22 also runs error/recovery contracts and real Roslyn Host/MCP acceptance on generated projects. Interactive desktop/UI acceptance remains separate. Check the actual run result. Main protection was verified on 2026-09-08 with required Node 22/24 and three CodeQL checks; approvals are zero under the single-maintainer policy. See [CONTRIBUTING](CONTRIBUTING.md) for enforcement and evidence boundaries.
 
 ```powershell
 npm ci
@@ -232,7 +234,7 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.13.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.13.1**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
@@ -327,6 +329,8 @@ npm run delivery:verify
 
 ### 工具一览
 
+本地声明扫描支持 C#/TS/TSX/JS/JSX/Python，有界屏蔽注释、字符串及 JSX；词法边界不确定时报告不完整。引用仍为文本线索。影响分析仅返回一个 JSON 文本块（含一份 formattedReport）；已知工具失败的 JSON 文本与 structuredContent 一致，正常受理的未知工具走 JSON-RPC -32602。
+
 默认以 `local-text` 启动，并明确报告语义能力未配置。显式配置直接 Roslyn 后，将搜索返回的完整 `location` 作为 `symbolLocation` 传给引用、影响分析或重构工具，名称使用原结果的简单名称。外部 Serena 启动配置及 namePath 身份已退役；过期快照须重新显式搜索。
 
 `wincode_hello_world` 返回启动时固定的实例 ID、构建指纹及当前注册工具定义的 hash。传 `toolName: "wincode_prepare_context"` 可按需查看单个工具参数，与同一连接的 `tools/list` 对照。`npm run build` 生成 manifest；直接运行 `tsc`、产物缺失/失配或源码开发模式会明确报告 `unknown`。构建指纹校验本地产物一致性，不证明发布来源可信；切换分析工作区不会改变运行构建。
@@ -412,7 +416,7 @@ Coding Agent ── stdio MCP ── WinCode
 
 ### 本地开发与测试验证
 
-[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 22/24 与 .NET SDK 10.0.303 执行 `npm run check`，覆盖锁定构建、核心回归、生产 stdio 和交付校验，失败时也上传有界报告。Node 22 另运行生成项目的真实 Roslyn Host 与 MCP 验收；交互桌面/UI 验收仍单独执行。通过与否以实际运行结果为准。2026-09-08 已核对 main 保护要求 Node 22/24 和三项 CodeQL 检查；单维护者策略要求 approval=0，不代表已获独立审核。详见 [贡献指南](CONTRIBUTING.md)。
+[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 22/24 与 .NET SDK 10.0.303 执行 `npm run check`，覆盖锁定构建、核心回归、生产 stdio 和交付校验，失败时也上传有界报告。Node 22 另运行错误/恢复契约专项与生成项目的真实 Roslyn Host/MCP 验收；交互桌面/UI 验收仍单独执行。通过与否以实际运行结果为准。2026-09-08 已核对 main 保护要求 Node 22/24 和三项 CodeQL 检查；单维护者策略要求 approval=0，不代表已获独立审核。详见 [贡献指南](CONTRIBUTING.md)。
 
 ```powershell
 npm ci

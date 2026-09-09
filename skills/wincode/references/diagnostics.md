@@ -38,23 +38,19 @@ pwsh -NoProfile -File "<WinCode安装目录>/scripts/check-ui-audit.ps1"
 
 WORKSPACE_RECOVERY_REQUIRED 表示切换中途失败后工作区一致性尚未确认。此时业务工具被拒绝；被动 hello 仍可读取 health.workspaceRecovery，status=recovery_required。先检查 recoveryAction：workspace_open 表示可按原任务指定路径重新打开，只有完整重置/初始化及 watcher 绑定成功才恢复请求；同一路径也执行完整恢复。restart_gateway 表示清理失败被当前实例保留，重新打开无法恢复；先检查 Gateway 自有资源的清理情况，再按客户端正常流程重启 Gateway，不自动重启或终止目标应用。永久失败后的 workspace_open 不再反复改变根或会话。不要只修改路径字段、反复重试业务请求或把旧适配器状态当成已切换成功。CANCELLED 若附带 workspaceRecovery，同样按其 recoveryAction 处理；切换变更前失败且状态未改变时仍保留旧工作区。
 
-E4 统一错误表达尚未实施：当前可能收到 isError=true 的纯文本，也可能是 content 中的 JSON；不能要求所有失败都含 structuredContent、统一 recoveryAction 或 retryable。先保留 isError 和原始内容，只在实际存在时读取 errorCode、workspaceRecovery、trash outcome/实际位置。结构化字段缺失不等于成功，取消或失败也不代表副作用已回滚；部分完成不原样重试。JSON 文本与 structuredContent 同源的方案是后续迁移方向，不能套用到旧连接。
+0.13.1 中，已知工具执行失败的 JSON 文本与 structuredContent 同源；Gateway 异常含 success=false、errorCode、errorMessage、provider 和 recoveryAction。UI/trash 保留领域字段及实际位置，不要求所有领域错误具有 Gateway 字段；图片保持独立 image 块。未知工具在正常受理状态下返回 JSON-RPC -32602 协议错误，不返回 isError 结果；关闭/取消的入口拒绝优先于工具查找。旧连接不能套用此契约，先核对实际版本。恢复动作不表示已经回滚或允许原样重试。
 
-直接 Roslyn Host 与 UIA Host 是不同组件。新 Gateway 的 hello.codeProvider 和 health.roslyn 报告显式选择的提供方、已知观察、processAlive、snapshotId 及重载/重启/清理状态；hello 不启动 Roslyn 或执行项目，进程存活不等于当前磁盘语义已验证。ready 是内部握手帧，UIA 的 VERSION_MISMATCH、inspectionVersion 等不能套到 Code Host。当前 npm run check / delivery:verify 不替代 test:roslyn-host/test:roslyn-gateway，也不证明 Code Host 已纳入正式发布包。
+直接 Roslyn Host 与 UIA Host 是不同组件。新 Gateway 的 hello.codeProvider 和 health.roslyn 报告显式选择的提供方、已知观察、processAlive、snapshotId 及重载/重启/清理状态；hello 不启动 Roslyn 或执行项目，进程存活不等于当前磁盘语义已验证。ready 是内部握手帧，UIA 的 VERSION_MISMATCH、inspectionVersion 等不能套到 Code Host。当前 npm run check / delivery:verify 不替代 test:roslyn-host/test:roslyn-gateway；当前交付清单已覆盖 Code Host 完整发布目录，但不证明实际客户端已启用 Roslyn。
 
 Roslyn 运行中已观察到的加载、查询或清理错误也纳入 health.lastAdapterError，provider=roslyn；health.roslyn.health.lastError 保留对应观察。lastError 是历史最后一次失败，不表示每次 hello 都执行了健康探测，也不能据此自行重放业务请求。工作区完整重置后观察清空。
 
 Code Host 内部协议 v2 的失败包含 success=false、errorCode 和 error，且不附带旧引用。SNAPSHOT_STALE/INPUTS_CHANGED 要求等写入稳定后显式 reload，再用新身份定位；PROJECT_LOAD_FAILED 表示结构化 MSBuild 加载失败，先修复项目输入，再 reload，不能继续使用最后一次成功快照。源码的 compilationErrors 可随有用的部分引用返回，不能据此宣称完整。
 
-Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回，不代表 E4 已覆盖所有工具。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，再显式搜索；同根打开也关闭旧 Host 后重新选择 SDK。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
+Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回；失败的 JSON 文本与 structuredContent 一致，仍保留领域差异。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，再显式搜索；同根打开也关闭旧 Host 后重新选择 SDK。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
 
 INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项目路径，以及 additionalInputs 中的文件是否存在；补充文件缺失时，重载也会失败，恢复文件后再显式搜索。不要为恢复查询而静默移除真实构建输入。HOST_VERSION_MISMATCH 先核对 Code Host 与 Gateway 的版本、Release 配置和协议；不要继续使用混合交付。HOST_PROTOCOL_ERROR 同时检查协议 v2、inputPolicy.version=1 和实际补充列表；旧 Host 没有确认新策略时不能绕过。LEGACY_SYMBOL_ID 要求重新搜索 Roslyn 身份；UNSUPPORTED_SYMBOL_LOCATION 表示该实例未配置 Roslyn；SYMBOL_MISMATCH 表示名称和定位不一致。INPUT_BUDGET_EXCEEDED 区分枚举规模与受跟踪输入字节限制，先缩小受支持范围，不能接受截断指纹。内部 BUSY 表示队列已满，DUPLICATE_REQUEST 要求新的 id；CANCELLED 是目标终止结果，取消确认不替代它。OUTSIDE_WORKSPACE/UNSUPPORTED_LINK 拒绝越界或链接路径，不放松校验来恢复。
 
 维护接口变更时，同步检查 Gateway 工具定义、相应 references 手册、实际客户端 Schema 和已安装四份受管文件；更新源码手册后运行 skill:sync，再以 skill:check 校验。仍须单独确认 MCP 实例的版本/构建/Schema，不能用手册同步代替重连。公共接口尚未发布时，只记录实验边界，不提前把新参数加入 MCP 规范字段表。
 
 
-## 2026-09-09 E4 当前开发快照
-
-用户已确认尚未广泛分发，可直接迁移到方案二。Gateway 普通错误已改为 JSON 文本并同步 structuredContent，使用稳定 errorCode、errorMessage、provider 和 recoveryAction；原文本前缀不再是兼容接口。UI/trash 保留领域结果字段并附同内容结构化载荷，尤其 partial 仍表示文件已经移动，不自动重试或移回。成功响应不在本次迁移范围。
-
-这是未发布、未完成专项验收的开发状态；恢复动作只表示先处理的步骤，不授予执行、安装或自动重试权限。完整错误码/恢复状态矩阵、E4 专项回归和最终手册核对尚待完成，当前连接是否已更新须查看运行身份。
+`npm run test:error-contracts` 使用生成夹具验证错误、部分完成与恢复；Node 22 CI 执行该专项并保存有界报告。UI 图片场景使用注入响应，只验证序列化，不冒充真实屏幕验收。

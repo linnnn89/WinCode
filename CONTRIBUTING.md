@@ -32,3 +32,5 @@ On 2026-09-08, the owner authorized applying main protection. The read-back conf
 SDK policy follows [Microsoft global.json guidance](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json); dependency locking uses [NuGet locked restore](https://learn.microsoft.com/en-us/nuget/consume-packages/package-references-in-project-files#locking-dependencies).
 
 Current implementation is described in the [architecture guide](WinCode-架构与数据流说明.md). Remaining work is maintained in the [active engineering plan](WinCode-下一轮工程化迭代计划书.md); completed work belongs in CHANGELOG and the append-only work log. For documentation-only changes, verify local links, commands, version claims and evidence boundaries; do not claim a new runtime regression without running it.
+
+Node 22 CI runs `npm run test:error-contracts` and uploads its bounded report. It exercises protocol errors, matching tool-error text/structured payloads, real generated-file trash failures and workspace recovery; injected UI images test serialization only. Run it locally after changes to these boundaries.

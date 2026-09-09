@@ -153,7 +153,7 @@ export const CODE_TOOLS = [
     validate: args => { if (!args.target) throw new Error('target is required.'); },
     execute: async (args, { router, signal }) => {
       const impact = await (args.symbolLocation ? router.analyzeChangeImpact(args.target, signal, args.symbolLocation) : router.analyzeChangeImpact(args.target, signal));
-      return { content: [{ type: 'text', text: JSON.stringify(impact, null, 2) }, { type: 'text', text: impact.formattedReport }] };
+      return jsonResult(impact, true);
     },
   }),
   defineTool<{ target: string; goal: string; symbolLocation?: SymbolLocation }>({

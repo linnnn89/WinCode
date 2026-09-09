@@ -1,6 +1,6 @@
 # WinCode 架构、数据流与检查关口
 
-**本地源码：0.13.0，基于 main@2235a42；结构更新日期：2026-09-09（北京时间）。未发布。**
+**源码契约：0.13.1；基于已合并的 main@a23740c，结构更新日期：2026-09-09（北京时间）。交付验收见工作记录。**
 
 本说明描述当前源码中已实现的结构。GitHub 分支保护的历史只读核查日期为 2026-09-08，本轮未重新查询远端；历史实测结果见[工作记录](docs/codex_worklog.md)。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
 
@@ -235,17 +235,19 @@ flowchart LR
 维护时仍应认识以下边界：
 
 1. **ToolRouter 同时承担装配、状态和生命周期协调。** 当前职责集中且可定位；扩展功能应走既有用例与契约，不继续把具体上游访问塞进 Gateway。
-2. **结果协议有工具族差异。** UI 使用 success/errorCode 等字段，代码结果侧重 source/completeness，部分 Gateway 错误仍为文本；目前不能宣称全软件已有单一错误信封。
+2. **结果协议有工具族差异。** UI 使用 success/errorCode 等字段，代码结果侧重 source/completeness，Gateway 失败由同一对象生成 JSON 文本与 structuredContent；UI/trash 保留领域形状，未知工具走协议错误，不能把所有结果说成同一信封。
 3. **检查是分路径落实的。** 范围读取、候选 mapper、目录扫描和 trash 各自设边界；不能把某条路径的检查推广到所有低层文件调用。
 4. **生成计划与执行修改分开。** 重构工具提供建议与检查清单；代码修改、编译、Git 提交与 PR 操作由外部工程协作工具执行。trash 是需要特别识别的实际文件写入口。
 5. **运行时一致性仍需客户端参与。** Gateway 实例身份、原生 Host 身份与交付清单提供核对依据，但系统没有自动替客户端重连旧 MCP 实例的能力。
 
 本说明的架构图、数据表与关口表共同描述当前实现；新增功能应说明接入哪条数据流、使用哪个现有契约、在哪个关口拒绝或降级，以及如何留下真实验收证据。
 
-下一轮可靠性工作见[待实施计划](WinCode-下一轮工程化迭代计划书.md)：工作区切换后续步骤失败的一致性、trash 移动后元数据失败的部分完成语义、有界混合负载验收，以及错误契约渐进整理。前两项来自静态调用链审查，仍需故障注入确认；后两项是验证和一致性改进，不能据此断言当前已有泄漏或必须整体重构。
+工作区失败恢复、trash 部分完成、有界负载和基础错误迁移已落实；当前待办见[计划](WinCode-下一轮工程化迭代计划书.md)。实际客户端 Roslyn 验收由用户明确暂缓；条件性性能研究不表示已发现泄漏。
 
 ## 2026-09-09 职责拆分
 
 WorkspaceManager 保留可变根、Git 与回收站事务；WorkspaceBrowser 和 ProjectDiscovery 负责只读发现。LocalTextAdapter 委托 LocalTextScanner 与 TextDeclarations；CacheManager 委托 WorkspaceFingerprint（文本缓存提示，不冒充语义快照）。ContextManager 拆出符号收集及格式化方法，ContextResponse 委托纯范围覆盖计算。UIA Host 将 Win32、窗口解析、抓图、树读取及 DTO 分离；FlaUiAdapter 的协议解析与自有进程调度分离。ToolRouter 的工作区锁、排空与恢复状态继续集中，避免把同一事务拆成多个状态源。
 
 验收脚本共享 SDK 选择及进程观察函数；Host 场景分为语义/队列与输入变化模块，Gateway 将真实 MSBuild 生命周期故障独立。两份历史混合大测试按功能拆成 13 个套件，各自拥有缓存目录。
+
+0.13.1 的 TextDeclarations 在声明匹配前使用 CSharpLexicalMask/ScriptLexicalMask，前者与 UiCodeMapper 共用；未闭合/不支持词法结构令本地扫描不完整且不缓存。TSX/JSX 的 scoped context 使用同一规则。影响报告只保留一份 JSON，E4 领域/恢复专项进入 Node 22 CI。

@@ -1,6 +1,6 @@
 # WinCode.UIA.Host
 
-0.12.5 的 Windows UI Automation（FlaUI.UIA3）一次性取证进程。实现入口为 [Program.cs](Program.cs)，面向 Agent 的规范参数见 [UI 手册](../../skills/wincode/references/ui.md)，整体数据流见 [架构说明](../../WinCode-架构与数据流说明.md)。
+0.13.1 的 Windows UI Automation（FlaUI.UIA3）一次性取证进程。实现入口为 [Program.cs](Program.cs)，面向 Agent 的规范参数见 [UI 手册](../../skills/wincode/references/ui.md)，整体数据流见 [架构说明](../../WinCode-架构与数据流说明.md)。
 
 ## 职责和边界
 

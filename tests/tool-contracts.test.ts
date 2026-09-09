@@ -193,7 +193,6 @@ it('rejects declared enum, range and nested type violations before admission', a
     ['wincode_prepare_context', { task: 'x', lineRanges: [{ file: 'A.cs', startLine: '1', endLine: 3 }] }],
     ['wincode_ui_inspect', { pid: 5, capture: 'interactive' }], ['wincode_ui_inspect', { pid: 5, query: { name: 'Save', maxMatches: 21 } }],
     ['wincode_ui_inspect', { pid: 5, query: { name: 42 } }], ['wincode_ui_review', { pid: 5, candidateFiles: ['../View.xaml'] }],
-    ['unknown_tool', {}],
   ];
   for (const [name, args] of cases) {
     const result = await client.callTool({ name, arguments: args });
@@ -254,4 +253,23 @@ it('ignores unknown UI query properties without weakening the required known con
   const bad = await client.callTool({ name: 'wincode_ui_inspect', arguments: { pid: 5, query: { futureFlag: true } } });
   assert.equal(bad.isError, true);
   assert.equal(admissions(), before);
+}));
+
+it('returns unknown tools as protocol errors before admission and keeps the connection usable', async () => fixture(async (client, router, admissions) => {
+  await assert.rejects(client.callTool({ name: 'missing_tool', arguments: {} }), (error: any) => error.code === -32602);
+  assert.equal(admissions(), 0);
+  router.findCodeSymbols = async () => ({ symbols: [], queryComplete: true }) as any;
+  const result = await client.callTool({ name: 'wincode_find_code_symbol', arguments: { query: 'Known' } });
+  assert.notEqual(result.isError, true);
+}));
+
+it('returns impact evidence once for both canonical name and alias', async () => fixture(async (client, router) => {
+  const impact = { target: 'Same', references: [{ file: 'Use.cs', line: 5 }], risk: 'UNKNOWN', formattedReport: 'REPORT_ONCE' };
+  router.analyzeChangeImpact = async () => impact as any;
+  for (const name of ['analyze_change_impact', 'wincode_analyze_change_impact']) {
+    const result: any = await client.callTool({ name, arguments: { target: 'Same' } });
+    assert.equal(result.content.length, 1);
+    assert.deepEqual(JSON.parse(result.content[0].text), impact);
+    assert.equal(result.content[0].text.split('REPORT_ONCE').length, 2);
+  }
 }));

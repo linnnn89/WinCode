@@ -77,7 +77,10 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
           if (items.length >= maxResults) { mark('result-limit', true, true); break; }
         }
       } finally { await handle.close(); }
-    } catch (error) { rethrowOperationError(error, operation); mark('read-error'); }
+    } catch (error) {
+      rethrowOperationError(error, operation);
+      mark((error as NodeJS.ErrnoException)?.code === 'TEXT_LEXICAL_UNCERTAINTY' ? 'lexical-uncertainty' : 'read-error');
+    }
   };
   const walk = async (dir: string): Promise<void> => {
     if (!canContinue()) return;

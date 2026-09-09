@@ -2,7 +2,11 @@
 
 以下为 MCP 工具名和参数；以客户端实际 Schema 为准。
 
-## 后端与实验接口边界
+0.13.1 的本地声明扫描覆盖 .cs/.ts/.tsx/.js/.jsx/.py，屏蔽注释、字符串以及整个 JSX 元素（含其中的表达式），签名与行号仍来自原文。无法可靠定界、未闭合或嵌套超限的文件标记 lexical-uncertainty，queryComplete=false 且不缓存完整空结果；这不是完整语法解析，复杂声明可能省略。引用搜索仍为文本线索，不提供编译器语义或精确身份。
+
+`analyze_change_impact` 及其别名返回一个 JSON 文本块，formattedReport 保留在对象中，不再返回第二份重复 Markdown。没有新增 responseFormat 参数，不要给该工具传 context 专用的格式字段。
+
+## 后端与能力边界
 
 默认 Gateway 使用 WinCode 内置文本能力，`source=local-text`，健康状态明确 semanticConfigured=false。显式启用 Roslyn 后使用直接 Code Host，失败会报错，不会偷偷改换提供方。外部 Serena 连接配置、启动器及旧 `serena-adapter-fallback` 来源已退役；旧调用方须适配。`hello.codeProvider` 标明实例选择，不能根据仓库中存在 Host 推断当前连接已更新。
 

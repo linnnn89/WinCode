@@ -43,6 +43,9 @@ jobs:
         run: npm ci
       - name: Build and verify delivery
         run: npm run check
+      - name: Verify tool errors and recovery contracts
+        if: matrix.node == '22'
+        run: npm run test:error-contracts
       - name: Verify real Roslyn semantics and process cleanup
         if: matrix.node == '22'
         run: |
@@ -57,6 +60,7 @@ jobs:
           name: check-node-${{ matrix.node }}
           path: |
             test-tmp/check/**/report.json
+            test-tmp/error-contracts/**/report.json
             test-tmp/roslyn-host/**/report.json
             test-tmp/roslyn-gateway/**/report.json
           if-no-files-found: warn

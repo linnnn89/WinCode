@@ -35,6 +35,8 @@ await server.start();
 `);
     transport = new StdioClientTransport({ command: process.execPath, args: [bootstrap], cwd: root, stderr: 'pipe' });
     await client.connect(transport);
+    await assert.rejects(client.callTool({ name: 'missing_tool', arguments: {} }),
+      (error: any) => error.code === -32602, 'unknown tool must travel through the stdio protocol-error channel');
     const tools = (await client.listTools()).tools;
     const call = async (name: string, args: Record<string, unknown> = {}) => {
       const result = await client.callTool({ name, arguments: args });

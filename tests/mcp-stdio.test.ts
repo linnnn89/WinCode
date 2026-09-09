@@ -220,7 +220,8 @@ describe('mcp-stdio', () => {
       assert.ok(impact.targetFile.includes('ToolRouter.ts'));
       assert.ok(impact.riskLevel);
       assert.ok(impact.recommendations.length >= 3);
-      assert.ok(res.result?.content?.[1]?.text.includes('# Impact Analysis'));
+      assert.equal(res.result.content.length, 1);
+      assert.ok(impact.formattedReport.includes('# Impact Analysis'));
 
       // Alias verification
       const aliasRes = await callMcp('tools/call', {
@@ -280,13 +281,14 @@ describe('mcp-stdio', () => {
       assert.strictEqual(escapeRes.result?.isError, true);
     });
 
-    it('Error Handling: Unknown tool name returns isError without crashing server', async () => {
+    it('Error Handling: Unknown tool name returns a protocol error without crashing server', async () => {
       const res = await callMcp('tools/call', {
         name: 'non_existent_tool_12345',
         arguments: {},
       });
-      assert.strictEqual(res.result?.isError, true);
-      assert.ok(res.result?.content?.[0]?.text.includes('Unknown tool: non_existent_tool_12345'));
+      assert.equal(res.error?.code, -32602);
+      assert.equal(res.result, undefined);
+      assert.ok(res.error?.message.includes('Unknown tool: non_existent_tool_12345'));
     });
   });
 });

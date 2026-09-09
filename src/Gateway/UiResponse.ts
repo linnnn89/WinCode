@@ -1,3 +1,4 @@
+import { jsonResult } from './ToolDefinition.js';
 import { UI_INSPECT_DEFAULTS } from '../Core/UiContracts.js';
 import type { UiReviewResult } from '../CompositeTools/UiReview.js';
 
@@ -59,15 +60,9 @@ export function uiResponse(result: UiReviewResult) {
   }
   if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES) {
     // A malformed/custom helper must not bypass the final MCP budget.
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify({
-        success: false, errorCode: 'PAYLOAD_TOO_LARGE',
-        errorMessage: 'UI text response exceeds 128 KiB.',
-        auditNotice: result.auditNotice,
-        imageOmitted: true, hasScreenshot: false,
-      }) }],
-      isError: true,
-    };
+    return jsonResult({ success: false, errorCode: 'PAYLOAD_TOO_LARGE',
+      errorMessage: 'UI text response exceeds 128 KiB.', auditNotice: result.auditNotice,
+      imageOmitted: true, hasScreenshot: false }, false, true);
   }
 
   const content: Array<
@@ -91,5 +86,6 @@ export function uiResponse(result: UiReviewResult) {
   return {
     content,
     isError: !result.success,
+    ...(!result.success ? { structuredContent: JSON.parse(text) } : {}),
   };
 }

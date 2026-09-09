@@ -1,6 +1,6 @@
 {
   "name": "wincode-mcp",
-  "version": "0.12.5",
+  "version": "0.13.0",
   "description": "Windows-first MCP gateway: .NET project graph, evidence-bounded context, honest change-impact, long-running process hygiene",
   "main": "dist/index.js",
   "type": "module",
@@ -12,12 +12,11 @@
     "build": "node scripts/build.mjs",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts --development",
-    "test": "tsx --test tests/tdd-suite.test.ts tests/v05-stability.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts tests/agent-efficiency-benchmark.test.ts tests/workspace-summary.test.ts tests/runtime-identity.test.ts tests/runtime-contract.test.ts tests/context-coverage.test.ts tests/serena-identity.test.ts tests/ui-code-candidates.test.ts tests/skill-sync.test.ts tests/serena-fallback.test.ts tests/repomix-disabled.test.ts tests/workspace-watch-close.test.ts tests/workspace-lifecycle.test.ts tests/failure-recovery.test.ts tests/tool-contracts.test.ts tests/architecture-boundaries.test.ts tests/lifecycle-cancellation.test.ts tests/delivery-contract.test.ts tests/roslyn-contracts.test.ts",
+    "test": "tsx --test tests/core-cache.test.ts tests/workspace-files.test.ts tests/text-symbols.test.ts tests/context-packing.test.ts tests/composite-tools.test.ts tests/mcp-stdio.test.ts tests/stability-lifecycle.test.ts tests/cache-budgets.test.ts tests/process-failures.test.ts tests/request-concurrency.test.ts tests/evidence-confidence.test.ts tests/watch-invalidation.test.ts tests/resource-cleanup.test.ts tests/stage1-cleanup.test.ts tests/ui-hardening.test.ts tests/ui-source-review.test.ts tests/v071-acceptance.test.ts tests/ui-background.test.ts tests/ui-audit.test.ts tests/ui-query.test.ts tests/context-efficiency.test.ts tests/agent-efficiency-benchmark.test.ts tests/workspace-summary.test.ts tests/runtime-identity.test.ts tests/runtime-contract.test.ts tests/context-coverage.test.ts tests/semantic-identity.test.ts tests/ui-code-candidates.test.ts tests/skill-sync.test.ts tests/local-text.test.ts tests/repomix-disabled.test.ts tests/workspace-watch-close.test.ts tests/workspace-lifecycle.test.ts tests/failure-recovery.test.ts tests/tool-contracts.test.ts tests/architecture-boundaries.test.ts tests/lifecycle-cancellation.test.ts tests/delivery-contract.test.ts tests/roslyn-contracts.test.ts",
     "test:verify": "tsx tests/verify.ts",
     "benchmark:agent": "tsx scripts/benchmark-agent-efficiency.ts",
     "test:benchmark": "tsx --test tests/agent-efficiency-benchmark.test.ts",
     "test:product": "tsx scripts/verify-product-tasks.ts",
-    "test:serena-real": "tsx scripts/verify-serena-real.ts",
     "test:repomix-real": "tsx scripts/verify-repomix-real.ts",
     "test:mixed-load": "tsx scripts/verify-mixed-load.ts",
     "test:error-contracts": "tsx scripts/verify-error-contracts.ts",
@@ -38,9 +37,9 @@
     "windows",
     "ai-agent",
     "coding-agent",
-    "serena",
     "repomix",
-    "code-intelligence"
+    "code-intelligence",
+    "roslyn"
   ],
   "author": "WinCode Team",
   "license": "MIT",

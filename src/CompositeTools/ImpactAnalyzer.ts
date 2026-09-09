@@ -4,11 +4,13 @@ import {
   CodeReferenceQuery,
   CodeSymbol,
   SymbolReference,
-  SERENA_DEGRADED_LIMITATIONS,
+  LOCAL_TEXT_LIMITATIONS,
   computeTypeMatchStats,
   FindSymbolsResult,
   FindReferencesResult,
   type CodeSource,
+  CodeQueryError,
+  type SymbolLocation,
 } from '../Core/CodeQueries.js';
 import { WinCodeConfig } from '../Core/Config.js';
 
@@ -20,6 +22,7 @@ export interface AffectedComponent {
 }
 
 export interface ImpactReport {
+  symbolLocation?: SymbolLocation;
   target: string;
   targetFile: string;
   targetKind?: string;
@@ -57,12 +60,18 @@ interface QueryAssessment {
 }
 
 export class ImpactAnalyzer {
-  private serena: CodeReferenceQuery;
+  private queries: CodeReferenceQuery;
   private config?: WinCodeConfig;
 
-  constructor(serena: CodeReferenceQuery, config?: WinCodeConfig) {
-    this.serena = serena;
+  constructor(queries: CodeReferenceQuery, config?: WinCodeConfig) {
+    this.queries = queries;
     this.config = config;
+  }
+
+  /** 文件身份以当前工作区为根；Windows 大小写和分隔符差异不能制造两个文件。 */
+  private fileIdentity(file: string): string {
+    const full = path.resolve(this.config?.workspaceRoot ?? process.cwd(), file.replace(/[\\/]/g, path.sep));
+    return process.platform === 'win32' ? full.toLowerCase() : full;
   }
 
   /**
@@ -70,7 +79,7 @@ export class ImpactAnalyzer {
    * Confidence is not derived from source alone. Zero refs / ambiguity / incomplete
    * queries return UNKNOWN and must not be treated as safe to delete.
    */
-  async analyzeImpact(target: string, operation?: OperationContext): Promise<ImpactReport> {
+  async analyzeImpact(target: string, operation?: OperationContext, location?: SymbolLocation): Promise<ImpactReport> {
     const rawTarget = target.trim();
     if (!rawTarget) {
       throw new Error('Target parameter is required for impact analysis.');
@@ -79,10 +88,22 @@ export class ImpactAnalyzer {
     let symbolName = rawTarget;
     let explicitFileHint: string | undefined = undefined;
 
+    // 已选目标先由语义提供方核验快照和名称；禁止为了找回旧位置而先按名称自动重载。
+    let selectedReferences: FindReferencesResult | undefined;
+    if (location) {
+      if (!this.queries.findReferencesDetailed) {
+        throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'This provider cannot validate an exact semantic location.');
+      }
+      selectedReferences = await this.queries.findReferencesDetailed(rawTarget, location.file, operation, location);
+      if (selectedReferences.source !== 'roslyn') {
+        throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'Exact locations require the direct Roslyn provider.');
+      }
+    }
+
     const extMatch = rawTarget.match(/\.(cs|ts|tsx|js|jsx|py|go|rs|java)$/i);
     if (extMatch) {
       explicitFileHint = rawTarget;
-      let base = path.basename(rawTarget);
+      let base = path.posix.basename(rawTarget.replace(/\\/g, '/'));
       base = base.replace(/\.(xaml|designer|g|spec|test)\.[^.]+$/i, '');
       base = base.replace(/\.[^.]+$/, '');
       symbolName = base;
@@ -90,6 +111,7 @@ export class ImpactAnalyzer {
 
     let symbols: CodeSymbol[] = [];
     const matchesTarget = (symbol: CodeSymbol): boolean => symbol.name === symbolName ||
+      (Boolean(explicitFileHint) && process.platform === 'win32' && symbol.name.toLowerCase() === symbolName.toLowerCase()) ||
       (symbol.namePath !== undefined && symbol.namePath.replace(/^\//, '') === symbolName.replace(/^\//, ''));
     const assessment: QueryAssessment = {
       source: 'unknown',
@@ -100,10 +122,10 @@ export class ImpactAnalyzer {
       limitations: [],
     };
 
-    if (typeof this.serena.findSymbolsDetailed === 'function') {
-      const symRes: FindSymbolsResult = await this.serena.findSymbolsDetailed(symbolName, undefined, undefined, operation);
+    if (typeof this.queries.findSymbolsDetailed === 'function') {
+      const symRes: FindSymbolsResult = await this.queries.findSymbolsDetailed(symbolName, undefined, location?.file, operation);
       symbols = symRes.symbols || [];
-      assessment.source = symRes.source || 'serena-adapter-fallback';
+      assessment.source = symRes.source || 'local-text';
       assessment.queryComplete = symRes.queryComplete !== false;
       assessment.queryError = symRes.queryError;
       assessment.truncated = Boolean(symRes.truncated);
@@ -112,34 +134,35 @@ export class ImpactAnalyzer {
       assessment.typeMatchCount = stats.typeMatchCount;
       assessment.unique = stats.uniqueTypeMatch;
     } else {
-      symbols = await this.serena.findSymbols(symbolName, undefined, operation);
-      assessment.source = 'serena-adapter-fallback';
+      symbols = await this.queries.findSymbols(symbolName, undefined, operation);
+      assessment.source = 'local-text';
       const stats = computeTypeMatchStats(symbols, symbolName);
       assessment.typeMatchCount = stats.typeMatchCount;
       assessment.unique = stats.uniqueTypeMatch;
     }
 
-    if (explicitFileHint) {
-      const normalizedHint = explicitFileHint.replace(/\\/g, '/').toLowerCase();
-      const hintBase = path.basename(explicitFileHint).toLowerCase();
+    if (location) {
+      symbols = symbols.filter(symbol => symbol.location?.snapshotId === location.snapshotId &&
+        this.fileIdentity(symbol.location.project) === this.fileIdentity(location.project) &&
+        this.fileIdentity(symbol.location.file) === this.fileIdentity(location.file) && symbol.location.position === location.position);
+      if (symbols.length !== 1) {
+        throw new CodeQueryError('SNAPSHOT_STALE', 'Selected declaration is no longer in this search snapshot; search and select again.');
+      }
+      assessment.unique = true;
+      assessment.typeMatchCount = 1;
+    } else if (explicitFileHint) {
+      const hintBase = path.posix.basename(explicitFileHint.replace(/\\/g, '/'));
       const hasDir = explicitFileHint.includes('/') || explicitFileHint.includes('\\');
-      const resolvedHint = path.isAbsolute(explicitFileHint) ? path.resolve(explicitFileHint).toLowerCase() : null;
-
-      const inFile = symbols.filter((s) => {
-        const symFile = (s.file || '').replace(/\\/g, '/').toLowerCase();
-        if (hasDir) {
-          if (resolvedHint) {
-            return path.resolve(s.file).toLowerCase() === resolvedHint;
-          }
-          return symFile === normalizedHint || symFile.endsWith('/' + normalizedHint);
-        } else {
-          return path.basename(symFile) === hintBase;
-        }
-      });
+      // 只有纯文件名才允许候选匹配；提供目录后必须精确匹配工作区文件，禁止后缀猜测。
+      const inFile = symbols.filter(s => s.file && (hasDir
+        ? this.fileIdentity(s.file) === this.fileIdentity(explicitFileHint!)
+        : this.fileIdentity(path.posix.basename(s.file.replace(/\\/g, '/'))) === this.fileIdentity(hintBase)));
 
       if (inFile.length > 0) {
         symbols = inFile;
-        const distinctFiles = new Set(inFile.map((s) => (s.file || '').replace(/\\/g, '/').toLowerCase()));
+        const distinctFiles = new Set(inFile.map(s => JSON.stringify([
+          this.fileIdentity(s.file), s.location?.project ? this.fileIdentity(s.location.project) : null,
+        ])));
         if (distinctFiles.size > 1) {
           // Ambiguous: multiple files match the filename hint
           assessment.unique = false;
@@ -198,7 +221,7 @@ export class ImpactAnalyzer {
 
     let targetFile = '';
     if (matchedSymbol?.file) {
-      targetFile = path.basename(matchedSymbol.file);
+      targetFile = path.posix.basename(matchedSymbol.file.replace(/\\/g, '/'));
     } else if (explicitFileHint) {
       targetFile = path.basename(explicitFileHint);
     } else {
@@ -208,10 +231,10 @@ export class ImpactAnalyzer {
     let refs: SymbolReference[] = [];
     // 精确 Roslyn 定位允许收集局部引用；风险/置信度仍保留 queryComplete=false 的 UNKNOWN 限制。
     if (assessment.unique && (assessment.queryComplete || matchedSymbol?.location) && !assessment.truncated &&
-        typeof this.serena.findReferencesDetailed === 'function') {
-      const refRes: FindReferencesResult = matchedSymbol?.location ? await this.serena.findReferencesDetailed(
+        typeof this.queries.findReferencesDetailed === 'function') {
+      const refRes: FindReferencesResult = selectedReferences ?? (matchedSymbol?.location ? await this.queries.findReferencesDetailed(
         matchedSymbol.name, matchedSymbol.file, operation, matchedSymbol.location
-      ) : await this.serena.findReferencesDetailed(matchedSymbol?.namePath ?? symbolName, matchedSymbol?.file, operation);
+      ) : await this.queries.findReferencesDetailed(matchedSymbol?.namePath ?? symbolName, matchedSymbol?.file, operation));
       refs = refRes.references || [];
       if (refRes.source) assessment.source = refRes.source;
       if (refRes.queryComplete === false) {
@@ -226,35 +249,37 @@ export class ImpactAnalyzer {
         assessment.limitations.push(...refRes.limitations);
       }
     } else if (assessment.unique && assessment.queryComplete && !assessment.truncated) {
-      refs = await this.serena.findReferences(symbolName, undefined, operation);
+      refs = await this.queries.findReferences(symbolName, undefined, operation);
     }
 
     const referencesCount = refs.length;
     const componentMap = new Map<string, AffectedComponent>();
-    const fileMap = new Map<string, number>();
+    const fileMap = new Map<string, { file: string; occurrences: number }>();
 
     for (const ref of refs) {
       const normalizedFile = ref.file.replace(/\\/g, '/');
-      fileMap.set(normalizedFile, (fileMap.get(normalizedFile) || 0) + 1);
+      const fileKey = this.fileIdentity(ref.file);
+      const fileEntry = fileMap.get(fileKey) ?? { file: normalizedFile, occurrences: 0 };
+      fileEntry.occurrences++;
+      fileMap.set(fileKey, fileEntry);
 
-      const baseFile = path.basename(normalizedFile);
-      const isInternal =
-        targetFile &&
-        (baseFile.toLowerCase() === targetFile.toLowerCase() ||
-          normalizedFile.toLowerCase().endsWith(targetFile.toLowerCase()));
+      // 文件名仅用于展示；链接源码在不同项目中也属于不同组件。
+      const isInternal = matchedSymbol?.file && fileKey === this.fileIdentity(matchedSymbol.file) &&
+        (!ref.project || !matchedSymbol.location?.project || this.fileIdentity(ref.project) === this.fileIdentity(matchedSymbol.location.project));
+      const componentKey = JSON.stringify([ref.project ? this.fileIdentity(ref.project) : null, fileKey]);
 
       const compName = this.extractComponentName(normalizedFile);
 
       if (!isInternal) {
-        if (!componentMap.has(compName)) {
-          componentMap.set(compName, {
+        if (!componentMap.has(componentKey)) {
+          componentMap.set(componentKey, {
             name: compName,
             file: normalizedFile,
             references: 0,
             sampleLines: [],
           });
         }
-        const item = componentMap.get(compName)!;
+        const item = componentMap.get(componentKey)!;
         item.references++;
         if (item.sampleLines.length < 5 && ref.line) {
           item.sampleLines.push(ref.line);
@@ -266,11 +291,8 @@ export class ImpactAnalyzer {
       (a, b) => b.references - a.references
     );
     const affected = affectedComponents.map((c) => c.name);
-    const affectedFiles = Array.from(fileMap.keys());
-    const downstreamImpacts = Array.from(fileMap.entries()).map(([file, occurrences]) => ({
-      file,
-      occurrences,
-    }));
+    const downstreamImpacts = Array.from(fileMap.values());
+    const affectedFiles = downstreamImpacts.map(item => item.file);
 
     const { riskLevel, riskReason, confidence } = this.calculateRisk(
       symbolName,
@@ -311,6 +333,7 @@ export class ImpactAnalyzer {
       target: rawTarget,
       targetFile,
       targetKind: matchedSymbol?.kind,
+      ...(matchedSymbol?.location ? { symbolLocation: matchedSymbol.location } : {}),
       referencesCount,
       affected,
       affectedComponents,
@@ -341,7 +364,7 @@ export class ImpactAnalyzer {
     const analysisCompleteness: 'unindexed' = 'unindexed';
     const limitations = [
       '未在工作区索引中找到符号声明，无法验证下游影响，切勿直接假设可安全重构或删除。',
-      ...SERENA_DEGRADED_LIMITATIONS,
+      ...(assessment.source === 'local-text' ? LOCAL_TEXT_LIMITATIONS : []),
       ...assessment.limitations,
     ];
     const riskReason = `Symbol "${symbolName}" was not found in workspace index. Downstream impact and references cannot be reliably verified. Do NOT assume it is safe to refactor or delete.`;
@@ -394,7 +417,7 @@ export class ImpactAnalyzer {
   ): ImpactReport['analysisCompleteness'] {
     if (!declared) return 'unindexed';
     if (!assessment.queryComplete || assessment.truncated) return 'incomplete';
-    if (assessment.source === 'serena-mcp' || assessment.source === 'roslyn') return 'semantic';
+    if (assessment.source === 'roslyn') return 'semantic';
     return 'degraded';
   }
 
@@ -419,7 +442,7 @@ export class ImpactAnalyzer {
       const msg = '未找到引用不得直接解释为“无影响”或“低风险”，也不得视为可安全删除。';
       if (!seen.has(msg)) out.push(msg);
     }
-    if ((assessment.source === 'serena-mcp' || assessment.source === 'roslyn') && (!assessment.queryComplete || assessment.truncated)) {
+    if ((assessment.source === 'roslyn') && (!assessment.queryComplete || assessment.truncated)) {
       const msg = '语义提供方已返回结果，但查询不完整或可能截断，可信度不能只看供应方。';
       if (!seen.has(msg)) out.push(msg);
     }
@@ -528,7 +551,7 @@ export class ImpactAnalyzer {
     if (!assessment.unique || !assessment.queryComplete || assessment.truncated || referencesCount === 0) {
       return 'UNCERTAIN';
     }
-    if (assessment.source === 'serena-mcp' || assessment.source === 'roslyn') {
+    if (assessment.source === 'roslyn') {
       return 'HIGH';
     }
     return 'MEDIUM';

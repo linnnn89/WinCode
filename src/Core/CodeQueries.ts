@@ -1,7 +1,7 @@
 import type { OperationContext } from './OperationContext.js';
 
 /** 语义来源与查询完整性独立；新增来源不能自动提高影响分析置信度。 */
-export type CodeSource = 'serena-mcp' | 'serena-adapter-fallback' | 'roslyn';
+export type CodeSource = 'local-text' | 'roslyn';
 
 /** 当前 Host 快照内的精确定位；position 为零基 UTF-16，编辑、重载或切换后不可复用。 */
 export interface SymbolLocation {
@@ -24,7 +24,7 @@ export interface SemanticContext {
 export class CodeQueryError extends Error {
   constructor(readonly errorCode: string, message: string) { super(message); this.name = 'CodeQueryError'; }
 }
-export const SERENA_DEGRADED_LIMITATIONS: string[] = [
+export const LOCAL_TEXT_LIMITATIONS: string[] = [
   '本地正则扫描仅作为文本检索降级方案，不保证符号身份、重载区分、跨文件引用完整性或安全重命名。',
   '本地正则扫描无法替代完整 Roslyn/TypeScript LSP 语义层面的跨文件重命名与重载解析。',
   '未找到引用不得直接解释为“无影响”或“低风险”。',

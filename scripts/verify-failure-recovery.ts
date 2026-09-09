@@ -21,7 +21,7 @@ async function fixture(name: string, work: (router: ToolRouter, a: string, b: st
   await fs.writeFile(path.join(a, 'OnlyA.cs'), 'class OnlyA {}');
   await fs.writeFile(path.join(b, 'OnlyB.cs'), 'class OnlyB {}');
   const config = getDefaultConfig(a);
-  config.adapters.serena.enabled = false;
+
   config.adapters.flaui.enabled = false;
   config.adapters.repomix.useCli = false;
   const router = new ToolRouter(config);
@@ -36,7 +36,7 @@ async function fixture(name: string, work: (router: ToolRouter, a: string, b: st
 }
 
 const stages = ['root-before', 'root-after', 'namespace', 'session', 'watch',
-  'repomix-dispose', 'serena-reset', 'repomix-initialize', 'serena-initialize', 'composites', 'cancel-after-root'];
+  'repomix-dispose', 'text-reset', 'repomix-initialize', 'text-initialize', 'composites', 'cancel-after-root'];
 
 for (const stage of stages) {
   await fixture(stage, async (router, a, b) => {
@@ -48,9 +48,9 @@ for (const stage of stages) {
       namespace: [router.cache, 'setNamespace'], session: [router.session, 'open'],
       watch: [router as any, 'bindWatch'],
       'repomix-dispose': [router.repomix, 'dispose'],
-      'serena-reset': [router.serena, 'resetConnection'],
+      'text-reset': [router.text, 'resetConnection'],
       'repomix-initialize': [router.repomix, 'initialize'],
-      'serena-initialize': [router.serena, 'initialize'],
+      'text-initialize': [router.text, 'initialize'],
       composites: [router as any, 'bindCompositeTools'],
     };
     const [target, method] = targets[stage];

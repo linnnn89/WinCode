@@ -4,11 +4,11 @@
 
 ## 后端与实验接口边界
 
-默认 Gateway 使用 SerenaAdapter 或明确标记的本地文本降级；显式启用 Roslyn 的实例通过相同工具提供 C# 声明、引用和影响证据，不启动 Serena/Python，也不在失败后偷偷切回 Serena。`hello.codeProvider` 标明实例选择；`source` 按实际响应读取，不能根据仓库中存在 Host 推断当前连接已经更新。
+默认 Gateway 使用 WinCode 内置文本能力，`source=local-text`，健康状态明确 semanticConfigured=false。显式启用 Roslyn 后使用直接 Code Host，失败会报错，不会偷偷改换提供方。外部 Serena 连接配置、启动器及旧 `serena-adapter-fallback` 来源已退役；旧调用方须适配。`hello.codeProvider` 标明实例选择，不能根据仓库中存在 Host 推断当前连接已更新。
 
 Roslyn 调用顺序：用 wincode_find_code_symbol 搜索（query 最长 256 字符），根据 signature、file 和 location.project 选择具体声明；再把该项的 name 作为 symbolName、完整 location 对象作为 symbolLocation 传给 wincode_find_references。location 包含 snapshotId（32 位小写十六进制）、project/file（工作区内相对路径）和 position（非负零基 UTF-16）。不手工猜偏移；同名/重载返回候选，不能自动选第一项。简单名称查询在当前不完整范围下只返回候选，单候选也需明确定位；candidatesTruncated=true 时 candidateCount 可能缺省，不能当作全量计数。
 
-编辑、重载或工作区切换会使 location 失效。SNAPSHOT_STALE/INPUTS_CHANGED 后，下一次显式符号搜索执行所需重载；失败请求不自动重放。若编辑后直接搜索，首个请求也可能报告过期，再显式搜索恢复。HOST_RESTART_REQUIRED 按诊断手册重新打开工作区。Serena 实例明确拒绝 symbolLocation；Serena 的 namePath/重载序号不能迁移为 Roslyn 身份。semanticContext 保留快照、输入检查点、排除生成器数和范围，queryComplete=false 时零引用仍不能证明可删除。
+受跟踪输入的变化、重载或工作区切换会使 location 失效；无关文件编辑不等于编译输入变化。SNAPSHOT_STALE/INPUTS_CHANGED 后，下一次显式符号搜索执行所需重载；失败请求不自动重放。若源码编辑后直接搜索，首个请求也可能报告过期，再显式搜索恢复。HOST_RESTART_REQUIRED 按诊断手册重新打开工作区。本地文本实例明确拒绝 symbolLocation；旧 namePath/重载序号不能迁移为 Roslyn 身份。semanticContext 保留快照、输入检查点、排除生成器数和范围，queryComplete=false 时零引用仍不能证明可删除。
 
 维护者可用启动参数 `--roslyn-config <配置 JSON 的绝对路径>` 显式选择；不从目标仓库自动发现执行配置。JSON 对应宿主 WinCodeConfig.adapters.roslyn，最多 16 KiB，示例路径须替换成已安装/已构建的实际文件：
 
@@ -20,15 +20,18 @@ Roslyn 调用顺序：用 wincode_find_code_symbol 搜索（query 最长 256 字
   "configuration": "Debug",
   "targetFramework": "net10.0",
   "dotnetPath": "C:/dotnet/dotnet.exe",
-  "hostPath": "C:/WinCode/tools/WinCode.Code.Host/bin/Release/net10.0/WinCode.Code.Host.dll"
+  "hostPath": "C:/WinCode/tools/WinCode.Code.Host/bin/Release/net10.0/publish/WinCode.Code.Host.dll",
+  "additionalInputs": []
 }
 ```
 
 allowProjectEvaluation 表示允许 MSBuild 设计时求值执行项目 targets，须符合用户授权；不会自动 restore 或下载 SDK。project 是相对当前工作区的固定入口；A→B 切换后使用 B 中同一路径，缺失就报错，不猜其他项目。配置和 TFM 当前固定于实例，要改变它们需更新启动配置并重启 Gateway。dotnetPath/hostPath 必须为绝对普通文件，重解析路径不支持；子进程使用指定 dotnet 的安装根，不改系统环境。可选 loadTimeoutMs 为 1–120000（默认 120000），queryTimeoutMs 为 1–60000（默认 30000），不属于 MCP 请求参数。
 
-维护验收使用 `npm run test:roslyn-host`（独立 Host）和 `npm run test:roslyn-gateway`（已构建 Gateway 的真实 stdio MCP）。要求已有项目内 SDK `.deps/dotnet-10.0.303`，会构建 Host、还原生成夹具并写入 test-tmp；Gateway 脚本还会在生成的 targets 中启动受控测试子进程，验证取消/崩溃/超时。它们不是日常工具不可用时的替代调用，不证明发布包或当前 Codex 连接已更新。环境变更须在用户授权范围内。
+维护验收使用 `npm run test:roslyn-host`（独立 Host）和 `npm run test:roslyn-gateway`（真实 stdio MCP）。维护脚本按显式 WINCODE_DOTNET_PATH、项目 .deps、DOTNET_HOST_PATH、PATH 顺序寻找已安装 SDK，并核对 global.json 的精确版本；不下载安装。当前要求 10.0.303。这些脚本只还原生成夹具，保留 test-tmp 报告；Gateway 验收使用完整发布目录的异地副本。此验收不证明当前 Codex 连接已更新或无 SDK 的机器可运行。
 
-原型通过独立进程的 JSON 行协议 v2 工作，非 MCP tools/call：启动参数为 `--allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK`；加载后 ready 帧给出 protocolVersion=2 和 snapshot。项目求值可能执行 targets，不自动 restore；本维护验收只使用获准的生成夹具。协议及启动方式以源码 `tools/WinCode.Code.Host/Program.cs` 注释为准，尚非稳定公共接口。
+`additionalInputs` 是可选启动配置，默认空数组。例如自定义构建读取现存的 `schema.yaml` 和非标准导入 `build-inputs/custom.rules`，可填 `["schema.yaml","build-inputs/custom.rules"]`。最多 32 个工作区相对文件路径，数组 JSON 最长 4096 个 UTF-16 字符；不接受根外/绝对路径、重复项、目录、通配符或链接。缺失项报 INPUT_UNAVAILABLE，不静默删除；创建或恢复文件后再显式搜索。切换工作区后列表按新根解释，各根均须具备所列文件。修改列表需更新启动配置并重启 Gateway，普通 MCP 参数不能添加输入或获取项目执行许可。
+
+Host 通过独立进程的 JSON 行协议 v2 工作，非 MCP tools/call：启动参数为 `--allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK [ADDITIONAL_INPUTS_JSON]`；加载后 ready 帧给出 protocolVersion=2、snapshot 及 inputPolicy={version:1,additionalInputs:[...]}。Gateway 必须核对实际列表；旧 Host 缺少输入策略确认或列表不一致时拒绝接入，即使同为协议 v2 也不能假定兼容。项目求值可能执行 targets，不自动 restore；本维护验收只使用获准的生成夹具。协议及启动方式以源码 `tools/WinCode.Code.Host/Program.cs` 注释为准，尚非稳定公共接口。
 
 | 内部 operation | 请求与结果 |
 | --- | --- |
@@ -40,7 +43,9 @@ allowProjectEvaluation 表示允许 MSBuild 设计时求值执行项目 targets�
 
 每帧还须包含 operation；id 为 1–128 字符且活动期间不可重复。队列最多等待 8 项，满时 BUSY；timeoutMs 从接纳起计算，包含排队，Host 本身执行协作取消。Gateway 超时/取消先等待目标收尾，超过 1 秒宽限才回收自有 Host 进程树；初次加载尚不能接收 cancel 时直接回收。Windows Host 在加载前绑定自有 Job，以覆盖普通子进程继承的退出行为；这不是沙盒，也不约束 targets 通过外部服务启动的进程。请求帧最多 65536 个 UTF-16 字符，Node 接收帧最多 1 Mi 字符，超长使通道失效。SDK/global.json、监听或资源释放故障可能要求新进程，不能循环 reload。
 
-Host 监听变化并在查询前后比较输入内容指纹，变化时丢弃结果并要求显式 reload。freshness.status=checked 仅覆盖其声明的工作区文件、已加载文档/元数据及祖先常规配置；包括新增文件与 obj/assets，默认排除 bin/node_modules 等目录，但显式加载的输入仍检查。预算为最多 20000 个枚举条目、5000 个文件、总计 128 MiB、单文件 32 MiB；超过即失败，不接受截断快照。不支持重解析路径。
+Host 监听变化并在查询前后比较内容指纹，变化时丢弃结果并要求显式 reload。每次加载尝试前用最多四个 50 ms 观察窗收敛输入事件，受请求取消预算约束；持续写入仍失败。求值期间的内容/事件检查继续保留，不自动重放请求。freshness.scope=compilation-inputs-and-explicit-files，自动候选包括 .cs/.csproj/.props/.targets、.xaml/.resx/.resw/.resources、.config/.ruleset，global.json、project.assets.json、packages.lock.json、.editorconfig/.globalconfig 及 *.nuget.dgspec.json。同时跟踪实际加载的文档、AdditionalFiles、分析配置、程序集引用和祖先常规构建配置；新增源码仍经 MSBuild 的 Compile 规则决定是否加载，不因发现 .cs 就直接加入项目。
+
+默认枚举排除 .git、node_modules、.deps、bin、dist、build、.cache、.vs、.packages、test-tmp、trash；实际加载或显式补充的文件优先于目录排除。非标准扩展名导入、排除目录中的自定义配置，以及自定义 targets 隐式读取的数据，应通过 additionalInputs 补充；不能承诺自动发现任意构建依赖。普通 README、视频和未加载的二进制文件不占输入字节预算。文件清单仍需有界枚举，极大目录仍可能超限；预算为最多 20000 个枚举条目、5000 个输入文件、总计 128 MiB、单个输入 32 MiB。必要输入或显式补充文件超限仍失败，不接受截断快照。内容核查流式计算摘要，仅冻结文档时保留源码正文；不支持重解析路径。
 
 自定义 targets 的任意外部输入和整个磁盘原子快照尚未验证，所以仍保留 diskFreshnessVerified=false、externalCustomInputsVerified=false。queryComplete 当前为 false；排除的分析器/生成器、加载及编译诊断须保留，零引用不证明安全删除。普通 MCP 请求使用下方规范字段；snapshotId 仅出现在 symbolLocation/semanticContext 内，不单独作为顶层参数发送。未知字段可能被忽略，成功响应不证明新参数生效。TS/JS/Python 的限定文件文本取证仍走 prepare_context，不把 Roslyn 声明搜索当成多语言语义服务。
 
@@ -55,8 +60,8 @@ Host 监听变化并在查询前后比较输入内容指纹，变化时丢弃结
 | `wincode_analyze_workspace` | 无 | `maxDepth`: 数字，默认 2 |
 | `wincode_find_code_symbol` | `query`: 非空字符串 | `kind`: 字符串，常用 `class/interface/method/function/type/enum`；此工具未声明文件范围参数，指定文件取证改用下面的 `scopeFiles` |
 | `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 定义文件相对路径；`symbolLocation`: Roslyn 搜索返回的 location 对象（snapshotId/project/file/position 均必填，路径各最长 4096）；同时提供 relativePath 时必须与 location.file 一致 |
-| `analyze_change_impact` | `target`: 非空字符串 | 无 |
-| `wincode_plan_refactoring` | `target`、`goal`: 非空字符串 | 无 |
+| `analyze_change_impact` | `target`: 非空字符串 | `symbolLocation`: 搜索返回的完整定位；提供时 target 必须是该符号的简单名称 |
+| `wincode_plan_refactoring` | `target`、`goal`: 非空字符串 | `symbolLocation`: 同影响分析 |
 | `wincode_safe_move_to_trash` | `filePath`: 工作区内相对路径字符串 | `reason`: 字符串；该工具实际移动文件，须符合用户授权 |
 
 `wincode_analyze_change_impact` 是 `analyze_change_impact` 的公布别名；`wincode_workspace_open` 是 `workspace_open` 的历史兼容别名。别名共享参数和执行规则，优先使用本连接 tools/list 公布的名称。其余字段名不接受自动拼写纠正。
@@ -97,7 +102,7 @@ lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details
 
 按目标选工具，不顺序执行整张表。已知文件范围时直接限定：
 
-上游结果有 namePath 时保留原值（如 Service/Save[0]），续查用 symbolName:namePath 加 relativePath:file；不要还原成短名或删除重载索引。简单名称歧义检查 resolution/candidateCount/candidatesTruncated，不能选第一项。queryComplete=false 或解析失败不能解释为零引用；lineKind=containing-symbol 不是精确调用点。
+选定 Roslyn 重载后，将其 name 和 location 原样传给后续工具：引用使用 symbolName，影响分析及重构使用 target，同时传 symbolLocation。后两者先验证定位再分析，不按名字重选目标；SNAPSHOT_STALE/INPUTS_CHANGED 时须重新搜索。简单名称歧义检查 resolution/candidateCount/candidatesTruncated，不能选第一项。queryComplete=false 不等于零引用。
 
 workspace_open 默认返回项目摘要和最多 8 个入口，整份 JSON 默认不超过 8000 个 UTF-16 字符；不生成目录树或统计全仓大小。检查 projectScanComplete，null 统计不等于零。需要目录时用 wincode_list_directory 指定窄路径，查看 scanComplete/truncated/omissions。includeTree:true 可显式取得有界兼容树，不能当成完整仓库清单。maxOutputChars 为 2048–32768；目录 maxDepth 为 1–5，maxEntries 为 1–500。需要生成目录时显式 includeIgnored:true，但不能越过工作区边界。
 
@@ -133,7 +138,9 @@ bodyStatusScope 明确该字段描述 displayed-snippet 或 packed-file。symbol
 
 保留 queryComplete、truncated、metadataTruncated、limitationsOmitted、omittedFiles/omittedFileCount 等字段的含义；预算裁剪后不得把缺失当成不存在。根据缺口收窄候选或增加预算，勿例行拉取全文。
 
-检查 source、queryComplete、uniqueResolution/uniqueTypeMatch 与 limitations。文本回退不保证语义引用完整；零引用、UNKNOWN 或未找到均不证明可安全删除。
+检查 source、queryComplete、uniqueResolution/uniqueTypeMatch 与 limitations。source=roslyn 是编译器语义来源，不是文本回退；queryComplete=false 可以表示生成器或加载图等覆盖缺口，不能直接解释为执行中断或要求原样重试。文本回退不保证语义引用完整；零引用、UNKNOWN 或未找到均不证明可安全删除。
+
+影响分析用完整工作区文件路径及可用的项目身份区分组件，targetFile 和组件 name 仍是展示名称；不同目录同名组件可以分别出现，不要按 name 再合并。提供目录的 target 按工作区解析；只有纯文件名才用于候选匹配。Host 冻结源码沿用 Roslyn/MSBuild 的 CodePage 与 BOM 编码，返回位置仍按解码后的 UTF-16 文本计算，不按原始文件字节偏移定位。
 
 若已有影响报告，直接据此规划，不为获得通用清单再次调用 plan_refactoring。该工具仍会做影响分析；它返回的 evidence 保留歧义、降级和 UNKNOWN，不代表已经执行重构。
 
@@ -142,3 +149,5 @@ bodyStatusScope 明确该字段描述 displayed-snippet 或 packed-file。symbol
 trash 响应保留 success/trashPath/message，并用 outcome 区分 completed（移动及元数据完成）、not_moved（本次未移动）、partial（已移动但元数据未完成）。partial 的 errorCode=TRASH_METADATA_FAILED、failureStage=metadata，originalPath/trashPath/metadataPath 给出原位置、实际移动位置及预期元数据位置；metadataPath 不证明元数据完整。立即保留并告知用户实际 trashPath，不把 success=false 当作未执行，不重复移动或自动移回。not_moved 的 trashPath 为空，errorCode=TRASH_NOT_MOVED；先检查 failureStage 和文件实际状态。重启不会自动补写元数据或推断原路径；丢失 partial 响应时，本实现不保证自动恢复原目录映射。
 
 回收站目标名含唯一标识，过长的原文件名展示部分会截短，以给元数据文件名预留空间；完整原路径保存在 originalPath 和成功写入的元数据中。恢复时使用这些路径，不从截短的目标名推断原文件名或扩展名。
+
+交付时保留 Code Host 整个 publish 目录，包括 deps/runtimeconfig、Roslyn 依赖及 BuildHost-netcore 子目录。`npm run check` 生成并核对交付清单；Host ready 身份必须与 Gateway 版本一致且为 Release、协议 v2，否则 HOST_VERSION_MISMATCH。不要仅复制入口 DLL，也不要把版本握手等同于运行时文件防篡改。

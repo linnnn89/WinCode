@@ -101,7 +101,7 @@ export const UI_TOOLS = [
       if (Buffer.byteLength(text, 'utf8') > UI_INSPECT_DEFAULTS.MAX_TEXT_JSON_BYTES)
         return jsonResult({ success: false, errorCode: 'PAYLOAD_TOO_LARGE',
           errorMessage: 'Window list exceeds text budget.', auditNotice: result.auditNotice }, false, true);
-      return { content: [{ type: 'text', text }], isError: !result.success };
+      return jsonResult(result, false, !result.success);
     },
   }),
   inspectDefinition,

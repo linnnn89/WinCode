@@ -4,7 +4,7 @@ import { CacheManager, CacheStats } from './Cache.js';
 import { WorkspaceManager, WorkspaceOpenOptions, WorkspaceDirectoryOptions } from './Workspace.js';
 import { ContextManager, PreparedContextOptions } from './Context.js';
 import { RepomixAdapter } from '../Adapters/RepomixAdapter.js';
-import { SerenaAdapter } from '../Adapters/SerenaAdapter.js';
+import { LocalTextAdapter } from '../Adapters/LocalTextAdapter.js';
 import { RoslynAdapter } from '../Adapters/RoslynAdapter.js';
 import { CodeQueryError, type SymbolLocation } from './CodeQueries.js';
 import { FlaUiAdapter } from '../Adapters/FlaUiAdapter.js';
@@ -39,7 +39,7 @@ export class WorkspaceRecoveryRequiredError extends Error {
 }
 
 export interface RuntimeHealth {
-  codeProvider: 'serena' | 'roslyn';
+  codeProvider: 'local-text' | 'roslyn';
   roslyn?: ReturnType<RoslynAdapter['getKnownHealth']>;
   resourceCleanup: ReturnType<ResourceManager['getCloseReport']>;
   version: string;
@@ -50,14 +50,7 @@ export interface RuntimeHealth {
   activeWorkspace: string | null;
   workspaceWatch: ReturnType<WorkspaceWatch['getStatus']>;
   session: WorkspaceSession | null;
-  serena: {
-    commandFound: boolean | null;
-    handshakeOk: boolean;
-    projectActive: boolean | null;
-    semanticQueryUsable: boolean;
-    mode: 'connected' | 'degraded';
-    lastError?: AdapterLastError;
-  };
+  text: { available: boolean; semanticConfigured: false; details: string };
   repomix: {
     available: boolean | null;
     source: string;
@@ -76,7 +69,7 @@ export interface RuntimeHealth {
   nodeMemory: NodeJS.MemoryUsage;
   inFlightRequests: number;
   lastAdapterError: AdapterLastError & { provider: string } | null;
-  healthObservation: Record<'serena' | 'repomix' | 'flaui', { state: 'known' | 'unknown'; observedAt: string | null }>;
+  healthObservation: Record<'text' | 'repomix' | 'flaui', { state: 'known' | 'unknown'; observedAt: string | null }>;
 }
 
 export class ToolRouter {
@@ -87,7 +80,7 @@ export class ToolRouter {
   readonly session: SessionManager;
   context: ContextManager;
   repomix: RepomixAdapter;
-  serena: SerenaAdapter;
+  text: LocalTextAdapter;
   roslyn?: RoslynAdapter;
   flaui: FlaUiAdapter;
   architecture: ArchitectureAnalyzer;
@@ -112,7 +105,7 @@ export class ToolRouter {
   private async runCode<T>(signal: AbortSignal | undefined, work: (operation: OperationContext) => Promise<T>): Promise<T> {
     const controller = new AbortController();
     const cancel = () => controller.abort();
-    const budget = (this.roslyn?.operationBudgetMs ?? (this.config.timeouts.serenaConnectMs + this.config.timeouts.serenaCallMs)) + this.config.timeouts.fileScanMs;
+    const budget = (this.roslyn?.operationBudgetMs ?? 0) + this.config.timeouts.fileScanMs;
     const operation = { signal: controller.signal, deadline: Date.now() + budget };
     const timer = setTimeout(() => controller.abort(new TimeoutError('operation', budget)), budget);
     this.codeOperations.add(controller);
@@ -143,14 +136,14 @@ export class ToolRouter {
     );
     this.workspace = new WorkspaceManager(config);
     this.repomix = new RepomixAdapter(config, this.cache, this.resources);
-    this.serena = new SerenaAdapter(config, this.cache, this.resources);
+    this.text = new LocalTextAdapter(config, this.cache);
     if (config.adapters.roslyn?.enabled)
-      this.roslyn = new RoslynAdapter(config, this.resources, (content, file) => this.serena.findSymbolsInContent(content, file));
+      this.roslyn = new RoslynAdapter(config, this.resources, (content, file) => this.text.findSymbolsInContent(content, file));
     this.flaui = new FlaUiAdapter(config, this.resources);
     this.context = new ContextManager(config, this.workspace, this.repomix, this.code);
-    this.architecture = new ArchitectureAnalyzer(this.workspace, this.code);
+    this.architecture = new ArchitectureAnalyzer(this.workspace);
     this.impact = new ImpactAnalyzer(this.code, this.config);
-    this.refactor = new RefactorAssistant(this.workspace, this.code, this.impact);
+    this.refactor = new RefactorAssistant(this.workspace, this.impact);
     this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.code);
     this.extensions = new ExtensionManager(config);
   }
@@ -160,7 +153,7 @@ export class ToolRouter {
   }
 
   /** 提供方在构造时显式选择；Roslyn 失败不触发 Serena RPC。 */
-  private get code(): SerenaAdapter | RoslynAdapter { return this.roslyn ?? this.serena; }
+  private get code(): LocalTextAdapter | RoslynAdapter { return this.roslyn ?? this.text; }
 
   get inFlightRequests(): number {
     return this.inFlight;
@@ -180,9 +173,9 @@ export class ToolRouter {
 
   /** 精确位置只属于 Roslyn；旧提供方收到该字段必须明确拒绝，不能忽略后再猜符号。 */
   findCodeReferences(symbolName: string, relativePath?: string, signal?: AbortSignal, location?: SymbolLocation) {
-    if (location && !this.roslyn) throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'This instance uses Serena; Roslyn symbolLocation is unsupported.');
+    if (location && !this.roslyn) throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'Semantic analysis is not configured; local text search cannot accept a Roslyn symbolLocation.');
     return this.runCode(signal, operation => this.roslyn ? this.roslyn.findReferencesDetailed(symbolName, relativePath, operation, location) :
-      this.serena.findReferencesDetailed(symbolName, relativePath, operation));
+      this.text.findReferencesDetailed(symbolName, relativePath, operation));
   }
 
   prepareContext(options: PreparedContextOptions, signal?: AbortSignal) {
@@ -193,8 +186,9 @@ export class ToolRouter {
     return this.architecture.analyze(maxDepth);
   }
 
-  analyzeChangeImpact(target: string, signal?: AbortSignal) {
-    return this.runCode(signal, operation => this.impact.analyzeImpact(target, operation));
+  analyzeChangeImpact(target: string, signal?: AbortSignal, location?: SymbolLocation) {
+    if (location && !this.roslyn) throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'Exact locations require configured Roslyn.');
+    return this.runCode(signal, operation => this.impact.analyzeImpact(target, operation, location));
   }
 
   async diagnoseProject() {
@@ -205,8 +199,9 @@ export class ToolRouter {
     return { ...diagnostics, runtime };
   }
 
-  planRefactoring(target: string, goal: string, signal?: AbortSignal) {
-    return this.runCode(signal, operation => this.refactor.planRefactoring(target, goal, operation));
+  planRefactoring(target: string, goal: string, signal?: AbortSignal, location?: SymbolLocation) {
+    if (location && !this.roslyn) throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'Exact locations require configured Roslyn.');
+    return this.runCode(signal, operation => this.refactor.planRefactoring(target, goal, operation, location));
   }
 
   moveToTrash(filePath: string, reason?: string) {
@@ -269,7 +264,7 @@ export class ToolRouter {
     this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
     await this.cache.initialize();
     await this.repomix.initialize();
-    if (!this.roslyn) await this.serena.initialize();
+    if (!this.roslyn) await this.text.initialize();
     await this.flaui.initialize();
     await this.extensions.initializeAll();
     const fp = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
@@ -306,7 +301,7 @@ export class ToolRouter {
 
   /**
    * Switch the active workspace. Serialized so two MCP calls cannot interleave
-   * Serena dispose/connect and cache namespace changes.
+   * provider cleanup/reinitialization and cache namespace changes.
    */
   async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, signal?: AbortSignal) {
     return this.workspaceLock.runExclusive(async () => {
@@ -357,7 +352,6 @@ export class ToolRouter {
           if (previousFp && previousFp !== fp) {
             this.cache.invalidateFingerprint(resolved);
             this.cache.setNamespace(this.config.workspaceRoot);
-            if (!this.roslyn) this.serena.markProjectStale();
           }
           return result;
         }
@@ -378,14 +372,16 @@ export class ToolRouter {
         phase = 'repomix-dispose';
         await this.repomix.dispose();
         checkOperation({ signal });
-        phase = this.roslyn ? 'roslyn-reset' : 'serena-reset';
-        await (this.roslyn ? this.roslyn.resetConnection() : this.serena.resetConnection());
+        if (this.roslyn) {
+          phase = 'roslyn-reset';
+          await this.roslyn.resetConnection();
+        }
         checkOperation({ signal });
         phase = 'repomix-initialize';
         await this.repomix.initialize();
         checkOperation({ signal });
-        phase = 'serena-initialize';
-        if (!this.roslyn) await this.serena.initialize();
+        phase = 'text-initialize';
+        if (!this.roslyn) await this.text.initialize();
         checkOperation({ signal });
         phase = 'composites';
         this.bindCompositeTools();
@@ -417,9 +413,9 @@ export class ToolRouter {
 
   private bindCompositeTools(): void {
     this.context = new ContextManager(this.config, this.workspace, this.repomix, this.code);
-    this.architecture = new ArchitectureAnalyzer(this.workspace, this.code);
+    this.architecture = new ArchitectureAnalyzer(this.workspace);
     this.impact = new ImpactAnalyzer(this.code, this.config);
-    this.refactor = new RefactorAssistant(this.workspace, this.code, this.impact);
+    this.refactor = new RefactorAssistant(this.workspace, this.impact);
     this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.code);
   }
 
@@ -436,22 +432,21 @@ export class ToolRouter {
   }
 
   async getRuntimeHealth(): Promise<RuntimeHealth> {
-    const snapshots = { serena: this.serena.getKnownHealth(), repomix: this.repomix.getKnownHealth(), flaui: this.flaui.getKnownHealth() };
+    const snapshots = { text: this.text.getKnownHealth(), repomix: this.repomix.getKnownHealth(), flaui: this.flaui.getKnownHealth() };
     const unknown = { available: null, source: 'unknown', details: 'Not probed; use wincode_diagnose_project for an active check.', lastError: undefined };
-    const serenaHealth = snapshots.serena.health;
+    const textHealth = snapshots.text.health;
     const repomixHealth = snapshots.repomix.health ?? unknown;
     const flauiHealth = snapshots.flaui.health ?? unknown;
     const cache = await this.cache.getStats();
-    const up = serenaHealth?.upstream;
     const lastAdapterError = this.pickLastError(
-      { error: serenaHealth?.lastError, provider: 'serena' },
       { error: repomixHealth.lastError, provider: 'repomix' },
-      { error: flauiHealth.lastError, provider: 'flaui' }
+      { error: flauiHealth.lastError, provider: 'flaui' },
+      { error: this.roslyn?.getKnownHealth().health?.lastError, provider: 'roslyn' }
     );
 
     return {
       version: WINCODE_VERSION,
-      codeProvider: this.roslyn ? 'roslyn' : 'serena',
+      codeProvider: this.roslyn ? 'roslyn' : 'local-text',
       ...(this.roslyn ? { roslyn: this.roslyn.getKnownHealth() } : {}),
       status: this.shuttingDown ? 'shutting_down' : this.workspaceRecovery ? 'recovery_required' : 'online',
       workspaceRecovery: this.workspaceRecovery ? { ...this.workspaceRecovery } : null,
@@ -460,14 +455,7 @@ export class ToolRouter {
       activeWorkspace: this.config.workspaceRoot,
       workspaceWatch: this.watch.getStatus(),
       session: this.session.current,
-      serena: {
-        commandFound: up?.commandFound ?? null,
-        handshakeOk: up?.handshakeOk ?? false,
-        projectActive: up?.projectActive ?? null,
-        semanticQueryUsable: up?.semanticQueryUsable ?? false,
-        mode: up?.mode ?? 'degraded',
-        lastError: serenaHealth?.lastError,
-      },
+      text: { available: true, semanticConfigured: false, details: textHealth.details! },
       repomix: {
         available: repomixHealth.available,
         source: repomixHealth.source,
@@ -546,7 +534,7 @@ export class ToolRouter {
       for (const cleanup of [
         () => this.watch.stop(),
         () => this.repomix.dispose(),
-        () => this.serena.dispose(),
+        () => this.text.dispose(),
         () => this.roslyn?.dispose(),
         () => this.flaui.dispose(),
         () => this.extensions.disposeAll(),

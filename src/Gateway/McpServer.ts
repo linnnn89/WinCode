@@ -5,7 +5,7 @@ import { WINCODE_VERSION } from '../Core/Config.js';
 import { AbortError } from '../Core/ResourceManager.js';
 import { CodeQueryError } from '../Core/CodeQueries.js';
 import { ToolRegistry } from './ToolRegistry.js';
-import { jsonResult, type ToolExecutionContext } from './ToolDefinition.js';
+import { toolErrorResult, codeRecoveryAction, type ToolExecutionContext } from './ToolDefinition.js';
 
 export class WinCodeMcpServer {
   private server: Server;
@@ -23,9 +23,9 @@ export class WinCodeMcpServer {
       const { name, arguments: input = {} } = request.params;
       const signal = ctx.mcpReq.signal;
       if (this.router.isShuttingDown || signal?.aborted) {
-        return jsonResult({ status: 'failed', reason: 'cancelled', provider: 'wincode',
-          recoverable: !this.router.isShuttingDown,
-          message: this.router.isShuttingDown ? 'WinCode is shutting down; tool call rejected.' : 'Tool call was cancelled.' }, true, true);
+        return toolErrorResult(this.router.isShuttingDown ? 'SHUTDOWN' : 'CANCELLED',
+          this.router.isShuttingDown ? 'WinCode is shutting down; tool call rejected.' : 'Tool call was cancelled.',
+          this.router.isShuttingDown ? 'restart_gateway' : 'none');
       }
       const definition = this.registry.resolve(name);
       const context: ToolExecutionContext = { router: this.router, signal, tools: this.registry.list(), schemaHash: this.registry.schemaHash };
@@ -35,7 +35,7 @@ export class WinCodeMcpServer {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return definition?.invalidArguments?.(message) ??
-          { content: [{ type: 'text' as const, text: `Tool Execution Error: ${message}` }], isError: true };
+          toolErrorResult(definition ? 'INVALID_ARGUMENT' : 'UNKNOWN_TOOL', message, definition ? 'correct_arguments' : 'select_tool');
       }
       let acquired = false;
       try {
@@ -45,17 +45,18 @@ export class WinCodeMcpServer {
         }
         return await definition!.execute(args, context);
       } catch (error) {
-        if (error instanceof AbortError || (error instanceof Error && error.name === 'AbortError') || signal?.aborted) {
-          return jsonResult({ schemaVersion: '1.0', protocolVersion: '1.0', success: false,
-            errorCode: 'CANCELLED', errorMessage: 'Tool call was cancelled.',
-            ...(this.router.workspaceRecoveryState ? { workspaceRecovery: this.router.workspaceRecoveryState } : {}) }, true, true);
-        }
+        // 根变化后的失败必须携带真实恢复状态；取消不能掩盖已发生的部分状态变更。
+        const recovery = error instanceof WorkspaceRecoveryRequiredError ? error.recovery : this.router.workspaceRecoveryState;
+        const details = recovery ? { workspaceRecovery: recovery } : {};
+        if (error instanceof AbortError || (error instanceof Error && error.name === 'AbortError') || signal?.aborted)
+          return toolErrorResult('CANCELLED', 'Tool call was cancelled.', recovery?.recoveryAction ?? 'none', details);
         if (error instanceof WorkspaceRecoveryRequiredError)
-          return jsonResult({ success: false, errorCode: 'WORKSPACE_RECOVERY_REQUIRED',
-            errorMessage: error.message, workspaceRecovery: error.recovery }, true, true);
+          return toolErrorResult('WORKSPACE_RECOVERY_REQUIRED', error.message, error.recovery.recoveryAction, details);
         if (error instanceof CodeQueryError)
-          return jsonResult({ success: false, errorCode: error.errorCode, errorMessage: error.message }, true, true);
-        return { content: [{ type: 'text' as const, text: `Tool Execution Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+          return toolErrorResult(error.errorCode, error.message, recovery?.recoveryAction ?? codeRecoveryAction(error.errorCode), details);
+        return toolErrorResult(this.router.isShuttingDown ? 'SHUTDOWN' : 'TOOL_EXECUTION_FAILED',
+          error instanceof Error ? error.message : String(error),
+          recovery?.recoveryAction ?? (this.router.isShuttingDown ? 'restart_gateway' : 'inspect_error'), details);
       } finally {
         if (acquired) this.router.endRequest();
       }

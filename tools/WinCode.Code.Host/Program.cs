@@ -5,7 +5,7 @@ using System.Threading.Channels;
 using Microsoft.Build.Locator;
 
 /// <summary>
-/// 实验性 C# Host：直接调用 Roslyn，内部协议 v2，尚未注册到 Gateway。
+/// 自有 C# Host：直接调用 Roslyn，内部协议 v2，由显式启用的 Gateway RoslynAdapter 管理。
 /// MSBuild targets 是获准执行的项目代码，本进程不是执行沙盒，也不自动 restore。
 /// </summary>
 internal static class Program
@@ -17,17 +17,24 @@ internal static class Program
     private sealed record Pending(string Id, JsonElement Request, CancellationTokenSource Cancellation);
 
     /// <summary>验证显式求值许可、固定工作区和配置；按入口项目目录选择 SDK 后启动会话。</summary>
-    /// <param name="args">--allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK。</param>
+    /// <param name="args">--allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK [ADDITIONAL_INPUTS_JSON]。</param>
     /// <returns>正常退出 0；启动、协议流或资源释放失败 1。</returns>
     private static async Task<int> Main(string[] args)
     {
         Console.InputEncoding = Console.OutputEncoding = new UTF8Encoding(false);
         try
         {
-            if (args.Length != 5 || args[0] != "--allow-project-evaluation")
+            // 发布验收只读取自身程序集，必须在项目许可校验和 MSBuild 初始化之前返回。
+            if (args is ["--identity"])
+            {
+                Write(new { success = true, hostIdentity = HostBuildIdentity.Current });
+                return 0;
+            }
+            if (args.Length is not (5 or 6) || args[0] != "--allow-project-evaluation")
                 throw new ArgumentException("Explicit project evaluation permission required: --allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK");
             var root = Path.GetFullPath(args[1]);
             var project = WorkspaceInputs.Inside(root, args[2]);
+            var additionalInputs = WorkspaceInputs.ParseAdditionalInputs(root, args.Length == 6 ? args[5] : "[]");
             if (!Path.GetExtension(project).Equals(".csproj", StringComparison.OrdinalIgnoreCase) || !File.Exists(project))
                 throw new ArgumentException("A C# project is required.");
             if (string.IsNullOrWhiteSpace(args[3]) || string.IsNullOrWhiteSpace(args[4])) throw new ArgumentException("Explicit configuration and framework required.");
@@ -35,7 +42,7 @@ internal static class Program
             Directory.SetCurrentDirectory(Path.GetDirectoryName(project)!);
             OwnedProcessJob.Attach();
             MSBuildLocator.RegisterDefaults();
-            return await RunAsync(root, project, args[3], args[4]);
+            return await RunAsync(root, project, args[3], args[4], additionalInputs);
         }
         catch (Exception error) { WriteFailure(null, error, "hostError"); return 1; }
     }
@@ -69,9 +76,9 @@ internal static class Program
     /// symbols/references 的 timeoutMs 默认 30000、上限 60000；reload 默认/上限 120000，均至少 1，包含排队时间。
     /// limit 为 1–1000、默认 100，只约束返回量。协作取消不等于进程级硬截止。
     /// </remarks>
-    private static async Task<int> RunAsync(string root, string project, string configuration, string framework)
+    private static async Task<int> RunAsync(string root, string project, string configuration, string framework, string[] additionalInputs)
     {
-        var session = new WorkspaceSession(root, project, configuration, framework);
+        var session = new WorkspaceSession(root, project, configuration, framework, additionalInputs);
         var queue = Channel.CreateBounded<Pending>(new BoundedChannelOptions(8) { SingleReader = true, SingleWriter = true });
         var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
         using var stopping = new CancellationTokenSource();

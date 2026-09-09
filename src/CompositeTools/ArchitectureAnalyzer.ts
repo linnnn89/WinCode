@@ -1,5 +1,4 @@
 import { WorkspaceManager, ProjectIdentity, WorkspaceTreeItem } from '../Core/Workspace.js';
-import { CodeSymbolQuery } from '../Core/CodeQueries.js';
 import { DotNetProjectGraph, loadDotNetProjectGraph } from '../Core/DotNetGraph.js';
 
 export interface ArchitectureReport {
@@ -23,7 +22,7 @@ export interface ArchitectureReport {
 export class ArchitectureAnalyzer {
   private workspace: WorkspaceManager;
 
-  constructor(workspace: WorkspaceManager, _queries: CodeSymbolQuery) {
+  constructor(workspace: WorkspaceManager) {
     this.workspace = workspace;
   }
 
@@ -44,7 +43,7 @@ export class ArchitectureAnalyzer {
       },
       {
         name: 'Adapters / Infrastructure',
-        description: 'External integrations (Serena, Repomix, FlaUI)',
+        description: 'External integrations (Roslyn, Repomix, FlaUI)',
         matchedFiles: [] as string[],
       },
       {

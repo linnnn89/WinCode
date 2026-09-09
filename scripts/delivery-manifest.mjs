@@ -5,8 +5,10 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { collectBuildInputs, createBuildManifest, fingerprint } from './build.mjs';
 import { managedFiles } from './sync-skill.mjs';
+import { resolveDotnet } from './lib/dotnet.mjs';
 
 export const hostDirectory = 'tools/WinCode.UIA.Host/bin/Release/net10.0-windows/win-x64/publish';
+export const codeHostDirectory = 'tools/WinCode.Code.Host/bin/Release/net10.0/publish';
 const rootDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const settings = ['package.json', 'package-lock.json', 'global.json',
@@ -54,7 +56,7 @@ async function records(root, files) {
   return result;
 }
 
-export async function collectDelivery(root, hostIdentity, toolchains) {
+export async function collectDelivery(root, hostIdentity, toolchains, codeHostIdentity) {
   const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
   const gateway = JSON.parse(await fs.readFile(path.join(root, 'dist/build-manifest.json'), 'utf8'));
   if (gateway.version !== pkg.version || hostIdentity?.version !== pkg.version || hostIdentity.configuration !== 'Release')
@@ -68,11 +70,28 @@ export async function collectDelivery(root, hostIdentity, toolchains) {
   const hostFiles = await inventory(root, hostDirectory);
   for (const required of ['WinCode.UIA.Host.exe', 'WinCode.UIA.Host.dll', 'WinCode.UIA.Host.deps.json', 'WinCode.UIA.Host.runtimeconfig.json'])
     if (!hostFiles.includes(`${hostDirectory}/${required}`)) throw new Error(`Missing Host sidecar: ${required}`);
+  // 可选组件必须整体交付；只复制入口 DLL 会遗漏真实求值使用的 BuildHost 子进程。
+  let codeHost;
+  if (codeHostIdentity !== undefined) {
+    if (codeHostIdentity.version !== pkg.version || codeHostIdentity.configuration !== 'Release' || codeHostIdentity.protocolVersion !== 2)
+      throw new Error('Code Host version, Release configuration and protocol must agree with the Gateway.');
+    const files = await inventory(root, codeHostDirectory);
+    for (const required of ['WinCode.Code.Host.dll', 'WinCode.Code.Host.deps.json', 'WinCode.Code.Host.runtimeconfig.json',
+      'Microsoft.CodeAnalysis.Workspaces.MSBuild.dll', 'BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll',
+      'BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.deps.json',
+      'BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.runtimeconfig.json']) {
+      if (!files.includes(`${codeHostDirectory}/${required}`)) throw new Error(`Missing Code Host sidecar: ${required}`);
+    }
+    codeHost = { identity: codeHostIdentity, files: await records(root, files) };
+  }
   return { version: pkg.version, toolchains, components: {
     gateway: { buildId: gateway.buildId, files: gatewayFiles },
     host: { identity: hostIdentity, files: await records(root, hostFiles) },
+    ...(codeHost ? { codeHost } : {}),
     skill: { files: await records(root, managedFiles.map(file => `skills/wincode/${file}`)) },
-    configuration: { files: await records(root, settings) },
+    configuration: { files: await records(root, [...settings, ...(codeHost ? [
+      'tools/WinCode.Code.Host/WinCode.Code.Host.csproj', 'tools/WinCode.Code.Host/packages.lock.json',
+    ] : [])]) },
   } };
 }
 
@@ -81,24 +100,33 @@ export function deliveryId(delivery) { return sha256(JSON.stringify(delivery)); 
 export async function verifyDelivery(root, manifest) {
   if (manifest.formatVersion !== 1 || !manifest.delivery || deliveryId(manifest.delivery) !== manifest.contentId)
     throw new Error('Invalid delivery manifest identity.');
-  const actual = await collectDelivery(root, manifest.delivery.components.host.identity, manifest.delivery.toolchains);
+  const actual = await collectDelivery(root, manifest.delivery.components.host.identity, manifest.delivery.toolchains,
+    manifest.delivery.components.codeHost?.identity);
   if (deliveryId(actual) !== manifest.contentId) throw new Error('Delivery contents changed or are incomplete.');
   return { contentId: manifest.contentId, version: actual.version, matched: true };
 }
 
-function output(command, args, root, input) {
-  const result = spawnSync(command, args, { cwd: root, input, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 65536 });
+function output(command, args, root, input, env = process.env) {
+  const result = spawnSync(command, args, { cwd: root, env, input, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 65536 });
   if (result.error || result.status !== 0) throw new Error(`Delivery probe failed: ${result.error?.message ?? result.stderr ?? result.status}`);
   return result.stdout.trim();
 }
 
 export async function writeDelivery(root = rootDirectory) {
+  const sdk = resolveDotnet(root);
   const hostResponse = JSON.parse(output(path.join(root, hostDirectory, 'WinCode.UIA.Host.exe'), [], root,
     JSON.stringify({ schemaVersion: '1.0', requestId: 'delivery-check', action: 'health' }) + '\n'));
   if (hostResponse.success !== true || hostResponse.status !== 'healthy') throw new Error('Published Host health failed.');
-  const toolchains = { node: process.versions.node, dotnet: output('dotnet', ['--version'], root),
+  const toolchains = { node: process.versions.node, dotnet: sdk.sdkVersion,
     npm: process.env.npm_execpath ? output(process.execPath, [process.env.npm_execpath, '--version'], root) : null };
-  const delivery = await collectDelivery(root, hostResponse.hostIdentity, toolchains);
+  const codeHostPath = path.join(root, codeHostDirectory, 'WinCode.Code.Host.dll');
+  const installed = await fs.stat(path.join(root, codeHostDirectory)).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  const codeResponse = installed ? JSON.parse(output(sdk.dotnet, [codeHostPath, '--identity'], root, undefined, sdk.env)) : undefined;
+  if (codeResponse && codeResponse.success !== true) throw new Error('Code Host identity probe failed.');
+  const delivery = await collectDelivery(root, hostResponse.hostIdentity, toolchains, codeResponse?.hostIdentity);
   const git = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 3000 });
   const revision = git.status === 0 && /^[a-f0-9]{40,64}$/.test(git.stdout.trim()) ? git.stdout.trim() : null;
   const manifest = { formatVersion: 1, contentId: deliveryId(delivery), delivery, revision, createdAt: new Date().toISOString() };

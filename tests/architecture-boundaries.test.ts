@@ -13,7 +13,7 @@ async function sources(directory: string): Promise<string[]> {
 
 it('keeps Gateway behind ToolRouter and composite tools behind core contracts', async () => {
   const violations: string[] = [];
-  const implementationFields = new Set(['serena', 'repomix', 'flaui', 'workspace', 'architecture', 'context', 'impact', 'diagnostics', 'refactor']);
+  const implementationFields = new Set(['text', 'repomix', 'flaui', 'workspace', 'architecture', 'context', 'impact', 'diagnostics', 'refactor']);
   for (const layer of ['Gateway', 'CompositeTools', 'Core']) {
     for (const file of await sources(path.resolve('src', layer))) {
       const source = ts.createSourceFile(file, await fs.readFile(file, 'utf8'), ts.ScriptTarget.Latest, true);

@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { SerenaAdapter } from '../src/Adapters/SerenaAdapter.js';
+import { LocalTextAdapter } from '../src/Adapters/LocalTextAdapter.js';
 import { getDefaultConfig } from '../src/Core/Config.js';
 
-async function fixture(run: (adapter: SerenaAdapter, root: string, cached: Map<string, unknown>) => Promise<void>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-serena-bounds-'));
+async function fixture(run: (adapter: LocalTextAdapter, root: string, cached: Map<string, unknown>) => Promise<void>) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-text-bounds-'));
   const cached = new Map<string, unknown>();
   const cache = { computeWorkspaceFingerprint: async () => 'fixture', get: async (key: string) => cached.get(key),
     set: async (key: string, value: unknown) => { cached.set(key, value); } };
   const config = getDefaultConfig(root);
-  config.adapters.serena.enabled = false;
-  const adapter = new SerenaAdapter(config, cache as any);
+
+  const adapter = new LocalTextAdapter(config, cache as any);
   try { await run(adapter, root, cached); }
   finally { await adapter.dispose(); await fs.rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 }
@@ -88,7 +88,7 @@ it('rejects explicit paths outside the workspace', async () => fixture(async (ad
 
 it('marks a scan deadline incomplete', async () => fixture(async (adapter, root) => {
   await fs.writeFile(path.join(root, 'Target.cs'), 'class Target {}');
-  (adapter as any).timeouts.fileScanMs = -1;
+  (adapter as any).config.timeouts.fileScanMs = -1;
   const result = await adapter.findSymbolsDetailed('Target');
   assert.equal(result.queryComplete, false);
   assert.match(result.queryError!, /deadline/);
@@ -130,41 +130,3 @@ it('does not turn a directory read failure into a complete empty scan', async (t
     assert.match(result.queryError!, /read-error/);
   } finally { t.mock.restoreAll(); }
 }));
-
-for (const body of ['logger.LogError("No active project");', 'logger.LogError("没有激活项目");']) {
-  it(`accepts valid upstream JSON containing ${body}`, async () => fixture(async (adapter) => {
-    Object.assign(adapter as any, { ensureConnected: async () => true, isConnectedToSerena: true,
-      serenaTools: new Set(['find_symbol']), serenaClient: { callTool: async () => ({ content: [{ type: 'text', text: JSON.stringify([
-        { name_path: 'Service/Save', kind: 'Method', relative_path: 'Service.cs', body_location: { start_line: 1, end_line: 2 }, body },
-      ]) }] }) } });
-    const result = await adapter.findSymbolsDetailed('Save');
-    assert.equal(result.source, 'serena-mcp');
-    assert.equal(result.queryComplete, true);
-    assert.equal(result.symbols[0].name, 'Save');
-    (adapter as any).serenaClient = null;
-  }));
-}
-
-it('accepts reference JSON containing inactive-project error phrases', async () => fixture(async (adapter) => {
-  Object.assign(adapter as any, { ensureConnected: async () => true, isConnectedToSerena: true,
-    serenaTools: new Set(['find_referencing_symbols']), serenaClient: { callTool: async () => ({ content: [{ type: 'text', text: JSON.stringify([
-      { relative_path: 'Use.cs', line: 7, preview: 'Save("No active project / 没有激活项目");' },
-    ]) }] }) } });
-  const result = await adapter.findReferencesDetailed('Service/Save', 'Service.cs');
-  assert.equal(result.source, 'serena-mcp');
-  assert.equal(result.queryComplete, true);
-  assert.equal(result.totalReferences, 1);
-  (adapter as any).serenaClient = null;
-}));
-
-for (const message of ['Error: No active project.', 'No active project. Activate a project.', '没有激活项目']) {
-  it(`retains explicit plain-text error handling: ${message}`, async () => fixture(async (adapter) => {
-    Object.assign(adapter as any, { ensureConnected: async () => true, isConnectedToSerena: true,
-      serenaTools: new Set(['find_symbol']), serenaClient: { callTool: async () => ({ content: [{ type: 'text', text: message }] }) } });
-    const result = await adapter.findSymbolsDetailed('Save');
-    assert.equal(result.queryComplete, false);
-    assert.equal(result.source, 'serena-adapter-fallback');
-    assert.equal((adapter as any).projectActive, false);
-    (adapter as any).serenaClient = null;
-  }));
-}

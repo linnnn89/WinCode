@@ -1,8 +1,8 @@
 # WinCode 架构、数据流与检查关口
 
-**基线：0.12.5，main `10496e0`；核对日期：2026-09-08（北京时间）。**
+**本地源码：0.13.0，基于 main@2235a42；结构更新日期：2026-09-09（北京时间）。未发布。**
 
-本说明描述当前源码中已实现的结构。GitHub 分支保护已在本次只读核查中确认；历史实测结果见[工作记录](docs/codex_worklog.md)。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
+本说明描述当前源码中已实现的结构。GitHub 分支保护的历史只读核查日期为 2026-09-08，本轮未重新查询远端；历史实测结果见[工作记录](docs/codex_worklog.md)。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
 
 ## 1. 整体定位与结构
 
@@ -18,7 +18,7 @@ flowchart TB
     Router["ToolRouter\n组件装配 · 用例入口 · 工作区切换 · 生命周期"]
     Use["用例与证据处理\nContext / Architecture / Impact / Refactor / UiReview"]
     State["横向状态与资源\nWorkspace · Session · Cache · Watch · ResourceManager"]
-    Adapters["适配器\nSerenaAdapter · RepomixAdapter · FlaUiAdapter"]
+    Adapters["适配器\nLocalTextAdapter / RoslynAdapter · RepomixAdapter · FlaUiAdapter"]
     Gate --> Router
     Router --> Use
     Router --> State
@@ -26,13 +26,13 @@ flowchart TB
     Router --> Adapters
   end
   Client <-->|"MCP / stdio"| Gate
-  Adapters <-->|"MCP / stdio"| Serena["Serena 进程\n语言服务器：C# 使用 Roslyn"]
+  Adapters <-->|"有界 JSONL / stdio"| CodeHost["WinCode.Code.Host\n直接 Roslyn / MSBuildWorkspace"]
   Adapters <-->|"Node 直启 JS / 输出文件"| Repomix["已安装的 Repomix CLI\n缺失时使用内置打包器"]
   Adapters <-->|"stdin 请求 / stdout JSON"| Host[".NET UIA Host\nFlaUI · Win32 · 截图 · 审计"]
   Host -->|"只读取证"| App["目标 Windows 应用\n独立 PID / HWND"]
   State <--> Disk["本地文件系统\n源码 · 项目文件 · 缓存 · trash"]
   Use -->|"有界读取"| Disk
-  Serena --> Disk
+  CodeHost --> Disk
   Repomix --> Disk
 ```
 
@@ -45,7 +45,7 @@ flowchart TB
 | ToolRouter | 创建并组合组件，提供用例入口，协调请求与工作区生命周期 | [ToolRouter](src/Core/ToolRouter.ts)；这是装配与协调中心，不只是名称路由表 |
 | 核心能力契约 | 定义符号、引用、打包、UI、操作取消等数据类型 | [CodeQueries](src/Core/CodeQueries.ts)、[ContextPacking](src/Core/ContextPacking.ts)、[UiContracts](src/Core/UiContracts.ts)、[OperationContext](src/Core/OperationContext.ts) |
 | 用例层 | 项目结构分析、上下文组织、影响评估、重构建议、UI→源码候选 | [Context](src/Core/Context.ts)、[CompositeTools](src/CompositeTools)；消费窄接口，保留来源与不完整状态 |
-| 适配器层 | 上游协议、响应解析、超时、失败降级及子进程管理 | [Adapters](src/Adapters)；Serena 的语义结果与本地文本结果分开标识 |
+| 适配器层 | 上游协议、响应解析、超时、失败降级及子进程管理 | [Adapters](src/Adapters)；Roslyn 与 local-text 的来源分开标识 |
 | 原生 Host | 按 PID/HWND 取证，执行有界 UIA 搜索及截图 | [Program.cs](tools/WinCode.UIA.Host/Program.cs)、[BoundedUiSearch](tools/WinCode.UIA.Host/BoundedUiSearch.cs)、[UiAudit](tools/WinCode.UIA.Host/UiAudit.cs) |
 | 构建交付层 | 锁定构建、回归、stdio 验证、产物身份、Skill 一致性 | [check.mjs](scripts/check.mjs)、[delivery-manifest](scripts/delivery-manifest.mjs)、[sync-skill](scripts/sync-skill.mjs) |
 
@@ -96,7 +96,7 @@ flowchart LR
   Route -->|"lineRanges"| Lines["按指定文件/行范围读取"]
   Route -->|"scopeFiles + symbol"| Local["文件内声明匹配\n局部窗口，语义覆盖不完整"]
   Route -->|"scopeFiles"| Files["指定文件预览\n或有预算的全文"]
-  Route -->|"尚无明确范围"| Discover["任务关键词 / 候选 / focusAreas\nSerena 查询或文本降级"]
+  Route -->|"尚无明确范围"| Discover["任务关键词 / 候选 / focusAreas\nRoslyn 查询或本地文本"]
   Discover --> Select["候选排序与去重\n选取有限文件"]
   Lines --> Evidence["Evidence\n文件 · 实际行范围 · 正文 · 定位方式"]
   Local --> Evidence
@@ -111,7 +111,7 @@ flowchart LR
 
 | 数据 | 生产者 → 使用者 | 必须随数据保留的信息 |
 |---|---|---|
-| 符号 / 引用 | SerenaAdapter → Context、Impact、Refactor | `source`、`namePath`、文件、行、`queryComplete`、歧义、截断；引用行的 `lineKind` |
+| 符号 / 引用 | LocalTextAdapter / RoslynAdapter → Context、Impact、Refactor | `source`、快照绑定的 `location`、文件、行、`queryComplete`、歧义及截断 |
 | 源码正文 | 文件读取 / 打包 → ContextResponse → Agent | 实际起止行、末行是否完整、`locationKind`、省略原因与范围覆盖 |
 | 项目结构 | Workspace / DotNetGraph → ArchitectureAnalyzer | 从 `.sln`、`.csproj` 等文件提取的声明关系；不代表 MSBuild 动态求值后的实际编译图 |
 
@@ -119,11 +119,11 @@ flowchart LR
 
 ### 3.2 语义链与降级链
 
-SerenaAdapter 懒连接真实上游，先握手、获取工具列表，再查询。状态分为命令已发现、握手成功、项目激活、语义查询可用；前一层成功不自动推导后一层成功。
+默认只启用本地文本能力；显式配置直接 Roslyn 后，首次语义搜索才启动自有 Code Host。ready 核对版本、协议、配置、输入策略及进程树保障；不启动外部 Serena，也不在 Roslyn 出错时切换提供方。
 
-真实符号结果保留完整 `namePath` 和重载标识。简名对应多个身份时返回 ambiguous，引用查询不擅自选择第一项；指定身份查询仍要核对完成状态。上游失败时可使用有文件数、字节数和时间预算的本地正则扫描，结果明确为文本降级。
+真实符号结果返回 snapshotId/project/file/position 身份，选定后传给引用、影响分析和重构。旧定位先校验，再分析；不按名字重选重载。本地文本扫描仍有文件数、字节数和时间预算，并明确语义能力未配置。
 
-0.12.5 处理了真实 Serena/FastMCP 的 `structuredContent.result` 字符串包装；合法空数组和零引用保留语义来源，错误或不支持的结构不会被当作成功。ImpactAnalyzer 对身份不唯一或查询不完整的情况保留 `UNKNOWN`；零引用不构成“可以安全删除”的证明。
+0.13.0 退役外部 Serena 配置、连接及旧 source；local-text 与 roslyn 均不能仅凭来源证明完整性。ImpactAnalyzer 对身份不唯一或查询不完整保留 UNKNOWN；零引用不构成可安全删除的证明。
 
 ### 3.3 输出预算位于最后一公里
 
@@ -185,7 +185,7 @@ flowchart TB
 
 ### 5.3 取消与退出
 
-代码用例把客户端 signal 与操作 deadline 传入扫描/上游路径。当前代码用例总预算由 Serena 连接、调用和文件扫描预算合成（默认 43 秒）；具体外部操作还有各自超时。UI 另有 Helper 超时，默认 10 秒。原生调用或单次磁盘 I/O 不一定能立即中断。
+代码用例把客户端 signal 与操作 deadline 传入扫描/上游路径。本地文本用例采用文件扫描预算；Roslyn 用例采用显式加载、查询与文件扫描预算；具体外部操作还有各自超时。UI 另有 Helper 超时，默认 10 秒。原生调用或单次磁盘 I/O 不一定能立即中断。
 
 关闭时拒绝新请求、取消代码操作、等待在途请求，并依次尝试停止 watcher、各适配器、扩展兼容项，刷新缓存写入、关闭 session 和资源管理器。主要关闭路径保留聚合错误，重复 dispose 共享结果；不能仅凭进程计数为零证明所有清理成功。ResourceManager 保存有限的进程内清理记录，真实验收另检查已知自有 PID 是否退出。
 
@@ -197,13 +197,13 @@ flowchart TB
 | G2 请求与工作区 | Gateway / ToolRouter | 取消/关闭检查；切换互斥与在途排空 | 不是所有请求统一串行，也不是多租户隔离 |
 | G3 文件与范围 | Workspace、Context、UI 源码 mapper | 相对/真实路径、工作区边界、候选数量、文件/读取预算 | 路径检查不是 OS 沙盒或完整文件事务 |
 | G4 上游启动 | 各 Adapter | 配置禁用、可用性、超时；Repomix Node 直启 JS | 已安装脚本本身的可信性没有因此被证明 |
-| G5 语义身份 | SerenaAdapter / ImpactAnalyzer | 完整身份、重载、歧义、协议错误、完成状态 | fallback、零引用或非空结果不等于安全重构 |
+| G5 语义身份 | LocalTextAdapter / RoslynAdapter / ImpactAnalyzer | 完整身份、重载、歧义、协议错误、完成状态 | fallback、零引用或非空结果不等于安全重构 |
 | G6 UI 准入 | Host / UiAudit | PID-HWND 归属、后台策略、审计容量、搜索预算 | computer-use 其他链路的窗口归属不是本模块证据 |
 | G7 UI 返回 | Host / FlaUiAdapter | 文本/图片/管道预算、协议与 inspectionVersion | 像素有变化不等于画面可用，候选不等于绑定已证实 |
 | G8 最终正文 | ContextResponse / UiResponse | 最终序列化预算、截断、省略与范围信息 | 正文覆盖不等于任务推理充分，估算字符不等于精确 token |
 | G9 生命周期 | OperationContext / ResourceManager / Router | deadline、取消、自有进程关闭、缓存写入排空 | 单一 dispose 返回或资源计数不是全部外部进程的证据 |
 | G10 交付一致性 | 构建清单 / delivery verify | Gateway、完整 Host 发布文件、配置与 Skill 的版本/哈希 | 内容一致性不是数字签名，磁盘新版不等于连接新版 |
-| G11 合并 | GitHub 保护与 CI | Node 22/24 + 三项 CodeQL、PR、管理员约束、禁止 force push/删除 | CI 绿色不证明真实桌面/Serena已验收，也不证明所有安全告警关闭 |
+| G11 合并 | GitHub 保护与 CI | Node 22/24 + 三项 CodeQL、PR、管理员约束、禁止 force push/删除 | CI 绿色不证明真实桌面已验收，也不证明所有安全告警关闭 |
 
 G1–G10 分布在运行时和本地交付工具中；G11 依赖远端仓库配置。人工授权、是否接受重构方案、是否安装真实上游等，仍属于客户端/维护流程的决策，不能把 Skill 的文字说明当成服务器权限系统。
 
@@ -219,14 +219,14 @@ flowchart LR
   Merge --> Disk["主分支构建 / Skill 同步"]
   Disk --> Reconnect["客户端重新建立连接"]
   Reconnect --> Identity["hello：实例 / buildId / schemaHash\n核对实际请求行为"]
-  Build -.-> Desktop["独立验收\n桌面 WPF / TavernDesk / 真实 Serena"]
+  Build -.-> Desktop["独立验收\n桌面 WPF / TavernDesk"]
 ```
 
 `hello` 从 0.12.1 起只读已知状态；主动检查使用 `diagnose_project`。未知值明确保留为 unknown/null，历史健康结果可能陈旧。Gateway 初始化仍会初始化适配器，轻量 hello 不表示整个启动过程没有探测成本。
 
 当前分支保护强制 Node 22/24 回归和 CodeQL 的 JavaScript/TypeScript、C#、Actions 三项检查，对管理员生效；按单维护者政策要求的 GitHub approval 数量为 0。**因此独立审核仍是额外流程，不是仓库规则已保证的事实。**
 
-真实 Serena、交互桌面验收分别是 opt-in 命令，没有被普通 CI 自动覆盖。0.12.5 已有真实 Serena/Roslyn 的七项隔离实测；源码正文其中使用了直接上游 oracle，不应推广成 WinCode 已提供完整方法正文接口。
+真实 Roslyn Host/MCP 验收纳入 Node 22 CI，使用生成项目并核对 BuildHost 与目标子进程清理；桌面验收仍单独显式执行。是否通过以该次报告为准。
 
 ## 8. 当前设计的工程成熟度与明确边界
 
@@ -243,3 +243,9 @@ flowchart LR
 本说明的架构图、数据表与关口表共同描述当前实现；新增功能应说明接入哪条数据流、使用哪个现有契约、在哪个关口拒绝或降级，以及如何留下真实验收证据。
 
 下一轮可靠性工作见[待实施计划](WinCode-下一轮工程化迭代计划书.md)：工作区切换后续步骤失败的一致性、trash 移动后元数据失败的部分完成语义、有界混合负载验收，以及错误契约渐进整理。前两项来自静态调用链审查，仍需故障注入确认；后两项是验证和一致性改进，不能据此断言当前已有泄漏或必须整体重构。
+
+## 2026-09-09 职责拆分
+
+WorkspaceManager 保留可变根、Git 与回收站事务；WorkspaceBrowser 和 ProjectDiscovery 负责只读发现。LocalTextAdapter 委托 LocalTextScanner 与 TextDeclarations；CacheManager 委托 WorkspaceFingerprint（文本缓存提示，不冒充语义快照）。ContextManager 拆出符号收集及格式化方法，ContextResponse 委托纯范围覆盖计算。UIA Host 将 Win32、窗口解析、抓图、树读取及 DTO 分离；FlaUiAdapter 的协议解析与自有进程调度分离。ToolRouter 的工作区锁、排空与恢复状态继续集中，避免把同一事务拆成多个状态源。
+
+验收脚本共享 SDK 选择及进程观察函数；Host 场景分为语义/队列与输入变化模块，Gateway 将真实 MSBuild 生命周期故障独立。两份历史混合大测试按功能拆成 13 个套件，各自拥有缓存目录。

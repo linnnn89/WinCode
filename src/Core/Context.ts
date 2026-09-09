@@ -188,18 +188,18 @@ export class ContextManager {
   private config: WinCodeConfig;
   private workspace: WorkspaceManager;
   private repomix: ContextPacker;
-  private serena: ContextCodeQuery;
+  private queries: ContextCodeQuery;
 
   constructor(
     config: WinCodeConfig,
     workspace: WorkspaceManager,
     repomix: ContextPacker,
-    serena: ContextCodeQuery
+    queries: ContextCodeQuery
   ) {
     this.config = config;
     this.workspace = workspace;
     this.repomix = repomix;
-    this.serena = serena;
+    this.queries = queries;
   }
 
   async prepareContext(options: PreparedContextOptions | string, operation?: OperationContext): Promise<PreparedContextResult> {
@@ -214,51 +214,9 @@ export class ContextManager {
 
     const identity: ProjectIdentity = await this.workspace.identifyProject();
     const keywords = scope || ranges.size ? [] : this.extractKeywords(task);
-    const limitations: string[] = [];
-    const fileIssues: PreparedContextResult['fileIssues'] = [];
-    let queryComplete = true;
-    let truncated = false;
-
-    const keySymbols: CodeSymbol[] = [];
-    const sourceContents = new Map<string, string>();
-    if (opts.symbol && scope) {
-      for (const file of scope) {
-        checkOperation(operation);
-        try {
-          const full = await this.resolveFile(file);
-          const stat = await fs.stat(full);
-          if (!stat.isFile()) { fileIssues.push({ path: file, reason: 'not-file' }); continue; }
-          if (stat.size >= 500_000) { fileIssues.push({ path: file, reason: 'file-too-large' }); continue; }
-          if (!['.cs', '.ts', '.js', '.py'].includes(path.extname(file).toLowerCase())) {
-            fileIssues.push({ path: file, reason: 'unsupported-symbol-language' }); continue;
-          }
-          const source = await fs.readFile(full, { encoding: 'utf8', signal: operation?.signal });
-          sourceContents.set(file, source);
-          const matches = this.serena.findSymbolsInContent(source, file)
-            .filter(symbol => symbol.name === opts.symbol);
-          if (matches.length === 1) keySymbols.push(matches[0]);
-          else fileIssues.push({ path: file, reason: matches.length ? `ambiguous-symbol:${matches.length}` : 'symbol-not-found' });
-        } catch (error) { rethrowOperationError(error, operation); fileIssues.push({ path: file, reason: this.readIssue(error) }); }
-      }
-      if (keySymbols.length > 1 || fileIssues.some(issue => issue.reason.startsWith('ambiguous-symbol'))) {
-        for (const match of keySymbols) fileIssues.push({ path: match.file, reason: 'ambiguous-symbol-across-files' });
-        keySymbols.length = 0;
-      }
-      queryComplete = false;
-      limitations.push('Scoped symbol matching uses local declaration patterns, not semantic analysis; matches may be incomplete. Use lineRanges for exact known locations.');
-    }
-    for (const kw of keywords.slice(0, 4)) {
-      checkOperation(operation);
-      const detailed =
-        typeof this.serena.findSymbolsDetailed === 'function'
-          ? await this.serena.findSymbolsDetailed(kw, undefined, undefined, operation)
-          : { symbols: await this.serena.findSymbols(kw, undefined, operation), source: 'serena-adapter-fallback' as const };
-      if ('limitations' in detailed && Array.isArray(detailed.limitations)) {
-        limitations.push(...detailed.limitations);
-      }
-      if ('queryComplete' in detailed && detailed.queryComplete === false) queryComplete = false;
-      keySymbols.push(...(detailed.symbols || []).slice(0, 5));
-    }
+    const collected = await this.collectSymbolEvidence(opts, scope, keywords, operation);
+    const { limitations, fileIssues, keySymbols, sourceContents } = collected;
+    let { queryComplete, truncated } = collected;
 
     // Keep the best task match per file so reason, declaration and excerpt agree.
     const score = (symbol: CodeSymbol) => keywords.some(word => word.toLowerCase() === symbol.name.toLowerCase()) ? 2 :
@@ -373,6 +331,115 @@ export class ContextManager {
     const uniqueLimitations = Array.from(new Set(limitations));
     const guidance = this.generateGuidance(task, identity, evidence, evidenceInsufficient);
 
+    const { executiveSummary, formattedContent } = this.formatContext({
+      task, identity, budgetTokens, includeFullText, evidence, omittedFiles, evidenceInsufficient,
+      guidance, keySymbols, packedContent, uniqueLimitations,
+    });
+
+    checkOperation(operation);
+    const relatedFiles = Array.from(related.entries()).map(([p, reason]) => ({
+      path: p,
+      included: evidence.some((e) => e.file === p),
+      reason,
+    }));
+
+    return {
+      ...(ranges.size ? { requestedLineRanges: [...ranges].map(([file, range]) => ({ file, startLine: range.startLine, endLine: range.endLine })) } : {}),
+      task,
+      project: {
+        name: identity.name,
+        type: identity.type,
+        solution: identity.primarySolution,
+        projects: identity.projectFiles.length,
+        language: identity.language,
+        targetFramework: identity.targetFramework,
+      },
+      metrics: {
+        packedFiles: includeFullText ? packedFileCount : evidence.length,
+        totalCharacters: formattedContent.length,
+        estimatedTokens: Math.ceil(formattedContent.length / 4),
+        tokenEstimation: 'characters-divided-by-4',
+        measurementScope: 'formatted-content',
+        source: snapshotSource,
+        fromCache,
+        budgetTokens,
+        includeFullText,
+      },
+      guidance,
+      executiveSummary,
+      formattedContent,
+      packedContent: includeFullText ? packedContent : undefined,
+      packedFileSpans,
+      evidence,
+      relatedFiles,
+      omittedFiles,
+      fileIssues,
+      queryComplete,
+      truncated: truncated || fileIssues.some(item => item.reason === 'selection-limit'),
+      evidenceInsufficient,
+      limitations: uniqueLimitations,
+    };
+  }
+
+  /** 收集显式符号或关键词匹配；保持读取失败、取消和扫描完整性信息。 */
+  private async collectSymbolEvidence(opts: PreparedContextOptions,
+    scope: ReturnType<typeof validateContextScope>['scope'], keywords: string[], operation?: OperationContext) {
+    const limitations: string[] = [];
+    const fileIssues: PreparedContextResult['fileIssues'] = [];
+    let queryComplete = true;
+    let truncated = false;
+
+    const keySymbols: CodeSymbol[] = [];
+    const sourceContents = new Map<string, string>();
+    if (opts.symbol && scope) {
+      for (const file of scope) {
+        checkOperation(operation);
+        try {
+          const full = await this.resolveFile(file);
+          const stat = await fs.stat(full);
+          if (!stat.isFile()) { fileIssues.push({ path: file, reason: 'not-file' }); continue; }
+          if (stat.size >= 500_000) { fileIssues.push({ path: file, reason: 'file-too-large' }); continue; }
+          if (!['.cs', '.ts', '.js', '.py'].includes(path.extname(file).toLowerCase())) {
+            fileIssues.push({ path: file, reason: 'unsupported-symbol-language' }); continue;
+          }
+          const source = await fs.readFile(full, { encoding: 'utf8', signal: operation?.signal });
+          sourceContents.set(file, source);
+          const matches = this.queries.findSymbolsInContent(source, file)
+            .filter(symbol => symbol.name === opts.symbol);
+          if (matches.length === 1) keySymbols.push(matches[0]);
+          else fileIssues.push({ path: file, reason: matches.length ? `ambiguous-symbol:${matches.length}` : 'symbol-not-found' });
+        } catch (error) { rethrowOperationError(error, operation); fileIssues.push({ path: file, reason: this.readIssue(error) }); }
+      }
+      if (keySymbols.length > 1 || fileIssues.some(issue => issue.reason.startsWith('ambiguous-symbol'))) {
+        for (const match of keySymbols) fileIssues.push({ path: match.file, reason: 'ambiguous-symbol-across-files' });
+        keySymbols.length = 0;
+      }
+      queryComplete = false;
+      limitations.push('Scoped symbol matching uses local declaration patterns, not semantic analysis; matches may be incomplete. Use lineRanges for exact known locations.');
+    }
+    for (const kw of keywords.slice(0, 4)) {
+      checkOperation(operation);
+      const detailed =
+        typeof this.queries.findSymbolsDetailed === 'function'
+          ? await this.queries.findSymbolsDetailed(kw, undefined, undefined, operation)
+          : { symbols: await this.queries.findSymbols(kw, undefined, operation), source: 'local-text' as const };
+      if ('limitations' in detailed && Array.isArray(detailed.limitations)) {
+        limitations.push(...detailed.limitations);
+      }
+      if ('queryComplete' in detailed && detailed.queryComplete === false) queryComplete = false;
+      keySymbols.push(...(detailed.symbols || []).slice(0, 5));
+    }
+    return { limitations, fileIssues, queryComplete, truncated, keySymbols, sourceContents };
+  }
+
+  /** 仅呈现已经选定的证据；不再次查询或改变文件选择和预算。 */
+  private formatContext(input: {
+    task: string; identity: ProjectIdentity; budgetTokens: number; includeFullText: boolean;
+    evidence: ContextEvidence[]; omittedFiles: string[]; evidenceInsufficient: boolean;
+    guidance: string[]; keySymbols: CodeSymbol[]; packedContent: string; uniqueLimitations: string[];
+  }) {
+    const { task, identity, budgetTokens, includeFullText, evidence, omittedFiles, evidenceInsufficient,
+      guidance, keySymbols, packedContent, uniqueLimitations } = input;
     const executiveSummary = [
       `# AI Agent Context Snapshot`,
       `**Target Task**: "${task}"`,
@@ -435,50 +502,7 @@ export class ContextManager {
         formattedContent += `- ${item}\n`;
       }
     }
-
-    checkOperation(operation);
-    const relatedFiles = Array.from(related.entries()).map(([p, reason]) => ({
-      path: p,
-      included: evidence.some((e) => e.file === p),
-      reason,
-    }));
-
-    return {
-      ...(ranges.size ? { requestedLineRanges: [...ranges].map(([file, range]) => ({ file, startLine: range.startLine, endLine: range.endLine })) } : {}),
-      task,
-      project: {
-        name: identity.name,
-        type: identity.type,
-        solution: identity.primarySolution,
-        projects: identity.projectFiles.length,
-        language: identity.language,
-        targetFramework: identity.targetFramework,
-      },
-      metrics: {
-        packedFiles: includeFullText ? packedFileCount : evidence.length,
-        totalCharacters: formattedContent.length,
-        estimatedTokens: Math.ceil(formattedContent.length / 4),
-        tokenEstimation: 'characters-divided-by-4',
-        measurementScope: 'formatted-content',
-        source: snapshotSource,
-        fromCache,
-        budgetTokens,
-        includeFullText,
-      },
-      guidance,
-      executiveSummary,
-      formattedContent,
-      packedContent: includeFullText ? packedContent : undefined,
-      packedFileSpans,
-      evidence,
-      relatedFiles,
-      omittedFiles,
-      fileIssues,
-      queryComplete,
-      truncated: truncated || fileIssues.some(item => item.reason === 'selection-limit'),
-      evidenceInsufficient,
-      limitations: uniqueLimitations,
-    };
+    return { executiveSummary, formattedContent };
   }
 
   private async addFocusAreaFiles(

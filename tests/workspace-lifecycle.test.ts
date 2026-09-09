@@ -30,7 +30,7 @@ it('ten sequential and ten concurrent workspace lifecycles close native watchers
       const other = path.join(workspace, 'other');
       await fs.mkdir(other, { recursive: true });
       const config = getDefaultConfig(workspace);
-      config.adapters.serena.enabled = false;
+
       config.adapters.flaui.enabled = false;
       config.adapters.repomix.useCli = false;
       const router = new ToolRouter(config);

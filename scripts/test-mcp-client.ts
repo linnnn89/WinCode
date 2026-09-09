@@ -25,7 +25,7 @@ import { getDefaultConfig } from ${distUrl('Core/Config.js')};
 import { ToolRouter } from ${distUrl('Core/ToolRouter.js')};
 import { WinCodeMcpServer } from ${distUrl('Gateway/McpServer.js')};
 const config = getDefaultConfig(${JSON.stringify(root)});
-config.adapters.serena.enabled = false;
+
 config.adapters.flaui.enabled = false;
 config.adapters.repomix.useCli = false;
 const server = new WinCodeMcpServer(new ToolRouter(config));

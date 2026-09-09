@@ -22,7 +22,7 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.12.5**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.13.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
 
 ### Quick start
 
@@ -117,7 +117,7 @@ Optionally add `candidateCodeFiles: ["ViewModels/MainWindowViewModel.cs"]` (1–
 
 ### Tool reference
 
-Serena results retain full `namePath`, including containers and overload indices. Pass it as `symbolName` together with its defining `relativePath`. Simple names require complete unique semantic resolution; ambiguity returns at most 20 candidates plus the count. Malformed/shortened responses are incomplete; valid empty results stay empty. Coordinates are one-based; `lineKind: "containing-symbol"` marks a containing declaration, not an exact call site. Controlled upstream tests do not establish actual language-server availability.
+The default provider is `local-text`, with an explicit semantic-unconfigured status. Configure direct Roslyn to obtain compiler-backed identities. Pass a returned `location` unchanged as `symbolLocation` to references, impact, or refactoring, and use the returned plain symbol name. Old Serena namePath identities and external startup settings are retired; stale snapshots require a new explicit search.
 
 `wincode_hello_world` reports a frozen running instance ID and build fingerprint, plus a hash of the tool definitions actually registered by that instance. Pass `toolName: "wincode_prepare_context"` to inspect just that tool's input schema. Compare it with `tools/list` on the same connection. `npm run build` emits a manifest; direct `tsc`, missing/mismatched artifacts or source development mode can report `unknown`. The build fingerprint checks local output consistency, not release authenticity. Workspace changes do not change the running build.
 
@@ -154,7 +154,7 @@ See the [architecture, data-flow and verification-gate guide](WinCode-架构与�
 
 ```text
 Coding agent ── stdio MCP ── WinCode
-                              ├─ Code adapters: Serena / Repomix / Built-in text fallbacks
+                              ├─ Code adapters: Direct Roslyn / Repomix / Local text
                               ├─ Workspace analysis, context, and impact tools
                               └─ FlaUiAdapter ── stdin/stdout JSON ── .NET UIA helper
                                                                        └─ Window tree + screenshot
@@ -180,7 +180,7 @@ Coding agent ── stdio MCP ── WinCode
 - **Background capture:** `backgroundOnly: true` requires both PID and HWND. It uses `PrintWindow` without focus shifts or screen fallbacks. Minimized windows are rejected. `captureQuality` samples up to 1024 raw pixels before annotation: `suspect-low-variation` means the sampled RGB channel ranges are at most 3 and may reflect either blank output or a legitimate uniform/low-contrast view. `unknown` never certifies visual usability. Hints retain both image and UIA evidence and do not change the capture policy. Older helpers without this field leave quality unverified.
 - **UI coverage:** Inspection depends on the application's underlying UIA provider. Verified against WPF; WinUI, WinForms, and custom-rendered controls may expose differing levels of UIA detail.
 - **Source evidence:** Matches literal attribute declarations in supplied `.xaml` files (`runtimeSourceVerified: false`). Dynamic bindings, runtime templates, and resource dictionaries are not evaluated.
-- **Project analysis:** Extracted directly from project file XML without invoking MSBuild evaluations. Serena and Repomix are optional upstreams; local fallbacks explicitly label reduced semantic coverage.
+- **Project analysis:** Extracted directly from project file XML without invoking MSBuild evaluations. Direct Roslyn requires explicit project-evaluation authorization; Repomix is optional. Local text results explicitly label reduced semantic coverage.
 - **Visual indicator:** A non-activating, semi-transparent `REC / WinCoding` overlay is painted in the top-right corner of the primary display during UI inspection to ensure complete visibility.
 - **Local audit:** Lightweight start/end records are flushed to `%LOCALAPPDATA%/WinCode/logs/ui-audit` (1 MiB triggers cleanup reminders; 2 MiB blocks new access with reserved end-record space). The [audit checker script](scripts/check-ui-audit.ps1) enables manual inspections.
 
@@ -204,7 +204,7 @@ The default `compact` response contains one JSON text block; `responseFormat: "l
 
 ### Development and validation
 
-The [CI workflow](.github/workflows/ci.yml) runs `npm run check` on pull requests and main pushes using Windows, Node.js 22/24 and .NET SDK 10.0.303. It performs locked builds, core regression, production stdio and delivery verification, and uploads bounded reports even on failure. Interactive desktop/UI and real Serena acceptance remain separate. Check the actual run result. Main protection was verified on 2026-09-08 with required Node 22/24 and three CodeQL checks; approvals are zero under the single-maintainer policy. See [CONTRIBUTING](CONTRIBUTING.md) for enforcement and evidence boundaries.
+The [CI workflow](.github/workflows/ci.yml) runs `npm run check` on pull requests and main pushes using Windows, Node.js 22/24 and .NET SDK 10.0.303. It performs locked builds, core regression, production stdio and delivery verification, and uploads bounded reports even on failure. Node 22 also runs real Roslyn Host and MCP acceptance on generated projects. Interactive desktop/UI acceptance remains separate. Check the actual run result. Main protection was verified on 2026-09-08 with required Node 22/24 and three CodeQL checks; approvals are zero under the single-maintainer policy. See [CONTRIBUTING](CONTRIBUTING.md) for enforcement and evidence boundaries.
 
 ```powershell
 npm ci
@@ -218,7 +218,7 @@ npm run benchmark:agent -- 1  # Opt-in pilot; -- 3 for three repetitions
 
 Live UI suites require an interactive Windows desktop session. In a 222-node test fixture, targeted queries reduced response text from 62 KB to ~1.6 KB while completing in ~0.78 seconds. Detailed test records are maintained in the [work log](docs/codex_worklog.md).
 
-`npm run test:product -- <TavernDesk repository> <dedicated-test PID> <HWND>` explicitly runs six navigation-to-source tasks against an already running fixed test profile. It discovers source files, checks the live control and verifies literal command/method candidates, recording native and MCP calls, response characters and repeated source lines under `test-tmp/product-tasks`. It neither launches the application nor changes its data or source. This scripted acceptance does not establish runtime bindings, full-method coverage, native-only speedup or real Serena integration; see the acceptance matrix in the work log.
+`npm run test:product -- <TavernDesk repository> <dedicated-test PID> <HWND>` explicitly runs six navigation-to-source tasks against an already running fixed test profile. It discovers source files, checks the live control and verifies literal command/method candidates, recording native and MCP calls, response characters and repeated source lines under `test-tmp/product-tasks`. It neither launches the application nor changes its data or source. This scripted acceptance does not establish runtime bindings, full-method coverage, native-only speedup or semantic completeness; see the acceptance matrix in the work log.
 
 The agent benchmark covers ten scripted scenarios, including existing `dotnet-mini` C# fixtures and four levels of initial location knowledge. It validates returned files, ranges, bodies and status against current fixture contents. Tool/transport/response/cleanup failures remain in the JSON report under `test-tmp/agent-efficiency`; failed cases produce a nonzero exit code. Unchanged-evidence reuse is tested only under trusted, controlled fixture writes; edits require a new request. Reports measure MCP calls, output characters, repeated displayed lines and call time using local fallback with upstreams and GUI disabled. They do not establish real-agent completion rates, model-token savings or production cache benefits. Schema v2 results should not be compared directly with the earlier six-scenario report.
 
@@ -232,7 +232,7 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.12.5**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.13.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 ### 快速上手
 
@@ -327,7 +327,7 @@ npm run delivery:verify
 
 ### 工具一览
 
-Serena 结果保留完整 `namePath`（容器及重载索引）；将其作为 `symbolName` 并附定义文件 `relativePath` 续查引用。简单名称只有完整、唯一语义定位才继续；歧义最多返回 20 个候选及总数。损坏/缩略响应不完整，合法空结果保持为空。坐标统一一基；`lineKind:"containing-symbol"` 表示所在声明起点，不是精确调用行。受控上游测试不替代真实语言服务器验收。
+默认以 `local-text` 启动，并明确报告语义能力未配置。显式配置直接 Roslyn 后，将搜索返回的完整 `location` 作为 `symbolLocation` 传给引用、影响分析或重构工具，名称使用原结果的简单名称。外部 Serena 启动配置及 namePath 身份已退役；过期快照须重新显式搜索。
 
 `wincode_hello_world` 返回启动时固定的实例 ID、构建指纹及当前注册工具定义的 hash。传 `toolName: "wincode_prepare_context"` 可按需查看单个工具参数，与同一连接的 `tools/list` 对照。`npm run build` 生成 manifest；直接运行 `tsc`、产物缺失/失配或源码开发模式会明确报告 `unknown`。构建指纹校验本地产物一致性，不证明发布来源可信；切换分析工作区不会改变运行构建。
 
@@ -362,7 +362,7 @@ Serena 结果保留完整 `namePath`（容器及重载索引）；将其作为 `
 
 ```text
 Coding Agent ── stdio MCP ── WinCode
-                               ├─ 代码适配器：Serena / Repomix / 内置文本降级引擎
+                               ├─ 代码适配器：直接 Roslyn / Repomix / 本地文本
                                ├─ 工作区分析、上下文提取与影响面分析工具
                                └─ FlaUiAdapter ── stdin/stdout JSON ── .NET UIA Helper
                                                                         └─ 控件树遍历 + 截图渲染
@@ -388,7 +388,7 @@ Coding Agent ── stdio MCP ── WinCode
 - **后台截图适用性：**`backgroundOnly: true` 仅支持非最小化窗口且需同时指定 PID 与 HWND。`captureQuality` 在标注前最多采样 1024 个原始像素；suspect-low-variation 表示采样 RGB 各通道范围不超过 3，可能为空图或正常纯色/低对比界面。unknown 也不能证明图片可用。提示保留图像和 UIA，不自动改变截图策略；旧 Host 缺少该字段时按未验证处理。
 - **UI 自动化覆盖度：**取证效果取决于目标应用本身的 UIA Provider 完备性。项目针对 WPF 提供了隔离测试夹具；对于 WinUI、WinForms 或自绘渲染程序，UIA 支持度视其实现而定。
 - **源码证据边界：**仅匹配指定 `.xaml` 文件内的字面量属性声明（`runtimeSourceVerified: false`），不求值动态 Binding、模板或全局资源字典。
-- **项目分析边界：**直接解析 `.sln` 与 `.csproj` 文件结构，不执行 MSBuild 动态属性计算。Serena 与 Repomix 均为可选上游，降级运行时会在结果中明确声明。
+- **项目分析边界：**直接解析 `.sln` 与 `.csproj` 文件结构，不执行 MSBuild 动态属性计算。直接 Roslyn 需要显式项目求值授权；Repomix 为可选上游。本地文本结果明确声明语义范围不足。
 - **视觉指示器：**在 UI 取证期间，主屏幕右上角会强制浮现半透明置顶标志（`REC / WinCoding`），保障操作对用户完全透明可见。
 - **本地审计记录：**仅记录时间、PID、耗时等结构化元数据至 `%LOCALAPPDATA%/WinCode/logs/ui-audit`。达到 1 MiB 提示清理，达到 2 MiB 拦截新访问以预留结束记录空间。日志不自动删除，支持通过 [检测脚本](scripts/check-ui-audit.ps1) 手动审查。
 
@@ -412,7 +412,7 @@ Coding Agent ── stdio MCP ── WinCode
 
 ### 本地开发与测试验证
 
-[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 22/24 与 .NET SDK 10.0.303 执行 `npm run check`，覆盖锁定构建、核心回归、生产 stdio 和交付校验，失败时也上传有界报告。交互桌面/UI 和真实 Serena 验收仍单独执行。通过与否以实际运行结果为准。2026-09-08 已核对 main 保护要求 Node 22/24 和三项 CodeQL 检查；单维护者策略要求 approval=0，不代表已获独立审核。详见 [贡献指南](CONTRIBUTING.md)。
+[CI 工作流](.github/workflows/ci.yml) 在 PR 和 main 推送时使用 Windows、Node.js 22/24 与 .NET SDK 10.0.303 执行 `npm run check`，覆盖锁定构建、核心回归、生产 stdio 和交付校验，失败时也上传有界报告。Node 22 另运行生成项目的真实 Roslyn Host 与 MCP 验收；交互桌面/UI 验收仍单独执行。通过与否以实际运行结果为准。2026-09-08 已核对 main 保护要求 Node 22/24 和三项 CodeQL 检查；单维护者策略要求 approval=0，不代表已获独立审核。详见 [贡献指南](CONTRIBUTING.md)。
 
 ```powershell
 npm ci
@@ -426,7 +426,7 @@ npm run benchmark:agent -- 1  # 显式小样本；三轮对照使用 -- 3
 
 实机 UI 测试需要交互式 Windows 桌面会话。实测在包含 222 个节点的测试夹具中，定向查询将返回文本由 62 KB 降至约 1.6 KB，单次耗时稳定在 0.78 秒左右。详尽的测试记录参见 [工作日志](docs/codex_worklog.md)。
 
-`npm run test:product -- <TavernDesk仓库> <专用测试PID> <HWND>` 显式运行六项导航到源码任务，要求固定测试 profile 已启动。它发现候选文件、核对实际控件及命令/方法文字候选，将原生和 MCP 调用、返回字符、重复源码行写入 `test-tmp/product-tasks`；不启动应用、不修改数据或源码。此脚本验收不证明运行时绑定、完整方法覆盖、相对纯原生工具提速或真实 Serena 集成；详见工作日志验收矩阵。
+`npm run test:product -- <TavernDesk仓库> <专用测试PID> <HWND>` 显式运行六项导航到源码任务，要求固定测试 profile 已启动。它发现候选文件、核对实际控件及命令/方法文字候选，将原生和 MCP 调用、返回字符、重复源码行写入 `test-tmp/product-tasks`；不启动应用、不修改数据或源码。此脚本验收不证明运行时绑定、完整方法覆盖、相对纯原生工具提速或语义完整性；详见工作日志验收矩阵。
 
 Agent 基准包含 10 类脚本场景，复用现有 `dotnet-mini` C# 夹具，并按四种初始位置信息分层。返回的文件、行号、正文及状态均与当前夹具核对；工具错误、传输异常、响应损坏和清理失败会保留在 `test-tmp/agent-efficiency` 下的 JSON 报告中，失败返回非零退出码。无变化复用只在夹具写入受控、变化事件可信的条件下测试，修改后必须重新请求。测量使用本地回退，关闭上游与 GUI，记录 MCP 调用、返回字符、重复显示行和调用耗时，不代表真实 Agent 完成率、模型 Token 节省或生产缓存收益。Schema v2 场景与旧版六场景报告不同，不能直接比较两版总量。
 

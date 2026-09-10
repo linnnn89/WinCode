@@ -506,18 +506,7 @@ export class RepomixAdapter implements IAdapter {
     const bytes = this.cache.estimateBytes(result.content);
     if (bytes <= limit) return result;
 
-    const overflowDir = path.join(this.config.cacheDir, 'overflow');
-    await fs.mkdir(overflowDir, { recursive: true });
-    const uniqueId = crypto.randomUUID().slice(0, 8);
-    const overflowPath = path.join(overflowDir, `pack_${Date.now()}_${uniqueId}.txt`);
-    const tmpPath = `${overflowPath}.tmp.${uniqueId}`;
-    try {
-      await fs.writeFile(tmpPath, result.content, 'utf-8');
-      await fs.rename(tmpPath, overflowPath);
-    } catch (err) {
-      await fs.unlink(tmpPath).catch(() => {});
-      throw err;
-    }
+    const overflowPath = await this.cache.writeOverflow(result.content);
     const previewChars = Math.min(result.content.length, 2_000);
     return {
       ...result,

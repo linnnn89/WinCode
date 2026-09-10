@@ -2,6 +2,11 @@
 
 ## 0.14.0 (unreleased)
 
+- Resolve Git from launch-time installation paths outside the workspace and use absolute argv-based execution. Disable executable fsmonitor configuration, require Git 2.36+, recognize linked worktrees and report unknown status when Git fails.
+- Reject linked cache/trash paths and recheck mutation boundaries. Manage only versioned WinCode JSON entries and reserved overflow filenames; preserve legacy/unrecognized files instead of pruning arbitrary JSON or text. Keep partial trash outcomes when metadata writing fails after a move.
+- Route architecture discovery through bounded workspace readers, reject outside project descriptors, bound graph parsing and directory enumeration, and propagate cancellation through actual reads. Architecture depth is now an integer from 1 to 5; reports expose incomplete scans and a 32768-character serialized output cap.
+- Remove overlapping whitespace matching in local C# declarations and reject normalized declaration lines above 16384 characters as incomplete. Add isolated regression coverage for the previously blocking input and a real MCP heartbeat.
+
 - Validate parent/child creation times in acceptance process-tree snapshots, rejecting stale parent-PID edges after Windows PID reuse. Keep strict exit checks for the real observed Code Host descendants.
 
 - Synchronize bilingual setup/cache guidance, architecture/data flow, managed Skill manuals, native Host guidance and remaining roadmap with the verified 0.14.0 behavior. Separate healthy confirmation from recovery and current implementation from planned project binding/admission limits.

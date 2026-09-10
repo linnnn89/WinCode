@@ -4,8 +4,15 @@ import crypto from 'node:crypto';
 import { getDefaultCacheLimits, WinCodeCacheLimits } from './Config.js';
 
 import { WorkspaceFingerprint } from './WorkspaceFingerprint.js';
+import { assertLinkFreePath } from './FileSystemBoundary.js';
+
+const CACHE_FILE = /^wincode-v1_[A-Za-z0-9_-]{0,32}_[a-f0-9]{16}\.json$/;
+const CACHE_TEMP = /^wincode-v1_[A-Za-z0-9_-]{0,32}_[a-f0-9]{16}\.json\.tmp\.\d+\.[a-f0-9]{8}$/;
+const OVERFLOW_FILE = /^pack_\d+_[a-f0-9]{8}\.txt(?:\.tmp\.[a-f0-9]{8})?$/;
+const CACHE_HEADER = '{"format":"wincode-cache-v1",';
 
 export interface CacheEntry<T> {
+  format?: 'wincode-cache-v1';
   timestamp: number;
   ttlMs?: number;
   fingerprint?: string;
@@ -39,6 +46,7 @@ export class CacheManager {
   private memoryBytes = 0;
   private namespace = '';
   private writeChain: Promise<void> = Promise.resolve();
+  private diskIdentity: string | null = null;
 
   constructor(
     cacheDir: string,
@@ -46,7 +54,7 @@ export class CacheManager {
     maxDiskEntries = 500,
     limits?: Partial<WinCodeCacheLimits>
   ) {
-    this.cacheDir = cacheDir;
+    this.cacheDir = path.resolve(cacheDir);
     const defaults = getDefaultCacheLimits();
     this.maxMemoryEntries = limits?.maxMemoryEntries ?? maxMemoryEntries;
     this.maxDiskEntries = limits?.maxDiskEntries ?? maxDiskEntries;
@@ -90,12 +98,63 @@ export class CacheManager {
   }
 
   async initialize(): Promise<void> {
-    try {
-      await fs.mkdir(this.cacheDir, { recursive: true });
-      await this.pruneDiskCache();
-    } catch {
-      // Ignore if directory already exists
+    await this.assertDiskBoundary('', true);
+    await this.pruneDiskCache();
+  }
+
+  private async assertDiskBoundary(child = '', create = false): Promise<void> {
+    await assertLinkFreePath(this.cacheDir);
+    if (create) await fs.mkdir(this.cacheDir, { recursive: true });
+    await assertLinkFreePath(this.cacheDir);
+    const stat = await fs.lstat(this.cacheDir, { bigint: true });
+    if (!stat.isDirectory()) throw new Error('Cache root is not a directory.');
+    const identity = `${stat.dev}:${stat.ino}`;
+    if (this.diskIdentity !== null && this.diskIdentity !== identity) throw new Error('Cache root identity changed; reopen the workspace.');
+    this.diskIdentity = identity;
+    if (child) {
+      const target = path.join(this.cacheDir, child);
+      await assertLinkFreePath(target);
+      if (create) await fs.mkdir(target, { recursive: true });
+      await assertLinkFreePath(target);
     }
+  }
+
+  private async unlinkOwned(file: string): Promise<void> {
+    const parent = path.dirname(file);
+    const overflow = parent === path.join(this.cacheDir, 'overflow');
+    if (parent !== this.cacheDir && !overflow) return;
+    if (!(overflow ? OVERFLOW_FILE.test(path.basename(file)) : CACHE_FILE.test(path.basename(file)) || CACHE_TEMP.test(path.basename(file)))) return;
+    await this.assertDiskBoundary(overflow ? 'overflow' : '');
+    const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
+    if (stat?.isFile() && !stat.isSymbolicLink() && (overflow || await this.hasCacheHeader(file))) await fs.unlink(file);
+  }
+
+  private async hasCacheHeader(file: string): Promise<boolean> {
+    const handle = await fs.open(file, 'r');
+    try {
+      const header = Buffer.alloc(CACHE_HEADER.length);
+      const { bytesRead } = await handle.read(header, 0, header.length, 0);
+      return bytesRead === header.length && header.toString('utf8') === CACHE_HEADER;
+    } finally { await handle.close(); }
+  }
+
+  private async assertReplaceable(file: string): Promise<void> {
+    await assertLinkFreePath(file);
+    const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
+    if (stat && (!stat.isFile() || !await this.hasCacheHeader(file))) throw new Error('Cache destination contains an unowned file.');
+  }
+
+  async writeOverflow(content: string): Promise<string> {
+    await this.assertDiskBoundary('overflow', true);
+    const unique = crypto.randomUUID().slice(0, 8);
+    const target = path.join(this.cacheDir, 'overflow', `pack_${Date.now()}_${unique}.txt`);
+    const temp = `${target}.tmp.${unique}`;
+    try {
+      await fs.writeFile(temp, content, { encoding: 'utf8', flag: 'wx' });
+      await this.assertDiskBoundary('overflow');
+      await fs.rename(temp, target);
+      return target;
+    } catch (error) { await this.unlinkOwned(temp).catch(() => {}); throw error; }
   }
 
   /**
@@ -103,10 +162,13 @@ export class CacheManager {
    * Memory is always dropped; the previous disk tree is left for the OS/prune.
    */
   async rebind(newCacheDir: string): Promise<void> {
+    await assertLinkFreePath(newCacheDir);
+    await this.flush();
     this.memoryCache.clear();
     this.memoryBytes = 0;
     this.workspaceFingerprint.reset();
-    this.cacheDir = newCacheDir;
+    this.cacheDir = path.resolve(newCacheDir);
+    this.diskIdentity = null;
     await this.initialize();
   }
 
@@ -118,7 +180,7 @@ export class CacheManager {
     const namespaced = this.namespacedKey(key);
     const hash = crypto.createHash('sha256').update(namespaced).digest('hex').substring(0, 16);
     const safeKey = namespaced.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 32);
-    return path.join(this.cacheDir, `${safeKey}_${hash}.json`);
+    return path.join(this.cacheDir, `wincode-v1_${safeKey}_${hash}.json`);
   }
 
   estimateBytes(data: unknown): number {
@@ -153,7 +215,12 @@ export class CacheManager {
     if (typeof file !== 'string') return false;
     const relative = path.relative(path.join(this.cacheDir, 'overflow'), file);
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
-    return fs.stat(file).then(stat => stat.isFile(), () => false);
+    if (!OVERFLOW_FILE.test(path.basename(file))) return false;
+    try {
+      await this.assertDiskBoundary('overflow');
+      const stat = await fs.lstat(file);
+      return stat.isFile() && !stat.isSymbolicLink();
+    } catch { return false; }
   }
 
   /**
@@ -181,17 +248,20 @@ export class CacheManager {
 
     const filePath = this.getCacheFilePath(key);
     try {
-      const stat = await fs.stat(filePath);
+      await this.assertDiskBoundary();
+      const stat = await fs.lstat(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) return null;
       if (stat.size > this.maxEntryBytes) {
-        await fs.unlink(filePath).catch(() => {});
+        await this.unlinkOwned(filePath);
         return null;
       }
 
       const content = await fs.readFile(filePath, 'utf-8');
       const entry: CacheEntry<T> = JSON.parse(content);
+      if (entry.format !== 'wincode-cache-v1' || !Number.isFinite(entry.timestamp) || !Object.hasOwn(entry, 'data')) return null;
 
       if (entry.ttlMs && now - entry.timestamp > entry.ttlMs) {
-        await fs.unlink(filePath).catch(() => {});
+        await this.unlinkOwned(filePath);
         const p = (entry.data as any)?.overflowPath;
         if (typeof p === 'string') {
           await this.removeOverflow(p);
@@ -223,6 +293,7 @@ export class CacheManager {
   async set<T>(key: string, data: T, options?: { ttlMs?: number; fingerprint?: string }): Promise<void> {
     const byteSize = this.estimateBytes(data);
     const entry: CacheEntry<T> = {
+      format: 'wincode-cache-v1',
       timestamp: Date.now(),
       ttlMs: options?.ttlMs,
       fingerprint: options?.fingerprint,
@@ -239,7 +310,7 @@ export class CacheManager {
       // A rejected replacement must invalidate the old value, not silently resurrect it.
       this.deleteMemory(memKey);
       const stalePath = this.getCacheFilePath(key);
-      await this.enqueueWrite(() => fs.unlink(stalePath).catch(() => {}));
+      await this.enqueueWrite(() => this.unlinkOwned(stalePath).catch(() => {}));
       return;
     }
 
@@ -248,8 +319,11 @@ export class CacheManager {
       const filePath = targetFilePath;
       const tmpPath = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
       try {
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(tmpPath, JSON.stringify(entry), 'utf-8');
+        await this.assertDiskBoundary('', true);
+        await this.assertReplaceable(filePath);
+        await fs.writeFile(tmpPath, JSON.stringify(entry), { encoding: 'utf8', flag: 'wx' });
+        await this.assertDiskBoundary();
+        await this.assertReplaceable(filePath);
         await fs.rename(tmpPath, filePath);
         this.writeCount++;
         if (this.writeCount % 20 === 0) {
@@ -257,7 +331,7 @@ export class CacheManager {
           this.pruneExpiredMemory();
         }
       } catch (err) {
-        await fs.unlink(tmpPath).catch(() => {});
+        await this.unlinkOwned(tmpPath).catch(() => {});
         console.warn(`[CacheManager] Failed to write cache to ${filePath}:`, err);
       }
     });
@@ -327,7 +401,7 @@ export class CacheManager {
   private async removeOverflow(file: string): Promise<void> {
     const target = path.resolve(file);
     const overflowDir = path.resolve(this.cacheDir, 'overflow');
-    if (path.dirname(target) !== overflowDir) return;
+    if (path.dirname(target) !== overflowDir || !OVERFLOW_FILE.test(path.basename(target))) return;
 
     // Invalidate readers before deleting their backing snapshot.
     for (const [key, entry] of this.memoryCache) {
@@ -335,6 +409,7 @@ export class CacheManager {
       if (typeof ref === 'string' && path.resolve(ref) === target) this.deleteMemory(key);
     }
     try {
+      await this.assertDiskBoundary('overflow');
       const dirStat = await fs.lstat(overflowDir);
       if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return;
       const realCache = await fs.realpath(this.cacheDir);
@@ -342,7 +417,7 @@ export class CacheManager {
       if (path.relative(realCache, realOverflow) !== 'overflow') return;
       const stat = await fs.lstat(target);
       if (!stat.isFile() || stat.isSymbolicLink()) return;
-      await fs.unlink(target);
+      await this.unlinkOwned(target);
     } catch {
       // Missing or inaccessible snapshots are safe to leave for a later prune.
     }
@@ -354,18 +429,19 @@ export class CacheManager {
   }
 
   private async pruneDiskCacheOnce(options?: { orphanGraceMs?: number }): Promise<void> {
+    await this.assertDiskBoundary();
     try {
       const files = await fs.readdir(this.cacheDir);
-      const jsonFiles = files.filter((f) => f.endsWith('.json'));
+      const jsonFiles = files.filter((f) => CACHE_FILE.test(f));
       const now = Date.now();
 
       // 1. Clean up orphaned .tmp files older than 30s
-      const tmpFiles = files.filter((f) => f.includes('.tmp.'));
+      const tmpFiles = files.filter((f) => CACHE_TEMP.test(f));
       for (const tf of tmpFiles) {
         try {
           const s = await fs.stat(path.join(this.cacheDir, tf));
           if (now - s.mtimeMs > 30_000) {
-            await fs.unlink(path.join(this.cacheDir, tf)).catch(() => {});
+            await this.unlinkOwned(path.join(this.cacheDir, tf));
           }
         } catch {}
       }
@@ -385,14 +461,17 @@ export class CacheManager {
       for (const f of jsonFiles) {
         const jsonPath = path.join(this.cacheDir, f);
         try {
-          const stat = await fs.stat(jsonPath);
+          await this.assertDiskBoundary();
+          const stat = await fs.lstat(jsonPath);
+          if (!stat.isFile() || stat.isSymbolicLink()) continue;
           // Reject oversized JSON before parsing; overflow orphans are reconciled below.
           if (stat.size > this.maxEntryBytes) {
-            await fs.unlink(jsonPath).catch(() => {});
+            await this.unlinkOwned(jsonPath);
             continue;
           }
           const content = await fs.readFile(jsonPath, 'utf-8');
           const entry: CacheEntry<any> = JSON.parse(content);
+          if (entry.format !== 'wincode-cache-v1' || !Number.isFinite(entry.timestamp) || !Object.hasOwn(entry, 'data')) continue;
 
           const overflowPath =
             typeof entry?.data?.overflowPath === 'string'
@@ -401,7 +480,7 @@ export class CacheManager {
 
           // Check TTL expiration
           if (entry.ttlMs && now - entry.timestamp > entry.ttlMs) {
-            await fs.unlink(jsonPath).catch(() => {});
+            await this.unlinkOwned(jsonPath);
             if (overflowPath) {
               await this.removeOverflow(overflowPath);
             }
@@ -410,7 +489,7 @@ export class CacheManager {
 
           // Account for overflow file size in entry disk footprint
           let overflowSize = 0;
-          if (overflowPath) {
+          if (overflowPath && await this.backingFileExists(entry.data)) {
             try {
               const os = await fs.stat(overflowPath);
               overflowSize = os.size;
@@ -428,8 +507,7 @@ export class CacheManager {
             totalBytes: stat.size + overflowSize,
           });
         } catch {
-          // Corrupted or unreadable JSON file
-          await fs.unlink(jsonPath).catch(() => {});
+          // Unreadable or unrecognizable files have no proven ownership; preserve them.
         }
       }
 
@@ -444,7 +522,7 @@ export class CacheManager {
         (validEntries.length - survivingIndex > this.maxDiskEntries || totalDiskBytes > this.maxDiskBytes)
       ) {
         const victim = validEntries[survivingIndex];
-        await fs.unlink(victim.jsonPath).catch(() => {});
+        await this.unlinkOwned(victim.jsonPath);
         if (victim.overflowPath) {
           await this.removeOverflow(victim.overflowPath);
         }
@@ -476,8 +554,10 @@ export class CacheManager {
       const overflowDir = path.join(this.cacheDir, 'overflow');
       const orphanGraceMs = options?.orphanGraceMs ?? 120_000; // 2 minutes grace period
       try {
+        await this.assertDiskBoundary('overflow');
         const overflowFiles = await fs.readdir(overflowDir);
         for (const of of overflowFiles) {
+          if (!OVERFLOW_FILE.test(of)) continue;
           const fullPath = path.resolve(overflowDir, of);
           if (of.includes('.tmp.')) {
             const s = await fs.stat(fullPath).catch(() => null);
@@ -507,9 +587,10 @@ export class CacheManager {
     let diskEntries = 0;
     let estimatedDiskBytes = 0;
     try {
+      await this.assertDiskBoundary();
       const files = await fs.readdir(this.cacheDir);
       for (const f of files) {
-        if (!f.endsWith('.json')) continue;
+        if (!CACHE_FILE.test(f)) continue;
         diskEntries++;
         try {
           const s = await fs.stat(path.join(this.cacheDir, f));
@@ -519,8 +600,10 @@ export class CacheManager {
         }
       }
       const overflowDir = path.join(this.cacheDir, 'overflow');
+      await this.assertDiskBoundary('overflow');
       const overflowFiles = await fs.readdir(overflowDir).catch(() => []);
       for (const of of overflowFiles) {
+        if (!OVERFLOW_FILE.test(of)) continue;
         diskEntries++;
         try {
           const s = await fs.stat(path.join(overflowDir, of));
@@ -554,14 +637,16 @@ export class CacheManager {
   }
 
   private async clearDisk(): Promise<void> {
+    await this.assertDiskBoundary();
     try {
       const files = await fs.readdir(this.cacheDir);
       for (const file of files) {
-        if (file.endsWith('.json') || file.includes('.tmp.')) {
-          await fs.unlink(path.join(this.cacheDir, file)).catch(() => {});
+        if (CACHE_FILE.test(file) || CACHE_TEMP.test(file)) {
+          await this.unlinkOwned(path.join(this.cacheDir, file));
         }
       }
       const overflowDir = path.join(this.cacheDir, 'overflow');
+      await this.assertDiskBoundary('overflow');
       const overflowFiles = await fs.readdir(overflowDir).catch(() => []);
       for (const of of overflowFiles) {
         await this.removeOverflow(path.join(overflowDir, of));

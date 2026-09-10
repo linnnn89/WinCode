@@ -57,9 +57,9 @@ const examples: Record<string, Record<string, unknown>> = {
 const expectedCalls: Record<string, { method: string; args: unknown[] }> = {
   workspace_open: { method: 'openWorkspace', args: ['example', { includeTree: undefined, maxOutputChars: undefined }, '<signal>'] },
   wincode_workspace_open: { method: 'openWorkspace', args: ['example', { includeTree: undefined, maxOutputChars: undefined }, '<signal>'] },
-  wincode_list_directory: { method: 'listDirectory', args: [{ path: '.', maxDepth: 1 }] },
+  wincode_list_directory: { method: 'listDirectory', args: [{ path: '.', maxDepth: 1 }, '<signal>'] },
   wincode_hello_world: { method: 'getRuntimeHealth', args: [] },
-  wincode_analyze_workspace: { method: 'analyzeWorkspace', args: [2] },
+  wincode_analyze_workspace: { method: 'analyzeWorkspace', args: [2, '<signal>'] },
   wincode_prepare_context: { method: 'prepareContext', args: [{ task: 'Inspect Target', scopeFiles: ['Target.ts'] }, '<signal>'] },
   wincode_find_code_symbol: { method: 'findCodeSymbols', args: ['Target', 'class', '<signal>'] },
   wincode_find_references: { method: 'findCodeReferences', args: ['Target', 'Target.ts', '<signal>'] },

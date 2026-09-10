@@ -5,12 +5,11 @@ import { isWorkspacePathInside, validateTrashPath, type TrashMoveResult, type Pr
 export { type TrashMoveResult, invalidTrashResult, type ProjectIdentity, type WorkspaceTreeItem, type WorkspaceGitStatus, type WorkspaceMetadata, type WorkspaceOpenOptions, type WorkspaceDirectoryOptions, type WorkspaceDirectoryResult, type WorkspaceOpenResult, validateWorkspaceDirectoryOptions, validateTrashPath } from './WorkspaceContracts.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { runGit } from './GitClient.js';
+import { assertLinkFreePath } from './FileSystemBoundary.js';
+import type { OperationContext } from './OperationContext.js';
 import { WinCodeConfig } from './Config.js';
 import { randomUUID } from 'node:crypto';
-
-const execAsync = promisify(exec);
 
 export class WorkspaceManager {
   private config: WinCodeConfig;
@@ -53,7 +52,8 @@ export class WorkspaceManager {
       try {
         const real = await fs.realpath(current);
         return remainingSegments.length > 0 ? path.join(real, ...remainingSegments) : real;
-      } catch {
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         const parent = path.dirname(current);
         if (parent === current) {
           return targetPath;
@@ -86,84 +86,42 @@ export class WorkspaceManager {
   /**
    * Identifies the project types, especially Windows / .NET ecosystems
    */
-  async identifyProject(): Promise<ProjectIdentity> {
-    return identifyProject(this.root);
+  async identifyProject(operation?: OperationContext): Promise<ProjectIdentity> {
+    return identifyProject(this.root, operation);
   }
 
   /**
    * Retrieves Git status safely for the current workspace
    */
   async getGitStatus(): Promise<WorkspaceGitStatus> {
-    const gitDir = path.join(this.root, '.git');
-    const isGit = await fs.stat(gitDir).then((s) => s.isDirectory()).catch(() => false);
-    if (!isGit) {
-      return { isGit: false };
-    }
-
-    let branch = 'unknown';
-    let isClean = true;
-    let headCommit: string | undefined;
-    let remoteUrl: string | undefined;
-
     const gitTimeout = this.config.timeouts?.gitMs ?? 5000;
-
     try {
-      const { stdout: bOut } = await execAsync('git rev-parse --abbrev-ref HEAD', {
-        cwd: this.root,
-        windowsHide: true,
-        timeout: gitTimeout,
-      });
-      branch = bOut.trim();
-    } catch {
-      // Fallback: read .git/HEAD when git CLI is missing, hung, or timed out
-      try {
-        const headContent = await fs.readFile(path.join(gitDir, 'HEAD'), 'utf-8');
-        const match = headContent.match(/ref:\s*refs\/heads\/([^\r\n]+)/);
-        if (match) branch = match[1];
-      } catch {}
+      if ((await runGit(this.root, ['rev-parse', '--is-inside-work-tree'], gitTimeout)).stdout.trim() !== 'true') return { isGit: false };
+    } catch (error) {
+      const failure = error as NodeJS.ErrnoException & { stderr?: string };
+      if (failure.stderr?.startsWith('fatal: not a git repository')) return { isGit: false };
+      return { isGit: null, status: 'unknown', errorCode: failure.code === 'GIT_UNAVAILABLE' ? 'GIT_UNAVAILABLE' : 'GIT_QUERY_FAILED' };
     }
-
-    try {
-      const { stdout: cOut } = await execAsync('git rev-parse --short HEAD', {
-        cwd: this.root,
-        windowsHide: true,
-        timeout: gitTimeout,
-      });
-      headCommit = cOut.trim();
-    } catch {}
-
-    try {
-      const { stdout: sOut } = await execAsync('git status --porcelain', {
-        cwd: this.root,
-        windowsHide: true,
-        timeout: gitTimeout,
-      });
-      isClean = sOut.trim().length === 0;
-    } catch {}
-
-    try {
-      const { stdout: rOut } = await execAsync('git remote get-url origin', {
-        cwd: this.root,
-        windowsHide: true,
-        timeout: gitTimeout,
-      });
-      remoteUrl = rOut.trim();
-    } catch {}
-
-    return {
-      isGit: true,
-      branch,
-      isClean,
-      headCommit,
-      remoteUrl,
+    const [branch, head, status, remote] = await Promise.allSettled([
+      runGit(this.root, ['rev-parse', '--abbrev-ref', 'HEAD'], gitTimeout),
+      runGit(this.root, ['rev-parse', '--short', 'HEAD'], gitTimeout),
+      runGit(this.root, ['status', '--porcelain'], gitTimeout),
+      runGit(this.root, ['remote', 'get-url', 'origin'], gitTimeout),
+    ]);
+    const clean = status.status === 'fulfilled' ? status.value.stdout.trim().length === 0 : undefined;
+    return { isGit: true,
+      ...(branch.status === 'fulfilled' ? { branch: branch.value.stdout.trim() } : {}),
+      ...(head.status === 'fulfilled' ? { headCommit: head.value.stdout.trim() } : {}),
+      ...(remote.status === 'fulfilled' ? { remoteUrl: remote.value.stdout.trim() } : {}),
+      ...(clean === undefined ? { status: 'unknown', errorCode: 'GIT_QUERY_FAILED' } : { isClean: clean, status: clean ? 'clean' : 'dirty' }),
     };
   }
 
   /**
    * Scans the workspace directory tree up to maxDepth and collects summary statistics
    */
-  async getDirectoryTree(maxDepth = 3): Promise<WorkspaceTreeItem> {
-    return getDirectoryTree(this.root, maxDepth);
+  async getDirectoryTree(maxDepth = 3, operation?: OperationContext): Promise<WorkspaceTreeItem> {
+    return getDirectoryTree(this.root, maxDepth, operation);
   }
 
   /**
@@ -182,8 +140,8 @@ export class WorkspaceManager {
   }
 
   /** Directory browsing is stateless and bounds enumeration as well as final serialization. */
-  async listDirectory(options: WorkspaceDirectoryOptions = {}): Promise<WorkspaceDirectoryResult> {
-    return listDirectory(this.root, options);
+  async listDirectory(options: WorkspaceDirectoryOptions = {}, operation?: OperationContext): Promise<WorkspaceDirectoryResult> {
+    return listDirectory(this.root, options, operation);
   }
 
   /**
@@ -312,8 +270,13 @@ export class WorkspaceManager {
         return invalidTrashResult('Failed to move file to trash: Cannot move items from or within the trash directory.');
       }
 
+      if (!this.isPathInside(realRoot, realTrash)) return invalidTrashResult('Failed to move file to trash: Trash destination resolves outside the workspace.');
+      await assertLinkFreePath(this.config.trashDir);
+
       failureStage = 'prepare';
       await fs.mkdir(this.config.trashDir, { recursive: true });
+      await assertLinkFreePath(this.config.trashDir);
+      if (await fs.realpath(this.config.trashDir) !== realTrash) throw new Error('Trash destination changed during preparation.');
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = path.basename(targetPath);
@@ -334,11 +297,14 @@ export class WorkspaceManager {
       destinationPath = path.join(this.config.trashDir, trashFileName);
 
       failureStage = 'move';
+      await assertLinkFreePath(this.config.trashDir);
+      if (await this.getRealPath(targetPath) !== realTarget) throw new Error('Trash source changed during preparation.');
       await fs.rename(targetPath, destinationPath);
       moved = true;
 
       failureStage = 'metadata';
       const metaPath = path.join(this.config.trashDir, `${trashFileName}.meta.json`);
+      await assertLinkFreePath(this.config.trashDir);
       await fs.writeFile(
         metaPath,
         JSON.stringify(

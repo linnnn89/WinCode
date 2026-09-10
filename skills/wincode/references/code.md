@@ -63,7 +63,7 @@ Host 监听变化并在查询前后比较内容指纹，变化时丢弃结果并
 | --- | --- | --- |
 | `workspace_open` | `path`: 非空字符串，最长 4096 | `includeTree`: 布尔值；`maxOutputChars`: 整数 2048–32768，默认 8000 |
 | `wincode_list_directory` | 无 | `path`: 非空字符串，最长 4096，默认 `.`；`maxDepth`: 整数 1–5，默认 1；`maxEntries`: 整数 1–500，默认 100；`maxOutputChars`: 整数 2048–32768，默认 8000；`includeIgnored`: 布尔值，默认 false |
-| `wincode_analyze_workspace` | 无 | `maxDepth`: 数字，默认 2 |
+| `wincode_analyze_workspace` | 无 | `maxDepth`: 整数 1–5，默认 2；整份 JSON 最多 32768 个 UTF-16 字符 |
 | `wincode_find_code_symbol` | `query`: 非空字符串 | `kind`: 字符串，按下述提供方支持范围使用；Roslyn 的 query 最长 256、kind 最长 128。此工具未声明文件范围参数，指定文件取证改用下面的 `scopeFiles` |
 | `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 定义文件相对路径（Roslyn 用于限定候选，local-text 不据此缩小引用扫描）；`symbolLocation`: Roslyn 搜索返回的 location 对象（snapshotId/project/file/position 均必填，路径各最长 4096）；同时提供 relativePath 时必须与 location.file 一致 |
 | `analyze_change_impact` | `target`: 非空字符串 | `symbolLocation`: 搜索返回的完整定位；提供时 target 必须是该符号的简单名称 |
@@ -124,6 +124,10 @@ lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details
 健康同根 workspace_open 保留 Host/snapshot，不等待业务排空；取消概览确认不会使健康实例进入恢复。真实换根、已知 SDK 重启要求或清理失败仍遵守诊断手册；当前仍允许切换活动根，不能在同一连接交错处理不同项目。
 
 workspace_open 默认返回项目摘要和最多 8 个入口，整份 JSON 默认不超过 8000 个 UTF-16 字符；不生成目录树或统计全仓大小。检查 projectScanComplete，null 统计不等于零。需要目录时用 wincode_list_directory 指定窄路径，查看 scanComplete/truncated/omissions。includeTree:true 可显式取得有界兼容树，不能当成完整仓库清单。maxOutputChars 为 2048–32768；目录 maxDepth 为 1–5，maxEntries 为 1–500。需要生成目录时显式 includeIgnored:true，但不能越过工作区边界。
+
+架构分析共用上述有界发现/浏览器：发现最多 2000 项，树预览最多 500 项；图最多 16 个项目文件、每文件 64 KiB、合计 256 KiB，入口目录枚举合计最多 2000 项。`scanComplete=false`、`omissions` 与 `outputOmissions` 表示未取得完整结构，不能将空引用解释成已证明不存在依赖。普通项目识别与图读取都拒绝根外项目描述符；取消沿实际读取循环传播，单次底层 I/O 仍可能延迟取消。
+
+本地声明解析先折叠屏蔽后的空白，超过 16384 字符的规范化单行返回 lexical-uncertainty/incomplete；复杂声明仍可能省略。Git 查询需要 2.36+，从工作区外的绝对安装路径执行并禁用 fsmonitor；`git.status=unknown` 或缺少 `isClean` 不等于干净。linked worktree 及 Git 管理的子目录由 Git 本身识别。
 
 ```json
 {"task":"查明保存失败原因","scopeFiles":["src/Service.cs"],"includeFullText":false,"maxTokens":2000}

@@ -1,9 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
-const execAsync = promisify(exec);
+import { runGit } from './GitClient.js';
 
 /** 文本缓存的有界变更提示及短时复用；它不是 Roslyn 编译输入快照，也不证明全仓内容相同。 */
 export class WorkspaceFingerprint {
@@ -104,10 +102,10 @@ export class WorkspaceFingerprint {
       if (hasGit) {
         try {
           const [headRes, statusRes] = await Promise.all([
-            execAsync('git rev-parse HEAD', { cwd: resolvedRoot, windowsHide: true, timeout: 3000 }).catch(
+            runGit(resolvedRoot, ['rev-parse', 'HEAD'], 3000).catch(
               () => ({ stdout: '' })
             ),
-            execAsync('git status --porcelain=v1 -z', { cwd: resolvedRoot, windowsHide: true, timeout: 5000 }),
+            runGit(resolvedRoot, ['status', '--porcelain=v1', '-z'], 5000),
           ]);
           const headCommit = headRes.stdout.trim();
           const gitStatusRaw = statusRes.stdout;

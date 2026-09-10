@@ -239,8 +239,8 @@ export class ToolRouter {
     return this.runCode(signal, operation => this.context.prepareContext(options, operation));
   }
 
-  analyzeWorkspace(maxDepth?: number) {
-    return this.architecture.analyze(maxDepth);
+  analyzeWorkspace(maxDepth?: number, signal?: AbortSignal) {
+    return this.runCode(signal, operation => this.architecture.analyze(maxDepth, operation));
   }
 
   analyzeChangeImpact(target: string, signal?: AbortSignal, location?: SymbolLocation) {
@@ -265,8 +265,8 @@ export class ToolRouter {
     return this.workspace.moveToTrash(filePath, reason);
   }
 
-  listDirectory(options: WorkspaceDirectoryOptions = {}) {
-    return this.workspace.listDirectory(options);
+  listDirectory(options: WorkspaceDirectoryOptions = {}, signal?: AbortSignal) {
+    return this.runCode(signal, operation => this.workspace.listDirectory(options, operation));
   }
 
   async acquireRequestSlot(signal?: AbortSignal, allowDuringRecovery = false): Promise<void> {

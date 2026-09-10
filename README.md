@@ -166,6 +166,10 @@ The 2026-09-08 check of the current Codex connection against TavernDesk source p
 
 `wincode_analyze_change_impact` is an alias of `analyze_change_impact`. Detailed workflows: [code intelligence](skills/wincode/references/code.md), [UI inspection](skills/wincode/references/ui.md), [diagnostics](skills/wincode/references/diagnostics.md).
 
+Architecture analysis accepts integer depths 1–5 and returns `scanComplete`, `omissions` and output truncation evidence. Discovery examines at most 2000 entries; the tree preview examines 500. The graph reads at most 16 project descriptors, 64 KiB per file and 256 KiB total, and examines at most 2000 entry-point directory entries. The complete report is capped at 32768 UTF-16 characters. Outside-workspace projects are omitted; this tool does not evaluate MSBuild.
+
+Git probes use a detected absolute installation path outside the workspace, require Git 2.36 or later and disable executable fsmonitor configuration. Missing or failed Git status is `unknown`, with no assertion that the tree is clean. Cache/trash writes reject existing symlinks and junctions in their paths. Cache cleanup manages versioned WinCode JSON and reserved overflow names; legacy/unrecognized files remain untouched and are outside the managed quota. These checks do not provide an atomic sandbox against concurrent filesystem replacement.
+
 ### Architecture and resource control
 
 See the [architecture, data-flow and verification-gate guide](WinCode-架构与数据流说明.md) for the current component boundaries, request sequences, storage lifecycle and delivery checks (Chinese).
@@ -393,6 +397,10 @@ npm run delivery:verify
 | `wincode_diagnose_project` | 无侵入检查本地 .NET SDK、Git 与运行环境健康度。 |
 
 `wincode_analyze_change_impact` 是 `analyze_change_impact` 的别名。详细参数与工作流请参考对应手册：[代码分析](skills/wincode/references/code.md)、[UI 取证](skills/wincode/references/ui.md)、[系统诊断](skills/wincode/references/diagnostics.md)。
+
+架构分析只接受整数深度 1–5，返回 `scanComplete`、`omissions` 和输出截断证据。项目发现最多检查 2000 个目录项，树预览最多 500 项；依赖图最多读取 16 个项目描述文件、每文件 64 KiB、合计 256 KiB，入口文件搜索合计最多检查 2000 项。整份报告最多 32768 个 UTF-16 字符。工作区外项目会省略，本工具不求值 MSBuild。
+
+Git 探测从工作区外的安装位置取得绝对可执行路径，要求 Git 2.36 及以上，并禁用可执行的 fsmonitor 配置；缺失或查询失败明确为 `unknown`，不报告干净。缓存和回收写入拒绝路径中已有的符号链接/junction。缓存仅管理带版本标记的 WinCode JSON 与保留命名的 overflow；旧版及无法识别的文件保留，不计入受管配额。这些校验不提供对抗并发路径替换的原子沙盒保证。
 
 ### 架构设计与资源管控
 

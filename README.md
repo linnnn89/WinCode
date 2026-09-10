@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="#english">English</a> · <a href="#简体中文">简体中文</a><br>
-  <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D6" alt="Windows x64">
+  <img src="https://img.shields.io/badge/Platform-Windows%2011%20x64-0078D6" alt="Windows 11 x64">
   <img src="https://img.shields.io/badge/MCP-stdio-black" alt="MCP stdio">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="MIT license"></a>
 </p>
@@ -22,7 +22,9 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.13.2**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.14.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+
+**Platform and compatibility:** Windows 11 x64 is the baseline for this project's local development and testing. Identical functionality, behavior, and performance are not guaranteed on other operating systems, other Windows versions, or different dependency versions. macOS and Linux users are encouraged to **fork this repository and adapt and validate it locally** for their platform. Use the dependency versions documented and pinned in this repository as the reference environment.
 
 ### Quick start
 
@@ -83,6 +85,20 @@ For graphical configuration interfaces:
 Add each argument as a separate entry, without extra surrounding quotes even when a path contains spaces. To defer project selection, remove both `--workspace` and its value; do not leave an empty value. Ensure `node` is available in PATH, or specify its absolute executable path. No additional environment variables are required for this basic configuration.
 
 For prompt engineering and token-efficient skill routing, refer to the optional [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md).
+
+### Optional tray and manual memory release
+
+Automatic Roslyn release is **off**. This version provides no idle timer or automatic-release switch. A loaded semantic workspace stays warm for successive Agent calls. To release it when you decide it is no longer needed:
+
+1. Build with `npm run check`, then run `tools/WinCode.Tray/bin/Release/net10.0-windows/win-x64/publish/WinCode.Tray.exe --show` from the repository. It requires the .NET 10 Windows Desktop runtime and does not install itself or enable Windows startup.
+2. Add `--tray` as a separate argument to each Gateway you want to see, then refresh that MCP connection. For example: `"args": ["C:/path/to/WinCode/dist/index.js", "--workspace", "C:/path/to/project", "--tray"]`. Keep your existing explicit `--roslyn-config` arguments if using Roslyn.
+3. Open **设置 / 内存管理**, refresh the observed state, select an idle instance and click **释放 Roslyn 内存**. A busy instance refuses the action; it does not queue a release for later. Requests arriving after a release has started wait for it to finish.
+
+“暂无在途请求” means no request is currently in flight, not that the Agent has finished its task. Failed refreshes or observations older than 30 seconds are shown as unknown; manual release first obtains a new passive status. Opening, refreshing, hiding, or reconnecting Tray never releases or reloads Roslyn. Registration errors are reported in settings and Gateway diagnostics.
+
+Release closes only that instance's owned Roslyn Host and invalidates its symbol locations. The next explicit symbol search reloads the project; old `symbolLocation` values require a new search. Gateway, workspace watcher, bounded cache, and last diagnostics remain. Local-text instances have no Roslyn memory to release.
+
+Tray and Gateway are independent. Hiding settings or exiting Tray leaves MCP running; **停止此实例** requests that selected Gateway's normal shutdown after confirmation. Start Tray manually when needed; it can connect before or after an opted-in Gateway. The current limit is eight connected Gateways per Windows user/session. Use the same Windows user and privilege level. State is observed on registration/open/refresh, not continuously polled; disconnected means unknown, and the connection count does not include old or unregistered instances. Remove `--tray` and reconnect to disable integration. Windows 11 is the tested platform; alternate permissions, Explorer recovery and other DPI configurations need separate validation.
 
 ### Practical walkthrough: Targeted control inspection
 
@@ -234,7 +250,9 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.13.2**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.14.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+
+**平台与兼容性说明：**本项目以 **Windows 11 x64** 为本地开发与测试基准。其他操作系统、其他 Windows 版本或不同依赖版本下，功能表现、运行行为与性能不保证完全一致。建议 **macOS、Linux 用户通过 fork 本仓库进行本地适配与验证**；请以本项目文档和锁定文件中列出的依赖版本作为参考环境。
 
 ### 快速上手
 
@@ -295,6 +313,20 @@ npm run delivery:verify
 每个参数独立添加为一行，路径包含空格时也无需额外加引号。使用时再选择项目，应同时删除 `--workspace` 及其值，不要保留空值。确保系统环境变量 PATH 中包含 `node`，或直接填写 node.exe 的绝对路径。这一基础配置无需额外设置环境变量。
 
 如需配合 Agent Skill 获得低 Token 开销的精准任务路由，请参阅可选的 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。
+
+### 可选托盘与手动释放内存
+
+**自动释放保持关闭**，本版没有 idle 定时器或自动释放开关。Roslyn 加载后会保留，优先保障 Agent 连续工作；确实不再需要时，由你在设置里主动释放。
+
+1. 完成 `npm run check` 后，运行仓库内 `tools/WinCode.Tray/bin/Release/net10.0-windows/win-x64/publish/WinCode.Tray.exe --show`。使用已有 .NET 10 Windows Desktop 运行时，不安装服务，不设置 Windows 自启动。
+2. 给需要管理的 MCP 启动参数单独加上 `--tray`，再刷新该 MCP 连接。例如 `"args": ["C:/path/to/WinCode/dist/index.js", "--workspace", "C:/path/to/project", "--tray"]`。已配置 Roslyn 时保留原有 `--roslyn-config` 参数。
+3. 打开“设置 / 内存管理”，刷新状态、选择空闲实例，点击“释放 Roslyn 内存”。实例忙碌或仍在收尾时拒绝本次释放，不排队延后释放；释放开始后到来的请求等待其完成。
+
+只关闭所选实例拥有的 Roslyn Host 并失效旧符号定位；下一次显式搜索才重新加载，旧 `symbolLocation` 必须重新搜索。Gateway、工作区 watcher、现有受限缓存和最后诊断保留。local-text 实例没有 Roslyn 内存可释放。
+
+“暂无在途请求”不代表 Agent 已结束任务。刷新失败或观察超过 30 秒时显示状态未知；手动释放前先获取新状态，超时不会接着释放。打开、刷新、隐藏设置及托盘重连均不触发 Roslyn 启停。注册失败原因会显示在设置和 Gateway 诊断输出中。
+
+关闭设置窗口会收回托盘；“退出托盘”不影响 MCP。“停止此实例”经确认后请求该 Gateway 正常退出，客户端可能重新建立一个新实例。托盘和 Gateway 可按任意顺序手动启动；每个 Windows 用户/登录会话目前最多连接八个 Gateway，应使用同一用户和权限级别。状态仅在注册、打开或手动刷新时更新，不持续轮询；失联表示未知，连接数不含旧版或未注册实例。移除 `--tray` 并刷新 MCP 连接即可禁用集成。其他权限、Explorer 重启和不同 DPI 仍需单独验证。
 
 ### 实战示例：精准定位并分析目标控件
 

@@ -46,7 +46,9 @@ export class FlaUiAdapter implements IAdapter {
   }
 
   async initialize(): Promise<void> {
-    const health = await this.checkHealth();
+    // 启动只核对平台、配置和发布文件；首次 UI 请求自行执行，显式 diagnose 才发 health。
+    // 通过文件检查不能证明原生 Host 可运行，因此不写入成功健康观察。
+    const health = await this.probeHealth(undefined, true);
     if (!health.available && health.lastError) {
       this.lastError = health.lastError;
     }
@@ -107,7 +109,7 @@ export class FlaUiAdapter implements IAdapter {
       health: this.healthCache ? { ...this.healthCache.value, lastError: this.lastError ?? this.healthCache.value.lastError } : null };
   }
 
-  private async probeHealth(timeoutMs?: number): Promise<AdapterHealth> {
+  private async probeHealth(timeoutMs?: number, validateOnly = false): Promise<AdapterHealth> {
     if (this.shuttingDown) return { available: false, source: 'unavailable', details: 'FlaUI is shutting down.' };
     if (timeoutMs === undefined && this.healthCache && Date.now() - this.healthCache.at < 5_000) {
       return this.healthCache.value;
@@ -175,6 +177,8 @@ export class FlaUiAdapter implements IAdapter {
       return val;
     }
 
+    if (validateOnly) return { available: false, source: 'unavailable', details: 'UIA runtime has not been probed.' };
+
     const probeTimeout = timeoutMs ?? this.config.timeouts?.healthProbeMs ?? 3_000;
     const probeAbortController = new AbortController();
     const probeTimer = setTimeout(() => probeAbortController.abort(), probeTimeout);
@@ -182,6 +186,9 @@ export class FlaUiAdapter implements IAdapter {
 
     try {
       return await this.mutex.runExclusive(async () => {
+        // 并发首次诊断排队后复查；显式 timeout 仍表示调用方要求新探测。
+        if (timeoutMs === undefined && this.healthCache && Date.now() - this.healthCache.at < 5_000)
+          return this.healthCache.value;
         const res = await this.executeHost(
           {
             schemaVersion: '1.0',
@@ -251,6 +258,10 @@ export class FlaUiAdapter implements IAdapter {
         result.errorCode === UiErrorCodes.CANCELLED ? 'cancelled' : 'error',
       message: `${result.errorCode}: ${result.errorMessage ?? 'Inspection failed.'}`.slice(0, 500), recoverable: true,
     };
+    if (result.success && result.hostIdentity) {
+      this.healthCache = { at: Date.now(), value: { available: true, source: 'installed',
+        version: result.hostIdentity.version, details: 'UIA Host responded to the requested UI operation.' } };
+    }
     return result;
   }
 
@@ -522,6 +533,7 @@ export class FlaUiAdapter implements IAdapter {
         childProc = spawn(host.command, host.args, {
           windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, WINCODE_OWNER_PID: String(process.pid) },
           cwd,
         });
 

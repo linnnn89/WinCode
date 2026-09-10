@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.14.0 (unreleased)
+
+- Make stale/failed tray observations explicit, refresh passively before manual release, report registration failures and keep native listeners available after malformed registrations. Preserve warm Roslyn state across settings visibility and connection changes.
+- Bind native Release source inputs and complete published outputs at build time; reject stale native artifacts even when regenerating the delivery manifest.
+
+- Keep automatic Roslyn release off; add a reversible manual release that preserves Gateway, watcher, bounded cache and diagnostics. Reject busy/cleanup/workspace-switch races, invalidate old symbol locations and reuse the existing recovery gate if cleanup fails. Explicit searches can reload afterward.
+- Add an optional independent Windows WinForms tray/settings entry with passive instance state, manual release and selected-instance shutdown. Enable each Gateway with `--tray`; start Tray manually. No idle timer, automatic startup, global settings file or additional MCP tools.
+- Bound the local Named Pipe protocol, authenticate local user/session and client PID, retain disconnected/unknown states, and reconnect without replaying control actions. Closing settings or Tray does not stop MCP.
+- Include the optional Tray in locked builds and delivery fingerprints. Add concurrency/IPC regression, actual WinForms with two isolated MCP fixtures, and ten actual Roslyn release/reload cycles with owned-process and resource evidence. Acceptance details and platform limits are recorded in the work log.
+
+## 0.13.4 (unreleased)
+
+- Retain startup checks for UIA platform/configuration/published files, while deferring the native health probe until explicit diagnosis. Actual UI requests execute directly and update the known observation from their response.
+- Preserve unknown availability before any runtime observation and retain first-operation errors separately. Coalesce concurrent non-forced health probes using the existing mutex and cached observation.
+- Add a three-sample runtime/startup measurement script and first-use/concurrency/recovery regression coverage. Cache, fingerprints, watchers and Roslyn initialization policies remain as before.
+
+## 0.13.3 (unreleased)
+
+- Verify each native Helper's owning Gateway through its actual ancestor chain, creation times and a held Windows process handle before project evaluation or UI access. The private launch environment supports development wrappers without identifying client applications by name.
+- Cancel work when the owner exits, then terminate only the orphaned Helper after a two-second grace period even if native calls or cancellation callbacks block. Code Host retains its existing Job coverage for descendants; this does not cover a live but unresponsive Gateway or the separate Repomix process path.
+- Preserve UIA stdin EOF as the request boundary and retain the Code Host protocol. Add isolated owner-lifetime, handle-disposal and multi-instance tests plus real initial-MSBuild Gateway-death acceptance and CI receipts.
+
 ## 0.13.2
 
 - Exit the production stdio entry on EOF/closed pipes, unify shutdown events and terminate on process-level fatal errors. Connect transport before initialization so disconnect can cancel startup.

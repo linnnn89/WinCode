@@ -9,6 +9,7 @@ import { resolveDotnet } from './lib/dotnet.mjs';
 
 export const hostDirectory = 'tools/WinCode.UIA.Host/bin/Release/net10.0-windows/win-x64/publish';
 export const codeHostDirectory = 'tools/WinCode.Code.Host/bin/Release/net10.0/publish';
+export const trayDirectory = 'tools/WinCode.Tray/bin/Release/net10.0-windows/win-x64/publish';
 const rootDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const settings = ['package.json', 'package-lock.json', 'global.json',
@@ -26,13 +27,14 @@ async function fileRecord(root, relative) {
   return { path: relative, bytes: stat.size, sha256: sha256(await fs.readFile(full)) };
 }
 
-async function inventory(root, directory) {
+async function inventory(root, directory, source = false) {
   const files = [];
   let entries = 0;
   async function visit(relative, depth) {
     if (depth > 8) throw new Error('Delivery directory depth exceeded.');
     const handle = await fs.opendir(path.join(root, relative));
     for await (const entry of handle) {
+      if (source && entry.isDirectory() && ['bin', 'obj'].includes(entry.name.toLowerCase())) continue;
       if (++entries > 512) throw new Error('Delivery directory entry limit exceeded.');
       if (entry.isSymbolicLink()) throw new Error('Delivery links are unsupported.');
       const child = `${relative}/${entry.name}`;
@@ -56,7 +58,52 @@ async function records(root, files) {
   return result;
 }
 
-export async function collectDelivery(root, hostIdentity, toolchains, codeHostIdentity) {
+export const nativeComponents = {
+  host: { project: 'tools/WinCode.UIA.Host', output: hostDirectory },
+  codeHost: { project: 'tools/WinCode.Code.Host', output: codeHostDirectory },
+  tray: { project: 'tools/WinCode.Tray', output: trayDirectory },
+};
+const nativeReceipt = 'native-build-manifest.json';
+export async function collectNativeInputs(root, component) {
+  const spec = nativeComponents[component];
+  if (!spec) throw new Error('Unknown native component.');
+  const files = await inventory(root, spec.project, true);
+  // 保守记录仓内共享源码及构建约定；不把 bin/obj 生成文件当作输入。
+  if (await fs.stat(path.join(root, 'tools/Shared')).catch(e => { if (e.code === 'ENOENT') return null; throw e; }))
+    files.push(...await inventory(root, 'tools/Shared', true));
+  for (const file of ['global.json', 'scripts/publish-native.mjs', 'scripts/delivery-manifest.mjs', 'scripts/lib/dotnet.mjs',
+    'Directory.Build.props', 'Directory.Build.targets', 'Directory.Packages.props', 'NuGet.Config', 'nuget.config',
+    'tools/Directory.Build.props', 'tools/Directory.Build.targets', 'tools/Directory.Packages.props', 'tools/NuGet.Config']) {
+    if (await fs.stat(path.join(root, file)).catch(e => { if (e.code === 'ENOENT') return null; throw e; })) files.push(file);
+  }
+  return records(root, [...new Set(files)]);
+}
+
+export async function sealNativeBuild(root, component, inputsBefore) {
+  const inputs = await collectNativeInputs(root, component);
+  if (fingerprint(inputsBefore) !== fingerprint(inputs)) throw new Error('Native source changed during build; rebuild from stable inputs.');
+  const output = nativeComponents[component].output;
+  const artifacts = await records(root, (await inventory(root, output)).filter(file => file !== `${output}/${nativeReceipt}`));
+  const receipt = { formatVersion: 1, component, inputs, artifacts };
+  await fs.writeFile(path.join(root, output, nativeReceipt), JSON.stringify(receipt, null, 2) + '\n');
+  return receipt;
+}
+
+async function verifyNativeBuild(root, component) {
+  const output = nativeComponents[component].output;
+  const receipt = JSON.parse(await fs.readFile(path.join(root, output, nativeReceipt), 'utf8').catch(error => {
+    if (error.code === 'ENOENT') throw new Error(`Missing ${component} build receipt; run npm run check or node scripts/publish-native.mjs ${component}.`);
+    throw error;
+  }));
+  if (receipt.formatVersion !== 1 || receipt.component !== component ||
+    fingerprint(await collectNativeInputs(root, component)) !== fingerprint(receipt.inputs))
+    throw new Error(`Native ${component} source changed after build; rebuild before delivery.`);
+  const artifacts = await records(root, (await inventory(root, output)).filter(file => file !== `${output}/${nativeReceipt}`));
+  if (fingerprint(artifacts) !== fingerprint(receipt.artifacts)) throw new Error(`Native ${component} artifacts changed after build.`);
+  return fingerprint(receipt.inputs);
+}
+
+export async function collectDelivery(root, hostIdentity, toolchains, codeHostIdentity, trayIdentity) {
   const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
   const gateway = JSON.parse(await fs.readFile(path.join(root, 'dist/build-manifest.json'), 'utf8'));
   if (gateway.version !== pkg.version || hostIdentity?.version !== pkg.version || hostIdentity.configuration !== 'Release')
@@ -82,16 +129,26 @@ export async function collectDelivery(root, hostIdentity, toolchains, codeHostId
       'BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.runtimeconfig.json']) {
       if (!files.includes(`${codeHostDirectory}/${required}`)) throw new Error(`Missing Code Host sidecar: ${required}`);
     }
-    codeHost = { identity: codeHostIdentity, files: await records(root, files) };
+    codeHost = { identity: codeHostIdentity, sourceHash: await verifyNativeBuild(root, 'codeHost'), files: await records(root, files) };
+  }
+  let tray;
+  if (trayIdentity !== undefined) {
+    if (trayIdentity.version !== pkg.version || trayIdentity.configuration !== 'Release' || trayIdentity.protocolVersion !== 1)
+      throw new Error('Tray version, Release configuration and protocol must agree with the Gateway.');
+    const files = await inventory(root, trayDirectory);
+    for (const required of ['WinCode.Tray.exe', 'WinCode.Tray.dll', 'WinCode.Tray.deps.json', 'WinCode.Tray.runtimeconfig.json'])
+      if (!files.includes(`${trayDirectory}/${required}`)) throw new Error(`Missing Tray sidecar: ${required}`);
+    tray = { identity: trayIdentity, sourceHash: await verifyNativeBuild(root, 'tray'), files: await records(root, files) };
   }
   return { version: pkg.version, toolchains, components: {
     gateway: { buildId: gateway.buildId, files: gatewayFiles },
-    host: { identity: hostIdentity, files: await records(root, hostFiles) },
+    host: { identity: hostIdentity, sourceHash: await verifyNativeBuild(root, 'host'), files: await records(root, hostFiles) },
     ...(codeHost ? { codeHost } : {}),
+    ...(tray ? { tray } : {}),
     skill: { files: await records(root, managedFiles.map(file => `skills/wincode/${file}`)) },
     configuration: { files: await records(root, [...settings, ...(codeHost ? [
       'tools/WinCode.Code.Host/WinCode.Code.Host.csproj', 'tools/WinCode.Code.Host/packages.lock.json',
-    ] : [])]) },
+    ] : []), ...(tray ? ['tools/WinCode.Tray/WinCode.Tray.csproj', 'tools/WinCode.Tray/packages.lock.json'] : [])]) },
   } };
 }
 
@@ -101,7 +158,7 @@ export async function verifyDelivery(root, manifest) {
   if (manifest.formatVersion !== 1 || !manifest.delivery || deliveryId(manifest.delivery) !== manifest.contentId)
     throw new Error('Invalid delivery manifest identity.');
   const actual = await collectDelivery(root, manifest.delivery.components.host.identity, manifest.delivery.toolchains,
-    manifest.delivery.components.codeHost?.identity);
+    manifest.delivery.components.codeHost?.identity, manifest.delivery.components.tray?.identity);
   if (deliveryId(actual) !== manifest.contentId) throw new Error('Delivery contents changed or are incomplete.');
   return { contentId: manifest.contentId, version: actual.version, matched: true };
 }
@@ -126,7 +183,9 @@ export async function writeDelivery(root = rootDirectory) {
   });
   const codeResponse = installed ? JSON.parse(output(sdk.dotnet, [codeHostPath, '--identity'], root, undefined, sdk.env)) : undefined;
   if (codeResponse && codeResponse.success !== true) throw new Error('Code Host identity probe failed.');
-  const delivery = await collectDelivery(root, hostResponse.hostIdentity, toolchains, codeResponse?.hostIdentity);
+  const trayInstalled = await fs.stat(path.join(root, trayDirectory)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  const trayIdentity = trayInstalled ? JSON.parse(output(path.join(root, trayDirectory, 'WinCode.Tray.exe'), ['--identity'], root, undefined, sdk.env)) : undefined;
+  const delivery = await collectDelivery(root, hostResponse.hostIdentity, toolchains, codeResponse?.hostIdentity, trayIdentity);
   const git = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 3000 });
   const revision = git.status === 0 && /^[a-f0-9]{40,64}$/.test(git.stdout.trim()) ? git.stdout.trim() : null;
   const manifest = { formatVersion: 1, contentId: deliveryId(delivery), delivery, revision, createdAt: new Date().toISOString() };

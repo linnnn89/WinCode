@@ -33,7 +33,7 @@ export class RoslynHostClient {
     void this.ready.catch(() => {});
     this.child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: false,
       // 只固定本子进程的 SDK 安装根；避免继承的 DOTNET_HOST_PATH 将 MSBuild 引向另一套 dotnet。
-      env: { ...process.env, DOTNET_HOST_PATH: command, DOTNET_ROOT: path.dirname(command) },
+      env: { ...process.env, DOTNET_HOST_PATH: command, DOTNET_ROOT: path.dirname(command), WINCODE_OWNER_PID: String(process.pid) },
       detached: process.platform !== 'win32' });
     resources.registerProcess('roslyn', this.child);
     this.child.stdout.setEncoding('utf8');

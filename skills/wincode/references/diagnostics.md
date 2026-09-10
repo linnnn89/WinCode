@@ -60,3 +60,19 @@ INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项
 ## 连接关闭（0.13.2）
 
 正式入口在 stdin EOF/close、传输关闭或管道错误时停止接收请求，取消初始化和活动操作，并按统一 8 秒预算清理自有资源。关闭失败保留非零退出结果；缓存写入不能无限延迟退出。不能把此行为等同于 Codex 当前连接已更新，也不能承诺强杀 Gateway 时所有后代均受同一个 Windows Job 保护。升级后刷新对应 MCP 连接，不必一概重启整个 Codex。
+
+## 原生 Helper 所属进程退出（0.13.3）
+
+Gateway 通过子进程私有环境传递所属 PID；两个 .NET Host 在项目求值或 UI 读取前核验真实祖先链和创建时间，并持有该进程对象句柄。直接运行 Host 时使用实际父进程。无法核验时拒绝开始重操作，不按 Codex/Claude 等客户端名称扫描。所属进程死亡后先取消，独立线程宽限两秒后仅硬退出当前 Helper；Code Host 的既有 Job 处理其覆盖的后代，UIA 不终止目标窗口应用。UIA 的 stdin EOF 仍表示请求输入结束。此机制不检测仍存活但卡死的 Gateway，也不自动覆盖独立 Repomix 子进程。开发启动包装链最多八层；不要手工设置任意 WINCODE_OWNER_PID 绕过核验。
+
+## UIA 首用与被动状态（0.13.4）
+
+启动只核验 UIA 平台、配置和发布文件，不运行健康探测进程。文件存在且尚无运行观察时，hello 的 flaui.available=null、source=unknown，不能理解为已安装 Host 不可用。首次 UI 请求直接执行请求；成功响应更新已知 Host 观察，失败保留 lastAdapterError，即使健康状态仍 unknown。需要主动验证时使用现有 wincode_diagnose_project；hello 不补发探测。缺失文件仍可在启动被报告，文件恢复后显式 UI 请求重新解析发布路径，不必重新初始化整个 Gateway。
+
+## 手动 Roslyn 释放与可选托盘（0.14.0）
+
+自动释放关闭，本版不创建 idle timer。用户可按 README 手动启动独立 Tray，并给希望管理的 Gateway 启动参数添加 --tray 后刷新连接。托盘只管理已注册的实例，不扫描/终止外部客户端或目标应用；MCP 仍为原有 15 个工具，没有让 Agent 自动代替用户释放的管理工具。默认不启用托盘连接、不设置自启动。
+
+手动释放遇到业务在途、语义排队/收尾、工作区切换或恢复门时拒绝，不自动延后执行。被接纳的释放完成后，新 MCP 请求继续；旧 symbolLocation 返回 SNAPSHOT_STALE，显式重新搜索再取得当前定位。保留 Gateway、watcher、缓存与最后诊断。清理失败进入 restart_gateway 恢复门，不能靠反复点击清除错误。local-text 没有可释放的 Roslyn。
+
+概览只读内存快照，不为状态启动 Host 或枚举缓存目录。状态是注册/打开/刷新时的观察，不代表 Agent 在两次请求之间已结束整个任务。失联/超时表示未知，控制命令不自动重放；退出 Tray 不停止 Gateway。首版最多八个同用户/会话实例，按同权限级别使用；版本必须匹配。需要停止时由用户确认“停止此实例”，走该 Gateway 既有关闭路径，客户端可能重新建立新实例。

@@ -5,6 +5,7 @@ import { ToolRouter } from './Core/ToolRouter.js';
 import { WinCodeMcpServer } from './Gateway/McpServer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { resolveTrayEndpoint, TrayClient } from './Gateway/TrayClient.js';
 
 async function main() {
   let workspaceRoot = process.cwd();
@@ -40,9 +41,11 @@ async function main() {
 
   let shuttingDown = false;
   let shutdownPromise: Promise<void> | undefined;
+  let tray: TrayClient | undefined;
   const shutdown = (signal: string, exitCode = 0): Promise<void> => {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    tray?.dispose();
     shutdownPromise = (async () => {
       console.error(`[WinCode Gateway] ${signal}: shutting down...`);
       const force = setTimeout(() => {
@@ -86,6 +89,14 @@ async function main() {
 
   try {
     await server.start();
+    if (args.includes('--tray') && !shuttingDown) {
+      // 可选界面不可延迟 MCP 就绪或导致 Gateway 退出；解析过程受同一 shutdown signal 约束。
+      void resolveTrayEndpoint(router.shutdownSignal).then(pipe => {
+        if (shuttingDown) return;
+        tray = new TrayClient(pipe, router, () => { void shutdown('settings requested stop'); });
+        tray.start();
+      }).catch(error => { if (!shuttingDown) console.error(`[WinCode Tray] ${error.message}; MCP continues without Tray integration.`); });
+    }
     console.error(`[WinCode Gateway] v${WINCODE_VERSION} ready.`);
   } catch (err) {
     if (shuttingDown) { await shutdownPromise; return; }

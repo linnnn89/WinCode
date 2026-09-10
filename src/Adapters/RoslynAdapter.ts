@@ -23,6 +23,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   private restartRequired = false;
   private cleanupFailure?: GatewayRestartRequiredError;
   private disposed = false;
+  private operations = 0;
   private health?: AdapterHealth;
   private observedAt: string | null = null;
   private lastError?: AdapterLastError;
@@ -216,6 +217,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
 
   /** 持有串行占用直到协议失败的进程清理结束；清理失败优先传播给 Router 的 E1 恢复门。 */
   private perform<T>(operation: OperationContext | undefined, work: () => Promise<T>): Promise<T> {
+    this.operations++;
     return this.lock.runExclusive(async () => {
       try { return await work(); }
       catch (error) {
@@ -225,7 +227,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
           await this.stopClient(true);
         throw error;
       }
-    }, operation?.signal);
+    }, operation?.signal).finally(() => { this.operations--; });
   }
 
   /** 名称搜索不读语义缓存；过期时要求下一次显式搜索重载，不重放本次失败请求。 */
@@ -298,6 +300,21 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
       await this.stopClient(); this.restartRequired = false; this.reloadRequired = false;
       this.health = undefined; this.observedAt = null;
       this.lastError = undefined;
+    });
+  }
+
+  /** 手动释放复用当前生命周期锁；忙碌时不排队等待任务结束后突然释放。 */
+  async releaseWarmState(canRelease: () => boolean = () => true): Promise<'released' | 'already-cold' | 'busy'> {
+    if (this.operations || !canRelease()) return 'busy';
+    return this.lock.runExclusive(async () => {
+      if (this.operations || !canRelease()) return 'busy';
+      if (this.cleanupFailure) throw this.cleanupFailure;
+      if (this.disposed) throw new CodeQueryError('HOST_UNAVAILABLE', 'Roslyn adapter is disposed.');
+      if (!this.client) return 'already-cold';
+      await this.stopClient();
+      // 保留故障/配置；不绕过已有 restartRequired，也不把最终 dispose 用作休眠。
+      this.observe(false, 'Roslyn memory released manually; an explicit symbol search loads a new snapshot.');
+      return 'released';
     });
   }
 

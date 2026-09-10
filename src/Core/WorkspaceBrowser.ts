@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { isWorkspacePathInside, validateWorkspaceDirectoryOptions, type ProjectIdentity, type WorkspaceMetadata, type WorkspaceTreeItem, type WorkspaceDirectoryOptions, type WorkspaceDirectoryResult } from './WorkspaceContracts.js';
 const isInsideOrEqual = (parent: string, target: string) => isWorkspacePathInside(parent, target, true);
 
@@ -41,58 +42,24 @@ export async function previewOmission(dir: string): Promise<string | null> {
 }
 
 /** 生成既有深度范围的目录树。 */
-export async function getDirectoryTree(root: string, maxDepth = 3): Promise<WorkspaceTreeItem> {
-  const scan = async (dirPath: string, currentDepth: number): Promise<WorkspaceTreeItem> => {
-    const name = path.basename(dirPath);
-    const relativePath = path.relative(root, dirPath) || '.';
-    const item: WorkspaceTreeItem = {
-      name,
-      path: dirPath,
-      relativePath,
-      type: 'directory',
-      children: [],
-    };
-
-    if (currentDepth >= maxDepth) {
-      return item;
-    }
-
-    try {
-      const entries = await fs.readdir(dirPath, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dirPath, entry.name);
-        if (!entry.isDirectory() && DEFAULT_IGNORES.has(entry.name)) continue;
-
-        if (entry.isDirectory()) {
-          const reason = await directoryOmission(fullPath);
-          if (reason) {
-            (item.omittedDirectories ??= []).push({ path: path.relative(root, fullPath).replace(/\\/g, '/'), reason });
-            continue;
-          }
-          item.children?.push(await scan(fullPath, currentDepth + 1));
-        } else if (entry.isFile()) {
-          const stat = await fs.stat(fullPath).catch(() => null);
-          item.children?.push({
-            name: entry.name,
-            path: fullPath,
-            relativePath: path.relative(root, fullPath),
-            type: 'file',
-            size: stat?.size,
-          });
-        }
-      }
-    } catch {
-      // Skip inaccessible dirs
-    }
-
-    return item;
-  };
-
-  return scan(root, 0);
+export async function getDirectoryTree(root: string, maxDepth = 3, operation?: OperationContext): Promise<WorkspaceTreeItem> {
+  const listing = await listDirectory(root, { maxDepth, maxEntries: 500, maxOutputChars: 32768 }, operation);
+  const tree: WorkspaceTreeItem = { name: path.basename(root), path: root, relativePath: '.', type: 'directory', children: [],
+    omittedDirectories: listing.omissions, scanComplete: listing.scanComplete && !listing.truncated,
+    truncated: listing.truncated, visitedEntries: listing.visitedEntries };
+  const nodes = new Map<string, WorkspaceTreeItem>([['.', tree]]);
+  for (const entry of listing.entries) {
+    const item: WorkspaceTreeItem = { name: path.posix.basename(entry.path), path: path.resolve(root, entry.path),
+      relativePath: entry.path, type: entry.type, ...(entry.type === 'directory' ? { children: [] } : {}) };
+    nodes.get(path.posix.dirname(entry.path))?.children?.push(item);
+    if (entry.type === 'directory') nodes.set(entry.path, item);
+  }
+  return tree;
 }
 
 /** 验证路径后有界浏览目录，保留遗漏与截断证据。 */
-export async function listDirectory(root: string, options: WorkspaceDirectoryOptions = {}): Promise<WorkspaceDirectoryResult> {
+export async function listDirectory(root: string, options: WorkspaceDirectoryOptions = {}, operation: OperationContext = { deadline: Date.now() + 20_000 }): Promise<WorkspaceDirectoryResult> {
+  checkOperation(operation);
   const { full, maxDepth, maxEntries, maxOutputChars } = validateWorkspaceDirectoryOptions(options, root);
   const realRoot = await fs.realpath(root);
   const realTarget = await fs.realpath(full);
@@ -113,13 +80,16 @@ export async function listDirectory(root: string, options: WorkspaceDirectoryOpt
   // includeIgnored controls filtering of child directories, not access to that path.
   const queue = [{ full, depth: 0 }];
   while (queue.length && result.visitedEntries < maxEntries) {
+    checkOperation(operation);
     const current = queue.shift()!;
     try {
       const real = await fs.realpath(current.full);
       if (!isInsideOrEqual(realRoot, real)) { omit(relative(current.full), 'external-link'); continue; }
       const directory = await fs.opendir(real);
       try { while (result.visitedEntries < maxEntries) {
+        checkOperation(operation);
         const entry = await directory.read();
+        checkOperation(operation);
         if (!entry) break;
         result.visitedEntries++;
         const entryFull = path.join(current.full, entry.name);
@@ -137,12 +107,14 @@ export async function listDirectory(root: string, options: WorkspaceDirectoryOpt
         }
       } } finally { await directory.close(); }
       if (result.visitedEntries >= maxEntries) omit(relative(current.full), 'entry-budget');
-    } catch {
+    } catch (error) {
+      rethrowOperationError(error, operation);
       if (current.depth === 0) throw new Error('Requested directory could not be read.');
       omit(relative(current.full), 'directory-unreadable');
     }
   }
   if (queue.length) omit(result.path, 'entry-budget');
+  checkOperation(operation);
   return fitDirectory(result);
 }
 

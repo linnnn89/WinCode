@@ -29,6 +29,8 @@ export interface ProjectIdentity {
   hasGit: boolean;
   packageManagers: string[];
   targetFramework?: string;
+  scanComplete?: boolean;
+  discovery?: WorkspaceMetadata['projectDiscovery'];
 }
 
 export interface WorkspaceTreeItem {
@@ -39,14 +41,19 @@ export interface WorkspaceTreeItem {
   size?: number;
   children?: WorkspaceTreeItem[];
   omittedDirectories?: Array<{ path: string; reason: string }>;
+  scanComplete?: boolean;
+  truncated?: boolean;
+  visitedEntries?: number;
 }
 
 export interface WorkspaceGitStatus {
-  isGit: boolean;
+  isGit: boolean | null;
   branch?: string;
   isClean?: boolean;
   headCommit?: string;
   remoteUrl?: string;
+  status?: 'clean' | 'dirty' | 'unknown';
+  errorCode?: 'GIT_UNAVAILABLE' | 'GIT_QUERY_FAILED';
 }
 
 export interface WorkspaceMetadata {

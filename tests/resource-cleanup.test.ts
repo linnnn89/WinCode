@@ -128,8 +128,7 @@ describe('resource-cleanup', () => {
       await fs.mkdir(overflowDir, { recursive: true });
 
       // 1. Fresh orphan within grace period: must NOT be deleted
-      const freshOrphan = path.resolve(overflowDir, 'fresh_orphan.txt');
-      await fs.writeFile(freshOrphan, 'X'.repeat(200));
+      const freshOrphan = await cache.writeOverflow('X'.repeat(200));
       await cache.pruneDiskCache({ orphanGraceMs: 60_000 });
       assert.strictEqual(await fs.stat(freshOrphan).then(() => true).catch(() => false), true, 'Fresh orphan within grace period must be kept');
 
@@ -138,17 +137,15 @@ describe('resource-cleanup', () => {
       assert.strictEqual(await fs.stat(freshOrphan).then(() => true).catch(() => false), false, 'Expired orphan must be reaped');
 
       // 3. Overflow size counted in totalDiskBytes: large overflow causes eviction of oldest entry
-      const oldOverflow = path.resolve(overflowDir, 'old_overflow.txt');
-      await fs.writeFile(oldOverflow, 'A'.repeat(8_000));
+      const oldOverflow = await cache.writeOverflow('A'.repeat(8_000));
       await cache.set('item_old', { overflowPath: oldOverflow, tag: 'old' });
 
       await new Promise((r) => setTimeout(r, 30));
 
-      const newOverflow = path.resolve(overflowDir, 'new_overflow.txt');
-      await fs.writeFile(newOverflow, 'B'.repeat(8_000));
+      const newOverflow = await cache.writeOverflow('B'.repeat(8_000));
       await cache.set('item_new', { overflowPath: newOverflow, tag: 'new' });
 
-      // Total overflow is 16,000 bytes > maxDiskBytes (15,000). Prune must evict item_old and delete old_overflow.txt!
+      // Total overflow is 16,000 bytes > maxDiskBytes (15,000). Prune must evict item_old and its owned attachment.
       await cache.pruneDiskCache();
 
       const oldOverflowExists = await fs.stat(oldOverflow).then(() => true).catch(() => false);
@@ -158,8 +155,7 @@ describe('resource-cleanup', () => {
       assert.strictEqual(newOverflowExists, true, 'New overflow must be retained within capacity');
 
       // 4. Memory-cached overflow file is protected even if not in disk JSON
-      const memOverflow = path.resolve(overflowDir, 'mem_overflow.txt');
-      await fs.writeFile(memOverflow, 'C'.repeat(500));
+      const memOverflow = await cache.writeOverflow('C'.repeat(500));
       (cache as any).memoryCache.set('mem_only', {
         timestamp: Date.now(),
         data: { overflowPath: memOverflow },

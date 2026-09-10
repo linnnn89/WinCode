@@ -122,7 +122,7 @@ it('capacity eviction invalidates the memory snapshot as well as its file', asyn
   const cache = new CacheManager(root, 50, 50, { maxDiskBytes: 1000 });
   await cache.initialize();
   await fs.mkdir(path.join(root, 'overflow'));
-  const snapshot = path.join(root, 'overflow', 'pack.txt');
+  const snapshot = path.join(root, 'overflow', 'pack_1_12345678.txt');
   await fs.writeFile(snapshot, 'x'.repeat(2000));
   await cache.set('pack', { overflowPath: snapshot });
   await cache.pruneDiskCache();

@@ -45,7 +45,7 @@ export const WORKSPACE_TOOLS = [
     },
   }, {
     validate: (args, { router }) => { validateWorkspaceDirectoryOptions(args, router.config.workspaceRoot); },
-    execute: async (args, { router }) => jsonResult(await router.listDirectory(args)),
+    execute: async (args, { router, signal }) => jsonResult(await router.listDirectory(args, signal)),
   }),
   defineTool<{ greeting?: string; toolName?: string }>({
     name: 'wincode_hello_world',
@@ -95,13 +95,13 @@ export const WORKSPACE_TOOLS = [
       type: 'object', additionalProperties: true,
       properties: {
         maxDepth: {
-          type: 'number',
-          description: 'Maximum directory tree depth to inspect (default 2)',
+          type: 'integer', minimum: 1, maximum: 5, default: 2,
+          description: 'Maximum directory tree depth to inspect (1-5; default 2). Entry, descriptor and response budgets also apply.',
         },
       },
     },
   }, {
-    execute: async (args, { router }) => jsonResult(await router.analyzeWorkspace(args.maxDepth), true),
+    execute: async (args, { router, signal }) => jsonResult(await router.analyzeWorkspace(args.maxDepth, signal), true),
   }),
   defineTool<Record<string, never>>({
     name: 'wincode_diagnose_project',

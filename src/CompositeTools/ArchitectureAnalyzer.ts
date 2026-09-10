@@ -1,5 +1,7 @@
 import { WorkspaceManager, ProjectIdentity, WorkspaceTreeItem } from '../Core/Workspace.js';
 import { DotNetProjectGraph, loadDotNetProjectGraph } from '../Core/DotNetGraph.js';
+import { boundedInteger } from '../Core/WorkspaceContracts.js';
+import { checkOperation, type OperationContext } from '../Core/OperationContext.js';
 
 export interface ArchitectureReport {
   projectName: string;
@@ -16,6 +18,11 @@ export interface ArchitectureReport {
   recommendedAgentFocus: string;
   projectGraph: DotNetProjectGraph | null;
   projectSummaries: Array<{ file: string; kind: string; evidence: string[] }>;
+  scanComplete: boolean;
+  truncated: boolean;
+  omissions: Array<{ path: string; reason: string }>;
+  outputOmissions: string[];
+  limits: { maxDepth: number; maxOutputChars: number; maxTreeEntries: number };
 }
 
 /** Directory folder names are hints. For .NET, prefer projectGraph from sln/csproj files. */
@@ -26,9 +33,11 @@ export class ArchitectureAnalyzer {
     this.workspace = workspace;
   }
 
-  async analyze(maxDepth = 2): Promise<ArchitectureReport> {
-    const identity: ProjectIdentity = await this.workspace.identifyProject();
-    const tree: WorkspaceTreeItem = await this.workspace.getDirectoryTree(maxDepth);
+  async analyze(maxDepth = 2, operation: OperationContext = { deadline: Date.now() + 20_000 }): Promise<ArchitectureReport> {
+    boundedInteger(maxDepth, 2, 1, 5, 'maxDepth');
+    checkOperation(operation);
+    const identity: ProjectIdentity = await this.workspace.identifyProject(operation);
+    const tree: WorkspaceTreeItem = await this.workspace.getDirectoryTree(maxDepth, operation);
 
     const layers = [
       {
@@ -89,7 +98,8 @@ export class ArchitectureAnalyzer {
       projectGraph = await loadDotNetProjectGraph(
         this.workspace.root,
         identity.solutionFiles,
-        identity.projectFiles
+        identity.projectFiles,
+        operation
       );
     }
 
@@ -130,7 +140,7 @@ export class ArchitectureAnalyzer {
         'Non-.NET workspace: directory hints only. Do not treat folder names as verified architecture layers.';
     }
 
-    return {
+    const report: ArchitectureReport = {
       projectName: identity.name,
       projectTypes: identity.frameworks,
       isWindowsDotNet: identity.isDotNet,
@@ -141,6 +151,25 @@ export class ArchitectureAnalyzer {
       recommendedAgentFocus,
       projectGraph,
       projectSummaries,
+      scanComplete: identity.scanComplete !== false && tree.scanComplete !== false && projectGraph?.scanComplete !== false,
+      truncated: false,
+      omissions: [...(identity.discovery?.omissions ?? []), ...(tree.omittedDirectories ?? []), ...(projectGraph?.omissions ?? [])].slice(0, 24),
+      outputOmissions: [],
+      limits: { maxDepth, maxOutputChars: 32768, maxTreeEntries: 500 },
     };
+    const fits = () => JSON.stringify(report, null, 2).length <= report.limits.maxOutputChars;
+    // Bound the complete serialized report, including repeated summaries and dependency descriptions.
+    for (const field of ['projectSummaries', 'projectGraph', 'recommendedAgentFocus', 'layers', 'keyEntryPoints', 'projects', 'solutions', 'projectTypes', 'omissions'] as const) {
+      if (fits()) break;
+      report.truncated = true;
+      report.scanComplete = false;
+      report.outputOmissions.push(field);
+      if (field === 'projectGraph') report.projectGraph = null;
+      else if (field === 'recommendedAgentFocus') report.recommendedAgentFocus = 'Report exceeded its output budget; inspect narrower paths.';
+      else report[field] = [];
+    }
+    if (!fits()) throw new Error('Architecture report identity exceeds the output budget.');
+    checkOperation(operation);
+    return report;
   }
 }

@@ -212,7 +212,7 @@ export class ContextManager {
     const budgetTokens = Math.max(512, opts.maxTokens ?? 8000);
     const maxChars = budgetTokens * 4;
 
-    const identity: ProjectIdentity = await this.workspace.identifyProject();
+    const identity: ProjectIdentity = await this.workspace.identifyProject(operation);
     const keywords = scope || ranges.size ? [] : this.extractKeywords(task);
     const collected = await this.collectSymbolEvidence(opts, scope, keywords, operation);
     const { limitations, fileIssues, keySymbols, sourceContents } = collected;

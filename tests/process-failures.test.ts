@@ -2,6 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 
 import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -66,12 +67,17 @@ describe('process-failures', () => {
     });
 
     it('git-less workspace is reported, not thrown', async () => {
-      const tmp = path.join(testCacheDir, 'nongit_ws');
-      await fs.mkdir(tmp, { recursive: true });
-      await fs.writeFile(path.join(tmp, 'readme.txt'), 'x');
-      const ws = new WorkspaceManager(getDefaultConfig(tmp));
-      const git = await ws.getGitStatus();
-      assert.strictEqual(git.isGit, false);
+      // A directory inside this repository is still Git-controlled even without its own .git.
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-nongit-'));
+      try {
+        await fs.writeFile(path.join(tmp, 'readme.txt'), 'x');
+        const ws = new WorkspaceManager(getDefaultConfig(tmp));
+        const git = await ws.getGitStatus();
+        assert.strictEqual(git.isGit, false);
+      } finally {
+        assert.strictEqual(path.dirname(await fs.realpath(tmp)), await fs.realpath(os.tmpdir()));
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
     });
 
     it('malformed workspace path fails with a structured error', async () => {

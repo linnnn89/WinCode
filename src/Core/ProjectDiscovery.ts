@@ -1,165 +1,22 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { isWorkspacePathInside, validateWorkspaceDirectoryOptions, type ProjectIdentity, type WorkspaceMetadata, type WorkspaceTreeItem, type WorkspaceDirectoryOptions, type WorkspaceDirectoryResult } from './WorkspaceContracts.js';
 import { DEFAULT_IGNORES, directoryOmission, previewOmission } from './WorkspaceBrowser.js';
 const isInsideOrEqual = (parent: string, target: string) => isWorkspacePathInside(parent, target, true);
 
 /** 识别现有项目声明；不求值构建脚本。 */
-export async function identifyProject(root: string): Promise<ProjectIdentity> {
-  const frameworks: string[] = [];
-  const solutionFiles: string[] = [];
-  const projectFiles: string[] = [];
-  const packageManagers: string[] = [];
-  let hasGit = false;
-  let targetFramework: string | undefined;
-
-  try {
-    const entries = await fs.readdir(root, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const lower = entry.name.toLowerCase();
-      if (entry.name === '.git') hasGit = true;
-      if (lower.endsWith('.sln') || lower.endsWith('.slnx')) {
-        solutionFiles.push(entry.name);
-        frameworks.push('.NET Solution');
-      }
-      if (lower.endsWith('.csproj')) {
-        projectFiles.push(entry.name);
-        frameworks.push('C# / .NET');
-      }
-      if (entry.name === 'package.json') {
-        packageManagers.push('npm/node');
-        frameworks.push('Node.js / TypeScript');
-      }
-      if (entry.name === 'requirements.txt' || entry.name === 'pyproject.toml') {
-        packageManagers.push('pip/python');
-        frameworks.push('Python');
-      }
-      if (entry.name === 'Cargo.toml') {
-        frameworks.push('Rust');
-      }
-      if (entry.name === 'go.mod') {
-        frameworks.push('Go');
-      }
-    }
-
-    // If solution file exists, parse projects defined inside it
-    if (solutionFiles.length > 0) {
-      for (const sln of solutionFiles) {
-        try {
-          const slnContent = await fs.readFile(path.join(root, sln), 'utf-8');
-          const projectRegex = /Project\("\{[A-Za-z0-9-]+\}"\)\s*=\s*"([^"]+)",\s*"([^"]+\.csproj)"/g;
-          let match;
-          while ((match = projectRegex.exec(slnContent)) !== null) {
-            const projRelPath = match[2].replace(/\\/g, '/');
-            if (!projectFiles.includes(projRelPath)) {
-              projectFiles.push(projRelPath);
-            }
-          }
-        } catch {
-          // Ignore sln read errors
-        }
-      }
-    }
-
-    // Deep search for .csproj files in subdirectories up to 3 levels if not in solution
-    if (projectFiles.length === 0) {
-      const scanCsproj = async (dir: string, depth: number) => {
-        if (depth > 3) return;
-        const subEntries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-        for (const sub of subEntries) {
-          if (DEFAULT_IGNORES.has(sub.name)) continue;
-          const full = path.join(dir, sub.name);
-          if (sub.isDirectory()) {
-            await scanCsproj(full, depth + 1);
-          } else if (sub.name.toLowerCase().endsWith('.csproj')) {
-            projectFiles.push(path.relative(root, full));
-          }
-        }
-      };
-      await scanCsproj(root, 0);
-    }
-
-    // Inspect csproj files for WPF/WinUI/TargetFramework
-    for (const proj of projectFiles.slice(0, 5)) {
-      try {
-        const fullProj = path.isAbsolute(proj) ? proj : path.join(root, proj);
-        const projContent = await fs.readFile(fullProj, 'utf-8');
-        const tfMatch = projContent.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i);
-        if (tfMatch && !targetFramework) {
-          targetFramework = tfMatch[1].trim();
-        }
-        if (projContent.includes('<UseWPF>true</UseWPF>') && !frameworks.includes('WPF')) {
-          frameworks.push('WPF');
-        }
-        if (projContent.includes('<UseWinUI>true</UseWinUI>') && !frameworks.includes('WinUI')) {
-          frameworks.push('WinUI');
-        }
-        if (projContent.includes('<UseWindowsForms>true</UseWindowsForms>') && !frameworks.includes('WinForms')) {
-          frameworks.push('WinForms');
-        }
-      } catch {
-        // Ignore
-      }
-    }
-
-    // Check Directory.Build.props if targetFramework not yet found
-    if (!targetFramework) {
-      try {
-        const propsContent = await fs.readFile(path.join(root, 'Directory.Build.props'), 'utf-8');
-        const tfMatch = propsContent.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i);
-        if (tfMatch) targetFramework = tfMatch[1].trim();
-      } catch {
-        // Ignore
-      }
-    }
-  } catch (err) {
-    console.warn('[WorkspaceManager] Error identifying project:', err);
-  }
-
-  const isDotNet = solutionFiles.length > 0 || projectFiles.length > 0;
-  let type: 'dotnet' | 'node' | 'python' | 'rust' | 'go' | 'general' = 'general';
-  let language = 'Unknown';
-
-  if (isDotNet) {
-    type = 'dotnet';
-    language = 'C#';
-    if (!packageManagers.includes('NuGet')) packageManagers.push('NuGet');
-    if (targetFramework && !frameworks.includes(targetFramework)) frameworks.push(targetFramework);
-  } else if (packageManagers.includes('npm/node')) {
-    type = 'node';
-    language = 'TypeScript';
-  } else if (packageManagers.includes('pip/python')) {
-    type = 'python';
-    language = 'Python';
-  } else if (frameworks.includes('Rust')) {
-    type = 'rust';
-    language = 'Rust';
-  } else if (frameworks.includes('Go')) {
-    type = 'go';
-    language = 'Go';
-  }
-
-  return {
-    name: path.basename(root),
-    type,
-    language,
-    primarySolution: solutionFiles[0] || null,
-    frameworks: Array.from(new Set(frameworks)),
-    isDotNet,
-    solutionFiles,
-    projectFiles,
-    hasGit,
-    packageManagers,
-    targetFramework,
-  };
+export async function identifyProject(root: string, operation?: OperationContext): Promise<ProjectIdentity> {
+  const result = await discoverProject(root, operation);
+  return { ...result.identity, scanComplete: result.complete, discovery: result.discovery };
 }
 
 /** 有界项目发现；保留原有深度、文件数和读取预算。 */
-export async function discoverProject(root: string): Promise<{
+export async function discoverProject(root: string, operation: OperationContext = { deadline: Date.now() + 20_000 }): Promise<{
   identity: ProjectIdentity; complete: boolean; entryPoints: string[];
   discovery: NonNullable<WorkspaceMetadata['projectDiscovery']>;
 }> {
+  checkOperation(operation);
   const discovery: NonNullable<WorkspaceMetadata['projectDiscovery']> = {
     visitedEntries: 0, descriptorBytesRead: 0, maxEntries: 2000, maxDepth: 3,
     maxDescriptorBytes: 262144, ignoredDirectoryCount: 0, omissions: [], omittedCount: 0,
@@ -192,6 +49,7 @@ export async function discoverProject(root: string): Promise<{
     else if (!projects.has(normalized)) omit('.', 'project-list-limit');
   };
   const readDescriptor = async (rel: string): Promise<string | null> => {
+    checkOperation(operation);
     if (descriptorReads >= 16 || discovery.descriptorBytesRead >= discovery.maxDescriptorBytes) {
       omit(rel, 'descriptor-budget'); return null;
     }
@@ -207,10 +65,12 @@ export async function discoverProject(root: string): Promise<{
       const capacity = Math.min(65536, discovery.maxDescriptorBytes - discovery.descriptorBytesRead);
       const buffer = Buffer.alloc(capacity);
       const { bytesRead } = await handle.read(buffer, 0, capacity, 0);
+      checkOperation(operation);
       discovery.descriptorBytesRead += bytesRead;
       if (stat.size > bytesRead) omit(rel, 'descriptor-truncated');
       return buffer.subarray(0, bytesRead).toString('utf8');
-    } catch {
+    } catch (error) {
+      rethrowOperationError(error, operation);
       omit(rel, 'descriptor-unreadable'); return null;
     } finally { await handle?.close(); }
   };
@@ -221,13 +81,16 @@ export async function discoverProject(root: string): Promise<{
   }
   const queue = [{ full: root, depth: 0 }];
   while (queue.length && discovery.visitedEntries < discovery.maxEntries) {
+    checkOperation(operation);
     const current = queue.shift()!;
     try {
       const real = await fs.realpath(current.full);
       if (!isInsideOrEqual(realRoot, real)) { omit(relative(current.full), 'external-link'); continue; }
       const directory = await fs.opendir(real);
       try { while (discovery.visitedEntries < discovery.maxEntries) {
+        checkOperation(operation);
         const entry = await directory.read();
+        checkOperation(operation);
         if (!entry) break;
         discovery.visitedEntries++;
         const full = path.join(current.full, entry.name);
@@ -251,7 +114,8 @@ export async function discoverProject(root: string): Promise<{
         }
       } } finally { await directory.close(); }
       if (discovery.visitedEntries >= discovery.maxEntries) omit(relative(current.full), 'entry-budget');
-    } catch {
+    } catch (error) {
+      rethrowOperationError(error, operation);
       if (current.depth === 0) throw new Error('Workspace root could not be read during project discovery.');
       omit(relative(current.full), 'directory-unreadable');
     }
@@ -321,6 +185,7 @@ export async function discoverProject(root: string): Promise<{
     projectFiles: Array.from(projects), hasGit: await fs.lstat(path.join(root, '.git')).then(() => true).catch(() => false),
     packageManagers: Array.from(packageManagers), targetFramework,
   };
+  checkOperation(operation);
   return {
     identity, complete, discovery,
     entryPoints: Array.from(new Set([...Array.from(solutions).slice(0, 1), ...manifests, ...entryPoints, ...projects])).slice(0, 8),

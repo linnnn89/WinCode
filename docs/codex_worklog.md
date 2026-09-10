@@ -962,3 +962,22 @@
 - 作者反证自审：相同文件长度/mtime、监听遗漏、新增文件、磁盘条目尚存但正文附件缺失，以及取消客户端先结束而服务端仍在收尾。保留真实修改后的输入失效/SDK 重启/清理失败恢复测试；不因同根保温跳过实际故障。规划仅移除已取得证据的完成项，N1、完整 N3、N4 其他存储/UI/源码竞争、N5 真实消费者和长期样本仍保留。
 
 - 14:02 收尾：调整观察方式后的 [真实 Roslyn 22 场景](../test-tmp/roslyn-gateway/run-wNNpAi/report.json)全部通过，包括主动 MSBuild 取消/崩溃/超时及进程退出。最终本地 delivery matched=true，contentId=ace3a662543d5c6df01bda9f23bea28199031c420f976e6a5f4fdb39d3ba19fb；Gateway buildId=717352bcd195475eed76cab88e7c1f96701c8fbaaab8e105a1d34dcccdc34b75。该本地构建在切换等内容基线前产生，revision 元数据为 bf220a9；不把它冒充最终 PR 提交构建，远端 CI 将核验具体提交。git diff --check 通过；推送/合并状态以随后 GitHub 回执为准。
+
+
+## 2026-09-10 14:10 — 全项目 Markdown 同步（北京时间）
+
+- 用户在 PR #35 等待 CI 时要求同步更新本项目各个 md。核对 Git 管理的 14 份 Markdown，按相关范围更新 README 中英说明、架构和时序图、配置/Skill 指南、四份受管 Skill 文档、贡献与安全说明、UIA Host README、CHANGELOG、规划/路线图及本日志。没有同步已安装手册、修改实际客户端配置或连接。
+- 纠正旧 0.13.1 架构/指南/Host 当前版本标题；安全策略保留既有维护承诺，补充 main 的 0.14.0 开发线。源码版本、磁盘产物和运行实例继续分别核验，不把本次 PR 合并写成已发布版本。补充独立托盘/Helper 所有权与手动释放边界，自动释放仍关闭。
+- 统一缓存文案：namespace 不等于跨进程物理隔离；有界 fingerprint 不是源码身份；声明按内容复用、内置打包按实际候选内容复用、CLI 无输入清单不缓存、附件失效可重建但没有永久租约。纠正“监听一定及时失效”和“已有生产缓存等于 UI 证据跨调用有效”的过度表述。
+- 同根健康确认不排空、不重启、取消不制造恢复状态；真实重绑定/已知故障仍需恢复。N1、完整 N3、N4 剩余交错/UI/源码边界及 N5 消费者/长期验证继续保留。此前 364/360 等历史结果不改写，当前基线明确为核心 372/372、桌面 35/35、真实 Roslyn 22/E4 16。
+- 四份受管 Skill 文档属于交付输入，本轮会重跑完整核心检查并重建交付清单；不因只改 Markdown 便沿用旧清单冒充匹配。旧 CI 结果只属于 bcd2fe5，文档提交后的合并等待对应新提交检查。
+
+
+## 2026-09-10 14:47 — Node 22 远端进程归属误判修复（北京时间）
+
+- PR #35 首个提交 bcd2fe5 的 [CI 34443549607](https://github.com/linnnn89/WinCode/actions/runs/34443549607)中，Node 24 与全部 CodeQL 通过，Node 22 核心/E4/独立 Roslyn Host 58 场景通过，但 Roslyn Gateway 的 timeout 退出断言失败。随后 owner-death、Repomix owner-death、manual-release 因脚本立即退出而没有执行，不能把这些项目写成该轮已通过。
+- 下载有界回执后定位：所谓残留 PID 752 是 csrss.exe，创建于 05:59:48；其 ParentProcessId=744，而真正测试中 PID 744 是 06:08:39 才创建的 conhost.exe。旧 ownedProcesses 只用 ParentProcessId 展开，沿这条错误边把 138 个进程纳入 Code Host 子树。此证据支持验收观察器 PID 复用误判，不支持 Roslyn 清理失败；不能通过无限重跑隐藏。
+- 按用户要求先查 [Win32_Process 官方 ParentProcessId/CreationDate 说明](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process)及 [MicrosoftDocs 原文](https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/CIMWin32Prov/win32-process.md)。修复 scripts/lib/owned-processes.mjs：同一 CIM 快照中按父子创建时间校验每条边，缺少相关创建身份时报错，不能悄悄省略未知后代。重放远端回执，138 项缩为实际 7 项，保留 dotnet Code Host、BuildHost、cmd、blocker node 及对应 conhost；没有增加清理宽限或修改产品清理代码。
+- 新增确定性 PID 复用/缺少创建身份回归，专项现为 9/9。修改受管文档后的 [核心 372/372](../test-tmp/check/2026-09-10T06-10-43-228Z-core/report.json)通过；加上 PID 回归后的最终 [完整核心 373/373](../test-tmp/check/2026-09-10T06-14-00-192Z-core/report.json)通过类型、构建、原生交付、stdio 和清单校验。修正观察器后的 [真实 Roslyn Gateway 22 场景](../test-tmp/roslyn-gateway/run-qoTd5O/report.json)通过。新增规则依旧严格断言真实子进程退出，不把只读过滤回放当成新的清理证据。
+- 全项目 14 份 Markdown 已核对，93 个本地链接、UTF-8、代码围栏通过（历史工作日志只核对新增段，不静默改写旧失败）。文档检查初次因 Git 对中文文件名引用导致路径解析失败，改用 git ls-files -z 取得真实文件名后通过，属于检查脚本路径处理错误。
+- 用户补充确认：修复观察器之后，必须在最新提交上完整运行 Node 22 专项链，若真实 Code Host/BuildHost/cmd/blocker 仍存活才继续查产品生命周期。在该链与全部必需检查通过前，PR #35 保持未合并；不沿用 bcd2fe5 的部分 CI 结果。

@@ -55,7 +55,7 @@ Add WinCode as a stdio MCP server in your agent client configuration (for client
 }
 ```
 
-Without `--workspace`, WinCode initially uses the server process's current working directory, which may differ from your intended project. Before querying, ask the agent to call `workspace_open` with the target project's absolute path, for example `workspace_open({"path":"C:/path/to/project"})`. Repeat this when switching projects; the server installation path stays the same. One server process has one active workspace, so calls sharing that process must not interleave queries for different projects. For concurrent independent projects, configure separate server instances with distinct names and explicit workspace paths.
+Without `--workspace`, WinCode initially uses the server process's current working directory, which may differ from your intended project. Before querying, ask the agent to call `workspace_open` with the target project's absolute path, for example `workspace_open({"path":"C:/path/to/project"})`. Repeat this when switching projects; the server installation path stays the same. Confirming the same healthy workspace keeps the Roslyn Host/snapshot warm and does not drain active queries. Cancelling that confirmation does not force recovery; known restart/cleanup failures still follow the explicit recovery path. One server process has one active workspace, so calls sharing that process must not interleave queries for different projects. For concurrent independent projects, configure separate server instances with distinct names and explicit workspace paths.
 
 **Specify a project at startup:** Add `--workspace` followed by the project directory:
 
@@ -180,7 +180,7 @@ Coding agent ── stdio MCP ── WinCode
 
 - **Owned-process cleanup:** UI inspection executes out-of-process via an isolated helper (`tools/WinCode.UIA.Host`). All process cleanups target only the owned helper process tree via Windows `taskkill /T`; the inspected target application is never terminated or injected.
 - **Concurrency Protection:** UI inspection and health checks share a serial execution mutex to prevent native UIA message pump deadlocks. Workspace switches safely drain in-flight calls before changing cache namespaces.
-- **Byte-Bounded Cache:** Memory and disk caches enforce strict byte caps (default 32 MiB serialized memory, 128 MiB disk quota including disk-spilled overflow snapshots). Debounced file watching (150 ms) and index probing invalidate the ~2.5s fingerprint memo upon disk changes.
+- **Byte-Bounded Cache:** The shared cache manager bounds retained serialized data (default 32 MiB memory, 128 MiB disk including overflow); these are not process RSS limits. Local-text queries re-enumerate bounded inputs and reuse declarations by content hash. Builtin packs validate the actual selected contents before reuse; CLI output without a verified input manifest is not cached. Missing overflow files become cache misses. Watch/index probes invalidate the ~2.5s change-hint memo; that hint is not proof of source identity or a guarantee that watcher events are complete.
 
 | UI budget | Limit / behavior |
 | --- | --- |
@@ -283,7 +283,7 @@ npm run delivery:verify
 }
 ```
 
-省略 `--workspace` 时，WinCode 初始使用服务进程的当前工作目录，它不一定是你要分析的项目。查询前，让 Agent 调用 `workspace_open` 并传入目标项目的绝对路径，例如 `workspace_open({"path":"C:/path/to/project"})`。换项目时再次调用即可，服务安装路径无需修改。一个服务进程只有一个活动工作区，共享该进程的调用不能交错查询不同项目；如需同时独立查询多个项目，应配置名称不同、各自明确指定工作区路径的服务实例。
+省略 `--workspace` 时，WinCode 初始使用服务进程的当前工作目录，它不一定是你要分析的项目。查询前，让 Agent 调用 `workspace_open` 并传入目标项目的绝对路径，例如 `workspace_open({"path":"C:/path/to/project"})`。换项目时再次调用即可，服务安装路径无需修改。同一健康工作区的重复确认保留 Roslyn Host/快照，不等待在途业务排空；取消该确认不会强制进入恢复。已知重启要求和清理失败仍走显式恢复路径。一个服务进程只有一个活动工作区，共享该进程的调用不能交错查询不同项目；如需同时独立查询多个项目，应配置名称不同、各自明确指定工作区路径的服务实例。
 
 **启动时指定项目：**添加 `--workspace`，并在其后填写项目目录：
 
@@ -406,7 +406,7 @@ Coding Agent ── stdio MCP ── WinCode
 
 - **目标进程绝对免疫：**UI 取证由独立的 C# 辅助进程（`tools/WinCode.UIA.Host`）在进程外执行。所有清理操作严格仅终止自身派生的 Helper 辅助进程树（通过 Windows `taskkill /T`），**被测目标应用进程受绝对免疫保护，绝不被终止或注入**。
 - **防死锁与并发保护：**UI 自动化访问与健康检查共用串行互斥锁，杜绝底层 Win32/UIA 消息泵死锁。切换工作区前会先等待排空在途请求，超时则拒绝切换，保证会话隔离安全。
-- **按字节硬封顶缓存：**代码缓存按工作区物理隔离，采用序列化内存估算与字节上限清理策略（默认内存预算 32 MiB、磁盘配额 128 MiB，包含超大快照落盘文件）。结合 150 ms 去抖监听与 Git 索引探测，文件变更时指纹缓存及时失效。
+- **按字节约束缓存：**缓存条目按工作区 namespace 隔离，多个实例仍可能共用磁盘目录；默认序列化内存预算 32 MiB、磁盘配额 128 MiB（含 overflow），不等于进程 RSS 上限。local-text 每次有界扫描实际输入，按内容哈希复用声明解析；内置打包核对实际选中文件的内容后复用，没有可核验输入清单的 CLI 结果不缓存。附件缺失按缓存未命中重建。150 ms 去抖监听与索引探测只使约 2.5 秒的变更提示 memo 失效，不能证明源码完整身份或保证监听事件无遗漏。
 
 | 取证预算指标 | 限制值与行为策略 |
 | --- | --- |

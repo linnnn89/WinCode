@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, fork, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { getDefaultConfig } from '../src/Core/Config.js';
 import { CacheManager } from '../src/Core/Cache.js';
@@ -14,6 +15,18 @@ import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; };
 const body = (result: any) => result.structuredContent ?? JSON.parse(result.content[0].text);
+
+it('process observation excludes stale parent PID edges without hiding real descendants', async () => {
+  const { selectOwnedProcesses } = await import(pathToFileURL(path.resolve('scripts/lib/owned-processes.mjs')).href);
+  const proc = (ProcessId: number, ParentProcessId: number, time: number) => ({ ProcessId, ParentProcessId, CreationDate: `/Date(${time})/` });
+  const rows = [proc(752, 744, 100), proc(876, 744, 101), proc(972, 876, 102),
+    proc(2648, 7864, 1000), proc(5696, 2648, 1100), proc(7640, 5696, 1200),
+    proc(744, 7640, 1300), proc(7020, 7640, 1301)];
+  assert.deepEqual(selectOwnedProcesses(rows, 2648).map((item: any) => item.ProcessId), [2648, 5696, 7640, 744, 7020]);
+  assert.deepEqual(selectOwnedProcesses(rows, 9999), []);
+  assert.throws(() => selectOwnedProcesses([...rows, { ProcessId: 777, ParentProcessId: 744 }], 2648), /Missing process creation identity/);
+});
+
 async function fixture(run: (router: ToolRouter, root: string, client: Client) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-runtime-cache-'));
   const config = getDefaultConfig(root);

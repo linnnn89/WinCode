@@ -1,10 +1,10 @@
 # WinCode.UIA.Host
 
-0.13.1 的 Windows UI Automation（FlaUI.UIA3）一次性取证进程。实现入口为 [Program.cs](Program.cs)，面向 Agent 的规范参数见 [UI 手册](../../skills/wincode/references/ui.md)，整体数据流见 [架构说明](../../WinCode-架构与数据流说明.md)。
+0.14.0 的 Windows UI Automation（FlaUI.UIA3）一次性取证进程。实现入口为 [Program.cs](Program.cs)，面向 Agent 的规范参数见 [UI 手册](../../skills/wincode/references/ui.md)，整体数据流见 [架构说明](../../WinCode-架构与数据流说明.md)。
 
 ## 职责和边界
 
-接收 stdin JSON，执行有界窗口发现或 UIA 取证，输出 stdout JSON 后退出。Gateway 的 FlaUIAdapter 管理自有 Host 的超时、取消和进程回收；被检查的应用不属于其进程所有权。
+接收 stdin JSON，执行有界窗口发现或 UIA 取证，输出 stdout JSON 后退出。Gateway 的 FlaUIAdapter 管理自有 Host 的超时、取消和进程回收；被检查的应用不属于其进程所有权。原生 Helper 在开始工作前验证所属 Gateway 的进程身份；所属进程退出时取消并按既有宽限清理自身。Gateway 启动保留配置/交付检查，实际 UIA 健康探测延后到显式诊断或首次操作。
 
 Host 不点击、不输入、不写目标控件属性，不主动启动或终止目标应用。它会产生自身进程、审计日志及按策略显示的取证提示，因此不应描述为“零副作用”。审计和内容哈希是诊断证据，不是防篡改或来源签名。
 
@@ -40,6 +40,8 @@ Host 不点击、不输入、不写目标控件属性，不主动启动或终止
 截图优先尝试 PrintWindow；成功与图像内容取决于目标应用及渲染状态，不能保证所有 GPU/WPF 窗口都可正确捕获。`backgroundOnly=true` 要求明确 PID/HWND，禁用桌面屏幕回退；最小化窗口不作为后台截图成功处理。非后台限制模式才允许按实现尝试桌面 DC/屏幕回退。
 
 读取 `captureMethod` 和 `captureQuality`，区分截图 API 返回成功与画面内容可信；质量检测不是语义识别。树查询、截图、审计分别有自己的结果边界，不因获得一张 PNG 就宣称全部取证完成。
+
+可选 WinForms Tray 是另一个发布组件，不是本 UIA Host 的常驻模式；关闭托盘不应关闭 MCP 或被检查应用。跨实例 HWND 隔离、非默认 DPI 与历史偶发捕获失败的验证范围见工作记录，不能由核心测试通过推断全部支持。
 
 ## 构建与验证
 

@@ -48,7 +48,7 @@ Roslyn 运行中已观察到的加载、查询或清理错误也纳入 health.la
 
 Code Host 内部协议 v2 的失败包含 success=false、errorCode 和 error，且不附带旧引用。SNAPSHOT_STALE/INPUTS_CHANGED 在内部协议层要求等写入稳定后显式 reload，再用新身份定位；MCP 客户端应重新调用 wincode_find_code_symbol，由适配器执行所需重载，不存在 wincode_reload 工具；PROJECT_LOAD_FAILED 表示结构化 MSBuild 加载失败，先修复项目输入，再 reload，不能继续使用最后一次成功快照。源码的 compilationErrors 可随有用的部分引用返回，不能据此宣称完整。
 
-Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回；失败的 JSON 文本与 structuredContent 一致，仍保留领域差异。健康状态下同根 workspace_open 保留 Host 和 snapshot；它不是强制冷启动命令。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，此时才关闭旧 Host，再由显式搜索重新选择 SDK。INPUTS_CHANGED/SNAPSHOT_STALE 按 search_again 重新搜索，普通打开不清除已知重载要求。启动时的项目、Configuration、TFM 和可执行文件配置固定于 Adapter；修改客户端启动配置后须正常重建连接，workspace_open 不热应用配置文件。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
+Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回；失败的 JSON 文本与 structuredContent 一致，仍保留领域差异。健康状态下同根 workspace_open 保留 Host 和 snapshot；它不是强制冷启动命令，也不是等待在途业务清理完成的屏障。普通同根确认取消不进入恢复；客户端取消先返回时，后台操作仍可能正在清理，不能把客户端 Promise 结束当作 Host 已退出。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，此时才关闭旧 Host，再由显式搜索重新选择 SDK。INPUTS_CHANGED/SNAPSHOT_STALE 按 search_again 重新搜索，普通打开不清除已知重载要求。启动时的项目、Configuration、TFM 和可执行文件配置固定于 Adapter；修改客户端启动配置后须正常重建连接，workspace_open 不热应用配置文件。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
 
 INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项目路径，以及 additionalInputs 中的文件是否存在；补充文件缺失时，重载也会失败，恢复文件后再显式搜索。不要为恢复查询而静默移除真实构建输入。HOST_VERSION_MISMATCH 先核对 Code Host 与 Gateway 的版本、Release 配置和协议；不要继续使用混合交付。HOST_PROTOCOL_ERROR 同时检查协议 v2、inputPolicy.version=1 和实际补充列表；旧 Host 没有确认新策略时不能绕过。LEGACY_SYMBOL_ID 要求重新搜索 Roslyn 身份；UNSUPPORTED_SYMBOL_LOCATION 表示该实例未配置 Roslyn；SYMBOL_MISMATCH 表示名称和定位不一致。INPUT_BUDGET_EXCEEDED 区分枚举规模与受跟踪输入字节限制，先缩小受支持范围，不能接受截断指纹。内部 BUSY 表示队列已满，DUPLICATE_REQUEST 要求新的 id；CANCELLED 是目标终止结果，取消确认不替代它。OUTSIDE_WORKSPACE/UNSUPPORTED_LINK 拒绝越界或链接路径，不放松校验来恢复。
 
@@ -56,6 +56,10 @@ INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项
 
 
 `npm run test:error-contracts` 使用生成夹具验证错误、部分完成与恢复；Node 22 CI 执行该专项并保存有界报告。UI 图片场景使用注入响应，只验证序列化，不冒充真实屏幕验收。
+
+## 源码缓存与附件（0.14.0）
+
+本地文本查询每次重新枚举有界输入，声明解析按实际内容复用；内置上下文打包按实际选中文件的内容复用。工作区 fingerprint 和 watcher 只是变更提示，不能证明完整源码身份。旧连接仍返回过时正文时，先核对运行 buildId，再由客户端正常重连，不以 git add 或反复释放 Host 代替升级。overflow 在命中时复核存在性，缺失则重建；它没有永久租约，后续读取失败可重新请求上下文，不全局删除其他实例的缓存。
 
 ## 连接关闭（0.13.2）
 

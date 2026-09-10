@@ -2,6 +2,10 @@
 
 ## 0.14.0 (unreleased)
 
+- Validate parent/child creation times in acceptance process-tree snapshots, rejecting stale parent-PID edges after Windows PID reuse. Keep strict exit checks for the real observed Code Host descendants.
+
+- Synchronize bilingual setup/cache guidance, architecture/data flow, managed Skill manuals, native Host guidance and remaining roadmap with the verified 0.14.0 behavior. Separate healthy confirmation from recovery and current implementation from planned project binding/admission limits.
+
 - Bind builtin context cache reuse to the selected file contents; rescan bounded local-text inputs and reuse declarations by content within the existing memory budget. Untracked directories, deep files, additions/deletions and same-size edits no longer reuse stale query results. CLI output without an input manifest is not reused as a cached snapshot.
 - Treat a missing overflow attachment as a cache miss for memory and disk readers, including after another process prunes the shared cache.
 - Confirm healthy same-root workspaces without draining business requests. Cancelling read-only confirmation does not enter recovery or reset a healthy Host; real rebind and cleanup failures retain the recovery gate.

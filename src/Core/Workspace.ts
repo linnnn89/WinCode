@@ -203,7 +203,8 @@ export class WorkspaceManager {
     const previousTrash = this.config.trashDir;
     // Metadata collection can fail after validation (e.g. the directory disappears).
     // Restore both mutable paths on failure so callers never observe a rejected root.
-    this.setRoot(resolvedPath);
+    // Same-root overview must not mutate trash/config while business requests are running.
+    if (path.relative(previousRoot, resolvedPath) !== '') this.setRoot(resolvedPath);
     try {
       const { identity, complete, discovery, entryPoints } = await this.discoverProject();
       const git = await this.getGitStatus();

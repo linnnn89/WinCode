@@ -111,7 +111,10 @@ export class GatewayRestartRequiredError extends AggregateError {
  * releasing this lock on abort before fn settles would permit concurrent owners.
  */
 export class Mutex {
-  private tail: Promise<void> = Promise.resolve();
+  private running = false;
+  private readonly waiting = new Set<() => void>();
+
+  get pendingCount(): number { return this.waiting.size; }
 
   runExclusive<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) {
@@ -120,45 +123,31 @@ export class Mutex {
       );
     }
 
-    let onAbort: (() => void) | undefined;
-    let skipped = false;
-
-    const previousTail = this.tail;
-
-    const execute = async (): Promise<T> => {
-      if (onAbort && signal) {
-        signal.removeEventListener('abort', onAbort);
-      }
-      if (skipped || signal?.aborted) {
-        throw new AbortError(signal?.reason ? String(signal.reason) : 'The operation was aborted');
-      }
-      return fn();
-    };
-
-    const run = previousTail.then(execute, execute);
-    this.tail = run.then(
-      () => undefined,
-      () => undefined
-    );
-
-    if (!signal) {
-      return run;
-    }
-
-    const abortPromise = new Promise<T>((_, reject) => {
-      onAbort = () => {
-        skipped = true;
-        reject(
-          new AbortError(signal.reason ? String(signal.reason) : 'The operation was aborted')
-        );
+    return new Promise<T>((resolve, reject) => {
+      const cancelled = () => {
+        // Set insertion order is FIFO; removal releases the closure immediately.
+        if (!this.waiting.delete(execute)) return;
+        signal?.removeEventListener('abort', cancelled);
+        reject(new AbortError(signal?.reason ? String(signal.reason) : 'The operation was aborted'));
       };
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
-
-    return Promise.race([run, abortPromise]).finally(() => {
-      if (onAbort && signal) {
-        signal.removeEventListener('abort', onAbort);
-      }
+      const execute = () => {
+        this.waiting.delete(execute);
+        signal?.removeEventListener('abort', cancelled);
+        this.running = true;
+        // Keep asynchronous entry and recheck cancellation before invoking work.
+        void Promise.resolve().then(() => {
+          if (signal?.aborted) throw new AbortError(signal.reason ? String(signal.reason) : 'The operation was aborted');
+          return fn();
+        }).then(resolve, reject).finally(() => {
+          // An active caller owns the lock until its work AND cleanup settle.
+          const next = this.waiting.values().next().value;
+          if (next) next();
+          else this.running = false;
+        });
+      };
+      this.waiting.add(execute);
+      signal?.addEventListener('abort', cancelled, { once: true });
+      if (!this.running) execute();
     });
   }
 }

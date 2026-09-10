@@ -13,6 +13,58 @@ import { ImpactAnalyzer } from '../src/CompositeTools/ImpactAnalyzer.js';
 import { RefactorAssistant } from '../src/CompositeTools/RefactorAssistant.js';
 import type { CodeReferenceQuery, SymbolReference } from '../src/Core/CodeQueries.js';
 
+it('same-root confirmations preserve warm identity, reload state and perform a required restart only once', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-warm-中文 空格-'));
+  const config = getDefaultConfig(root);
+  config.adapters.flaui.enabled = false; config.adapters.repomix.useCli = false;
+  config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'App.csproj', configuration: 'Debug',
+    targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: path.join(root, 'host.dll') };
+  const router = new ToolRouter(config);
+  try {
+    await router.initialize();
+    const adapter = router.roslyn!, state = adapter as any;
+    let closes = 0;
+    const host = { active: true, close: async () => { closes++; } };
+    state.client = host; state.snapshot = 'a'.repeat(32);
+    const before = await router.getRuntimeHealth();
+    const reset = t.mock.method(adapter, 'resetConnection', adapter.resetConnection.bind(adapter));
+    const aliases = [root, path.join(root, '.'), root + path.sep];
+    if (process.platform === 'win32') aliases.push(root.toUpperCase().replaceAll('\\', '/'));
+    for (let index = 0; index < 10; index++) await router.openWorkspace(aliases[index % aliases.length]);
+    assert.equal(reset.mock.callCount(), 0);
+    assert.equal(state.client, host);
+    assert.equal(adapter.getKnownHealth().snapshotId, before.roslyn?.snapshotId);
+    assert.equal(router.session.current?.id, before.session?.id);
+    assert.deepEqual((await router.getRuntimeHealth()).workspaceWatch, before.workspaceWatch);
+    assert.equal(config.workspaceRoot, root);
+    state.reloadRequired = true;
+    await fs.writeFile(path.join(root, 'Changed.cs'), 'class Changed {}');
+    await router.openWorkspace(root);
+    assert.equal(adapter.getKnownHealth().reloadRequired, true, 'confirmation must not consume required input reload');
+    assert.equal(state.client, host);
+    assert.equal(closes, 0);
+    state.restartRequired = true;
+    await Promise.all(Array.from({ length: 10 }, () => router.openWorkspace(root)));
+    assert.equal(reset.mock.callCount(), 1, 'queued confirmations must recheck state after the first recovery');
+    assert.equal(closes, 1);
+    assert.equal(adapter.getKnownHealth().restartRequired, false);
+    assert.equal(adapter.getKnownHealth().snapshotId, null);
+    // A failed cleanup remains terminal even if another path set only the typed cleanup state.
+    state.client = { active: true, close: async () => { throw new Error('fixture cleanup failed'); } };
+    state.restartRequired = true;
+    await assert.rejects(router.openWorkspace(root), WorkspaceRecoveryRequiredError);
+    const resetCount = reset.mock.callCount();
+    await assert.rejects(router.openWorkspace(root), WorkspaceRecoveryRequiredError);
+    assert.equal(reset.mock.callCount(), resetCount);
+    assert.equal(router.workspaceRecoveryState?.recoveryAction, 'restart_gateway');
+  } finally {
+    if (router.workspaceRecoveryState?.recoveryAction === 'restart_gateway') await assert.rejects(router.dispose());
+    else await router.dispose();
+    assert.ok(path.relative(os.tmpdir(), root).startsWith('wincode-warm-'));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 /** 用固定语义身份提供真实聚合器的输入；工作区故意不同于进程启动目录。 */
 function impactFixture(references: SymbolReference[]) {
   const config = getDefaultConfig(path.resolve('test-tmp/impact-identity-fixture'));

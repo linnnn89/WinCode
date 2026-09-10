@@ -6,6 +6,8 @@
 
 `analyze_change_impact` 及其别名返回一个 JSON 文本块，formattedReport 保留在对象中，不再返回第二份重复 Markdown。没有新增 responseFormat 参数，不要给该工具传 context 专用的格式字段。
 
+0.14.0 的 local-text 查询每次有界扫描实际输入，按内容哈希复用声明解析；新建、删除或修改文件后重新查询，不依据 Git 暂存状态或监听事件认定旧结果有效。内置打包先读取选中文件，再校验内容身份复用；CLI 输出没有可核验输入清单时不缓存。overflow 缺失会重建，但返回的临时文件不是永久存档，跨调用读取失败应重新获取。以上不提供多文件原子快照，也不把文本定位升级为 Roslyn 精确身份。
+
 ## 后端与能力边界
 
 默认 Gateway 使用 WinCode 内置文本能力，查询结果 `source=local-text`。`hello.health.text.semanticConfigured=false` 只描述文本适配器，即使启用 Roslyn 仍为 false；整个实例的提供方看 `hello.codeProvider`，Roslyn 状态看 `hello.health.roslyn`。显式启用 Roslyn 后使用直接 Code Host，失败会报错，不会偷偷改换提供方。外部 Serena 连接配置、启动器及旧 `serena-adapter-fallback` 来源已退役；旧调用方须适配。`hello.codeProvider` 标明实例选择，不能根据仓库中存在 Host 推断当前连接已更新。
@@ -118,6 +120,8 @@ lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details
 按目标选工具，不顺序执行整张表。已知文件范围时直接限定：
 
 选定 Roslyn 重载后，将其 name 和 location 原样传给后续工具：引用使用 symbolName，影响分析及重构使用 target，同时传 symbolLocation。后两者先验证定位再分析，不按名字重选目标；SNAPSHOT_STALE/INPUTS_CHANGED 时须重新搜索。简单名称歧义检查 resolution/candidateCount/candidatesTruncated，不能选第一项。queryComplete=false 不等于零引用。
+
+健康同根 workspace_open 保留 Host/snapshot，不等待业务排空；取消概览确认不会使健康实例进入恢复。真实换根、已知 SDK 重启要求或清理失败仍遵守诊断手册；当前仍允许切换活动根，不能在同一连接交错处理不同项目。
 
 workspace_open 默认返回项目摘要和最多 8 个入口，整份 JSON 默认不超过 8000 个 UTF-16 字符；不生成目录树或统计全仓大小。检查 projectScanComplete，null 统计不等于零。需要目录时用 wincode_list_directory 指定窄路径，查看 scanComplete/truncated/omissions。includeTree:true 可显式取得有界兼容树，不能当成完整仓库清单。maxOutputChars 为 2048–32768；目录 maxDepth 为 1–5，maxEntries 为 1–500。需要生成目录时显式 includeIgnored:true，但不能越过工作区边界。
 

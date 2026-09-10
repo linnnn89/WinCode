@@ -42,6 +42,8 @@ internal static class TrayAcceptance
     public static async Task Run(SettingsWindow window, PipeHub hub, string endpoint, string root)
     {
         var scenarios = new List<string>(); string? failure = null;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        void Stage(string name) => Console.Error.WriteLine($"[tray-ui] {clock.ElapsedMilliseconds}ms thread={Environment.CurrentManagedThreadId} {name}");
         try
         {
             Directory.CreateDirectory(root);
@@ -54,13 +56,13 @@ internal static class TrayAcceptance
             await window.RefreshStatus();
             var idle = hub.Peers.Single(peer => GatewayPeer.Text(peer.Status, "state") == "idle");
             var busy = hub.Peers.Single(peer => GatewayPeer.Text(peer.Status, "state") == "busy");
-            Console.Error.WriteLine("[tray-ui] stale status and release preflight");
+            Stage("stale status and release preflight");
             await VerifyStaleStatus(window, hub, endpoint, idle.Status);
             scenarios.Add("Connected but unresponsive peer becomes unknown, disables release, preserves observation time, and recovers on explicit refresh without replaying control");
-            Console.Error.WriteLine("[tray-ui] repeated rejected registrations");
+            Stage("repeated rejected registrations");
             for (int attempt = 0; attempt < 12; attempt++) await VerifyRejectedRegistration(hub, endpoint, idle.Status);
             scenarios.Add("Authenticated incompatible registration receives a bounded rejection reason visible to the settings hub");
-            Console.Error.WriteLine("[tray-ui] selected instance controls");
+            Stage("selected instance controls");
             Require(!window.SelectInstance(busy.Id), "Busy instance must disable release");
             await window.ReleaseSelected();
             Require(window.LastResult.Contains("工作"), "Backend must refuse release while busy");
@@ -79,15 +81,17 @@ internal static class TrayAcceptance
             await window.ReleaseSelected();
             Require(window.LastResult.Contains("无需释放"), "Repeated release is not a no-op");
             scenarios.Add("Repeated manual release is harmless");
-            Console.Error.WriteLine("[tray-ui] hide and show acknowledgement");
-            window.Hide(); await Task.Delay(300);
+            Stage("before Hide");
+            window.Hide(); Stage("after Hide"); await Task.Delay(300); Stage("after hidden delay");
             Require(idle.Connected && busy.Connected, "Hiding settings disconnected Gateways");
             scenarios.Add("Closing/hiding settings preserves independent Gateway connections");
             var shown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            void OnVisible(object? sender, EventArgs args) { if (window.Visible) shown.TrySetResult(); }
+            void OnVisible(object? sender, EventArgs args) { if (window.Visible) { Stage("VisibleChanged true"); shown.TrySetResult(); } }
             window.VisibleChanged += OnVisible;
             try {
-                await Task.Run(() => Program.ShowExisting(endpoint));
+                Stage("before ShowExisting worker");
+                await Task.Run(() => { Stage("ShowExisting worker entered"); Program.ShowExisting(endpoint); Stage("ShowExisting worker returned"); });
+                Stage("show acknowledgement received");
                 await shown.Task.WaitAsync(TimeSpan.FromSeconds(3));
                 Require(hub.Peers.Count(peer => peer.Connected) == 2, "Showing existing settings changed instance connections");
             } finally { window.VisibleChanged -= OnVisible; }
@@ -95,6 +99,7 @@ internal static class TrayAcceptance
         }
         catch (Exception error) { failure = error.ToString(); Environment.ExitCode = 1; }
         finally {
+            Stage("writing native report");
             await File.WriteAllTextAsync(Path.Combine(root, "tray-ui-report.json"), JsonSerializer.Serialize(new { success = failure == null, scenarios, error = failure,
                 limitation = "Actual WinForms controls and secured Named Pipe; simulated Roslyn backends. Physical UIA and real Roslyn tested separately." }, new JsonSerializerOptions { WriteIndented = true }));
             window.ExitTray();

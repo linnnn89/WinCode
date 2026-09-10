@@ -7,7 +7,7 @@ import { contractHash } from './ContractHash.js';
 export const WORKSPACE_TOOLS = [
   defineTool<WorkspaceOpenOptions & { path: string }>({
     name: 'workspace_open',
-    description: 'Opens a workspace and returns a compact project summary and at most 8 entry paths. Default output is bounded to 8000 UTF-16 characters; counts describe bounded discovery, not a complete inventory. Directory tree is opt-in and bounded; use wincode_list_directory for focused browsing.',
+    description: 'Opens a workspace and returns a compact project summary and at most 8 entry paths. Reopening the same healthy workspace preserves the Roslyn Host and snapshot; known HOST_RESTART_REQUIRED or workspace recovery still requires explicit recovery. Default output is bounded to 8000 UTF-16 characters; counts describe bounded discovery, not a complete inventory. Directory tree is opt-in and bounded; use wincode_list_directory for focused browsing.',
     inputSchema: {
       type: 'object',
       additionalProperties: true,

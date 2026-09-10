@@ -1,4 +1,5 @@
 import path from 'node:path';
+import crypto from 'node:crypto';
 import type { WinCodeConfig } from '../Core/Config.js';
 import type { AdapterHealth } from '../Core/AdapterStatus.js';
 import type { CacheManager } from '../Core/Cache.js';
@@ -41,14 +42,13 @@ export class LocalTextAdapter {
   /** 精确文件范围在读取正文前应用；受限或失败结果不写入缓存。 */
   async findSymbolsDetailed(query: string, kind?: string, relativePath?: string, operation?: OperationContext): Promise<FindSymbolsResult> {
     checkOperation(operation);
-    const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
-    const key = `local_text_symbols_v2_${JSON.stringify([query, kind, relativePath, this.config.workspaceRoot])}`;
-    const cached = await this.cache.get<FindSymbolsResult>(key, fingerprint);
-    checkOperation(operation);
-    if (cached?.queryComplete) return cached;
+    // Re-enumerate the bounded scan so additions, deletions and missed watch events cannot hide behind a workspace hint.
     const scan = await scanLocalFiles(this.config.workspaceRoot, this.config.timeouts.fileScanMs,
       ['.cs', '.ts', '.tsx', '.js', '.jsx', '.py'], 500,
-      (content, file, extension) => parseTextDeclarations(content, file, extension, () => checkOperation(operation)).filter(symbol =>
+      (content, file, extension) => this.cache.memoizeContent(
+        `text_declarations_v1_${this.config.workspaceRoot}_${file}`,
+        crypto.createHash('sha256').update(content).digest('hex'),
+        () => parseTextDeclarations(content, file, extension, () => checkOperation(operation))).filter(symbol =>
         symbol.name.toLowerCase().includes(query.toLowerCase()) && (!kind || symbol.kind.toLowerCase() === kind.toLowerCase())),
       relativePath, operation);
     const stats = computeTypeMatchStats(scan.items, query);
@@ -60,7 +60,6 @@ export class LocalTextAdapter {
       uniqueTypeMatch: scan.complete && !scan.truncated && stats.uniqueTypeMatch, typeMatchCount: stats.typeMatchCount,
     };
     checkOperation(operation);
-    if (scan.complete) await this.cache.set(key, result, { fingerprint, ttlMs: 300000 });
     return result;
   }
 
@@ -72,11 +71,6 @@ export class LocalTextAdapter {
   async findReferencesDetailed(symbolName: string, relativePath?: string, operation?: OperationContext): Promise<FindReferencesResult> {
     checkOperation(operation);
     if (symbolName.includes('/') || /\[\d+\]/.test(symbolName)) throw new CodeQueryError('LEGACY_SYMBOL_ID', 'Legacy Serena identities are retired; supply a plain name or configure Roslyn and search again.');
-    const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
-    const key = `local_text_references_v1_${JSON.stringify([symbolName, relativePath, this.config.workspaceRoot])}`;
-    const cached = await this.cache.get<FindReferencesResult>(key, fingerprint);
-    checkOperation(operation);
-    if (cached?.queryComplete) return cached;
     const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const match = new RegExp(`\\b${escaped}\\b`);
     const declaration = new RegExp(`(^|\\s)(class|interface|struct|enum)\\s+${escaped}\\b`);
@@ -97,7 +91,6 @@ export class LocalTextAdapter {
       queryComplete: scan.complete, queryError: scan.error, truncated: scan.truncated,
     };
     checkOperation(operation);
-    if (scan.complete) await this.cache.set(key, result, { fingerprint, ttlMs: 300000 });
     return result;
   }
 }

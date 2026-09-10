@@ -12,7 +12,7 @@ import { getDefaultConfig } from '../src/Core/Config.js';
 async function fixture(run: (adapter: LocalTextAdapter, root: string, cached: Map<string, unknown>) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-text-bounds-'));
   const cached = new Map<string, unknown>();
-  const cache = { computeWorkspaceFingerprint: async () => 'fixture', get: async (key: string) => cached.get(key),
+  const cache = { memoizeContent: (_key: string, _fp: string, create: () => unknown) => create(), computeWorkspaceFingerprint: async () => 'fixture', get: async (key: string) => cached.get(key),
     set: async (key: string, value: unknown) => { cached.set(key, value); } };
   const config = getDefaultConfig(root);
 

@@ -206,38 +206,11 @@ export class RepomixAdapter implements IAdapter {
    */
   async packWorkspace(options?: RepomixPackOptions, operation?: OperationContext): Promise<RepomixPackResult> {
     checkOperation(operation);
-    // A disabled request must neither read a CLI snapshot nor join an enabled CLI pack.
     const allowCli = this.config.adapters.repomix.useCli;
-    const policy = allowCli ? 'cli-enabled' : 'builtin-only';
-    const cacheKey = `repomix_pack_v5_${policy}_${this.config.adapters.repomix.customCliPath ?? ''}_${JSON.stringify(options || {})}_${this.config.workspaceRoot}`;
-    const fingerprint = await this.cache.computeWorkspaceFingerprint(this.config.workspaceRoot);
-
-    const cached = await this.cache.get<RepomixPackResult>(cacheKey, fingerprint);
+    // CLI output has no verified input manifest. Only the builtin path caches, after reading its actual inputs.
+    const result = await this.packWorkspaceUncached(options, allowCli, operation);
     checkOperation(operation);
-    if (cached) {
-      return { ...cached, fromCache: true };
-    }
-
-    const inflightKey = `${cacheKey}:${fingerprint}`;
-    const existing = this.inflightPacks.get(inflightKey);
-    if (existing && !operation) {
-      const shared = await existing;
-      return { ...shared, fromCache: true };
-    }
-
-    const pending = this.packWorkspaceUncached(options, allowCli, operation).then(async (result) => {
-      checkOperation(operation);
-      const spilled = await this.spillIfOversized(result);
-      checkOperation(operation);
-      await this.cache.set(cacheKey, spilled, { fingerprint, ttlMs: 1000 * 60 * 10 });
-      return spilled;
-    });
-    if (!operation) this.inflightPacks.set(inflightKey, pending);
-    try {
-      return await pending;
-    } finally {
-      if (!operation) this.inflightPacks.delete(inflightKey);
-    }
+    return result.contentOmitted ? result : this.spillIfOversized(result);
   }
 
   private async packWorkspaceUncached(options: RepomixPackOptions | undefined, allowCli: boolean, operation?: OperationContext): Promise<RepomixPackResult> {
@@ -414,7 +387,7 @@ export class RepomixAdapter implements IAdapter {
         }
       }
       checkOperation(operation);
-      return this.formatPackedResult(collectedFiles, root, options?.outputFormat);
+      return this.cacheCollectedFiles(collectedFiles, root, options, operation);
     }
 
     const defaultExcludes = new Set([
@@ -497,7 +470,31 @@ export class RepomixAdapter implements IAdapter {
     await walk(root);
 
     checkOperation(operation);
-    return this.formatPackedResult(collectedFiles, root, options?.outputFormat);
+    return this.cacheCollectedFiles(collectedFiles, root, options, operation);
+  }
+
+  private async cacheCollectedFiles(files: { relPath: string; content: string }[], root: string,
+    options?: RepomixPackOptions, operation?: OperationContext): Promise<RepomixPackResult> {
+    // Length-delimited tuples bind both file selection and the exact bytes decoded for this pack.
+    const digest = crypto.createHash('sha256');
+    for (const file of files) digest.update(JSON.stringify([file.relPath, file.content]));
+    const fingerprint = digest.digest('hex');
+    const cacheKey = `repomix_inputs_v1_${root}_${JSON.stringify(options ?? {})}`;
+    const cached = await this.cache.get<RepomixPackResult>(cacheKey, fingerprint);
+    checkOperation(operation);
+    if (cached) return { ...cached, fromCache: true };
+    const inflightKey = `${cacheKey}:${fingerprint}`;
+    const existing = this.inflightPacks.get(inflightKey);
+    if (!operation && existing) return { ...await existing, fromCache: true };
+    const pending = (async () => {
+      const result = await this.spillIfOversized(this.formatPackedResult(files, root, options?.outputFormat));
+      checkOperation(operation);
+      await this.cache.set(cacheKey, result, { fingerprint, ttlMs: 600_000 });
+      return result;
+    })();
+    if (!operation) this.inflightPacks.set(inflightKey, pending);
+    try { return await pending; }
+    finally { if (!operation) this.inflightPacks.delete(inflightKey); }
   }
 
   /**

@@ -379,13 +379,29 @@ export class ToolRouter {
       if (this.workspaceRecovery?.recoveryAction === 'restart_gateway')
         throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
 
+      const previousRoot = this.config.workspaceRoot;
+      // A healthy same-root confirmation is read-only. Do not put business/status requests behind a drain barrier.
+      const resolved = path.relative(previousRoot, targetPath) === '' ? path.resolve(previousRoot) : path.resolve(targetPath);
+      const knownRoslyn = this.roslyn?.getKnownHealth();
+      const sameWorkspace = !this.workspaceRecovery && this.watch.getStatus().active &&
+        Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
+      if (sameWorkspace && !knownRoslyn?.restartRequired && !knownRoslyn?.cleanupFailed) {
+        checkOperation({ signal });
+        const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
+        checkOperation({ signal });
+        const result = await this.workspace.openWorkspace(resolved, options);
+        checkOperation({ signal });
+        this.session.touch();
+        this.session.setFingerprint(fp);
+        return result;
+      }
+
       if (!this.switchingPromise) {
         this.switchingPromise = new Promise<void>((resolve) => {
           this.resolveSwitching = resolve;
         });
       }
 
-      const previousRoot = this.config.workspaceRoot;
       let rootPrepared = false;
       let phase = 'drain';
       try {
@@ -398,22 +414,23 @@ export class ToolRouter {
           );
         }
 
-        const resolved = path.resolve(targetPath);
-        const sameWorkspace =
-          !this.workspaceRecovery && this.watch.getStatus().active && Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
-
         phase = 'fingerprint';
         const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
         checkOperation({ signal });
         phase = 'workspace';
-        const result = await this.workspace.openWorkspace(targetPath, options);
+        const result = await this.workspace.openWorkspace(resolved, options);
         rootPrepared = true;
         checkOperation({ signal });
 
         if (sameWorkspace) {
           phase = 'refresh';
-          // 同根 workspace_open 是显式恢复入口；停止旧 Host 后由下一次搜索按新 SDK/输入加载。
-          if (this.roslyn) { phase = 'roslyn-reset'; await this.roslyn.resetConnection(); }
+          // 重复确认保留健康 Host；只有已知的重启要求走显式恢复。
+          // INPUTS_CHANGED 等重载状态仍由下一次搜索处理，不能在此丢弃。
+          const knownRoslyn = this.roslyn?.getKnownHealth();
+          if (this.roslyn && (knownRoslyn?.restartRequired || knownRoslyn?.cleanupFailed)) {
+            phase = 'roslyn-reset';
+            await this.roslyn.resetConnection();
+          }
           const previousFp = this.session.current?.fingerprint ?? null;
           this.session.touch();
           this.session.setFingerprint(fp);

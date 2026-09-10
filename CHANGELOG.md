@@ -2,6 +2,16 @@
 
 ## 0.14.0 (unreleased)
 
+- Validate parent/child creation times in acceptance process-tree snapshots, rejecting stale parent-PID edges after Windows PID reuse. Keep strict exit checks for the real observed Code Host descendants.
+
+- Synchronize bilingual setup/cache guidance, architecture/data flow, managed Skill manuals, native Host guidance and remaining roadmap with the verified 0.14.0 behavior. Separate healthy confirmation from recovery and current implementation from planned project binding/admission limits.
+
+- Bind builtin context cache reuse to the selected file contents; rescan bounded local-text inputs and reuse declarations by content within the existing memory budget. Untracked directories, deep files, additions/deletions and same-size edits no longer reuse stale query results. CLI output without an input manifest is not reused as a cached snapshot.
+- Treat a missing overflow attachment as a cache miss for memory and disk readers, including after another process prunes the shared cache.
+- Confirm healthy same-root workspaces without draining business requests. Cancelling read-only confirmation does not enter recovery or reset a healthy Host; real rebind and cleanup failures retain the recovery gate.
+- Preserve the healthy Roslyn Host and snapshot on repeated same-workspace opens, including Windows case/separator aliases. Retain typed restart/reload requirements and sticky cleanup recovery; concurrent recovery confirmations reset only once.
+- Remove cancelled mutex waiters immediately while preserving FIFO order and ownership through running-task cleanup. This is cancellation hygiene; bounded MCP admission remains planned.
+
 - Make stale/failed tray observations explicit, refresh passively before manual release, report registration failures and keep native listeners available after malformed registrations. Preserve warm Roslyn state across settings visibility and connection changes.
 - Bind native Release source inputs and complete published outputs at build time; reject stale native artifacts even when regenerating the delivery manifest.
 

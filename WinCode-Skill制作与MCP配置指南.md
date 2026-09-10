@@ -1,11 +1,11 @@
 # WinCode Skill 安装、维护与 MCP 配置指南
 
-适用于 **0.13.1**，核对日期 2026-09-09（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
+适用于 **0.14.0**，核对日期 2026-09-10（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
 
 ## 1. 三个独立对象
 
 - **Skill 手册**指导 Agent 选择工具和使用规范字段，不启动服务器。
-- **磁盘交付物**包含 Gateway、原生 UIA/Code Host 的完整发布目录、构建身份和交付清单。
+- **磁盘交付物**包含 Gateway、原生 UIA/Code Host 及可选 Tray 的完整发布目录、构建身份和交付清单。
 - **MCP 连接实例**是客户端已经启动的进程；更新源码、构建或复制 Skill 都不会自动更新这个进程。
 
 架构与数据流见 [架构说明](WinCode-架构与数据流说明.md)。待办见 [当前计划](WinCode-下一轮工程化迭代计划书.md)，不要按历史计划重复安装和升级。
@@ -22,7 +22,7 @@ npm run check
 npm run delivery:verify
 ```
 
-`check` 进行类型检查、Gateway 构建、锁定 NuGet restore、Release UIA/Code Host 与控制台夹具构建、核心回归、新 stdio 验证与交付清单生成。交互桌面验收另执行 `npm run check:desktop`，需要可用 Windows 桌面。真实 Roslyn/TavernDesk 验收按对应入口执行，详见 [CONTRIBUTING](CONTRIBUTING.md)。Roslyn 维护脚本会锁定还原并构建/发布 Code Host，也会还原生成夹具，不还原用户目标应用；NuGet 缓存缺包时可能访问包源，不能将“不自动安装 SDK”理解为完全离线。
+`check` 进行类型检查、Gateway 构建、锁定 NuGet restore、Release UIA/Code Host/Tray 与控制台夹具构建、核心回归、新 stdio 验证与交付清单生成。交互桌面验收另执行 `npm run check:desktop`，需要可用 Windows 桌面。真实 Roslyn/TavernDesk 验收按对应入口执行，详见 [CONTRIBUTING](CONTRIBUTING.md)。Roslyn 维护脚本会锁定还原并构建/发布 Code Host，也会还原生成夹具，不还原用户目标应用；NuGet 缓存缺包时可能访问包源，不能将“不自动安装 SDK”理解为完全离线。
 
 `npm run build` 只构建 Gateway，不能单独证明原生 Host、Skill 和整个交付物一致。生产使用发布的 Release Host；`npm run dev` 才显式启用开发回退。报告位于 `test-tmp/check/`，内容哈希不是发布签名。
 
@@ -67,7 +67,9 @@ npm run skill:check -- C:/Users/40218/.agents/skills/wincode
 }
 ```
 
-不同客户端配置格式可能不同；本例不能直接替代 Codex 自身配置文件格式。不要重复注册多个同名或路径不同的旧实例。WinCode 走 stdio，无需另设 HTTP 服务。
+不同客户端配置格式可能不同；本例不能直接替代 Codex 自身配置文件格式。不要重复注册多个同名或路径不同的旧实例。WinCode 走 stdio，无需另设 HTTP 服务。一个实例仍只有一个可切换的活动工作区，N1 固定项目尚未实施；不同项目并发应各自配置明确的 --workspace 和不同实例名，不能在同一连接交错切换。健康同根 workspace_open 保留热态，不是清理屏障；已知故障按 diagnostics 的恢复动作处理。
+
+可选托盘按 README 启动，并仅给需要管理的实例添加独立参数 --tray。默认不连接托盘、不设置自启动；自动释放关闭，设置内只允许用户手动释放，忙碌时拒绝且不延后执行。本文仅更新配置说明，不代表已修改任何已安装客户端。
 
 ## 5. 验证实际连接
 
@@ -87,6 +89,8 @@ npm run skill:check -- C:/Users/40218/.agents/skills/wincode
 | --- | --- |
 | 源码是新版，hello 返回旧版 | 核对实际命令、路径、instanceId 和启动时间；通过客户端重连，不以强杀宿主或复制文件冒充完成 |
 | 字段被忽略，结果不像预期 | 对照规范字段表和实际工具 schema；容忍未知字段并不赋予其语义 |
+| 修改文件后仍看到旧正文 | 核对实际连接 buildId；本轮修复按实际内容校验缓存，旧运行进程需重连。文件或附件引用跨调用不保证永久有效，重新取证而非要求用户先 git add |
+| 取消后客户端已返回但 Host 尚在收尾 | 客户端取消不等于服务端清理完成；同根打开也不再等待清理，检查实际在途状态，不反复重启 |
 | Host 缺失或身份不符 | 完整执行锁定构建和 delivery:verify；不混用旧 DLL、新 Gateway 或开发 Host |
 | Roslyn/Repomix 不可用 | 先核对 provider、显式配置、项目求值许可、已知健康和恢复动作；Roslyn 失败不会暗中换成本地文本，Repomix 降级不代表语义验收成功 |
 | Roslyn 返回候选且 references 为空 | 简单名请求未查询引用；按 signature/file/project 消歧，再传返回的 name 与完整 symbolLocation，不能当作零引用 |

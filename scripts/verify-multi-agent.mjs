@@ -150,20 +150,20 @@ try {
       protectedLocationError: stale.data.errorCode, description: 'Per-request locking does not bind a multi-call agent workflow to its workspace; ordinary names and relative paths follow the last workspace_open.' });
     return { directory };
   });
-  await scenario('same-path workspace_open invalidates a healthy warm Host', async () => {
+  await scenario('same-path workspace_open preserves a healthy warm Host', async () => {
     const target = await search(a, 'B');
     const before = ownedProcesses(a.transport.pid); remember(before);
     const oldHost = before.filter(p => p.ParentProcessId === a.transport.pid && p.CommandLine?.includes(host));
     assert.equal(oldHost.length, 1);
     await ok(a, 'workspace_open', { path: path.join(root, 'B') });
     const hello = await ok(a, 'wincode_hello_world');
-    assert.equal(hello.health.roslyn.processAlive, false);
-    assert.equal(observedSurvivors(oldHost).length, 0);
+    assert.equal(hello.health.roslyn.processAlive, true);
+    assert.equal(observedSurvivors(oldHost).length, 1);
     const next = await search(a, 'B'); remember(ownedProcesses(a.transport.pid));
-    assert.notEqual(next.location.snapshotId, target.location.snapshotId);
-    report.findings.push({ id: 'same-workspace-reopen', observed: true, oldHostPid: oldHost[0].ProcessId,
+    assert.equal(next.location.snapshotId, target.location.snapshotId);
+    report.findings.push({ id: 'same-workspace-reopen', observed: false, oldHostPid: oldHost[0].ProcessId,
       beforeSnapshot: target.location.snapshotId, afterSnapshot: next.location.snapshotId,
-      description: 'Repeated opening of the same healthy workspace explicitly resets Roslyn and causes the next search to reload.' });
+      description: 'Repeated opening of the same healthy workspace preserves its live Host and snapshot.' });
   });
   await scenario('closing one client leaves the other processes and snapshots usable', async () => {
     await a.client.close(); a.closed = true;

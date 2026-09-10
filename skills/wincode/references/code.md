@@ -2,9 +2,13 @@
 
 以下为 MCP 工具名和参数；以客户端实际 Schema 为准。
 
+0.15.0 起，每个连接固定到启动工作区。推荐显式传入 --workspace <绝对目录>；省略时固定到服务启动 cwd，不能稍后用 workspace_open 改根。hello.health.workspaceBinding 包含 mode=fixed、root 和 source（argument/cwd/configuration）；其他项目使用独立连接。Windows 大小写/分隔符及规范化后同根拼写保留原身份，不接受 junction/链接别名。WORKSPACE_MISMATCH 返回 activeWorkspace/requestedWorkspace 与 select_workspace_connection；不要忽略错误继续操作或宣称目标根已改变。
+
 0.13.1 的本地声明扫描覆盖 .cs/.ts/.tsx/.js/.jsx/.py，屏蔽注释、字符串以及整个 JSX 元素（含其中的表达式），签名与行号仍来自原文。无法可靠定界、未闭合或嵌套超限的文件标记 lexical-uncertainty，queryComplete=false 且不缓存完整空结果；这不是完整语法解析，复杂声明可能省略。引用搜索仍为文本线索，不提供编译器语义或精确身份。
 
 `analyze_change_impact` 及其别名返回一个 JSON 文本块，formattedReport 保留在对象中，不再返回第二份重复 Markdown。没有新增 responseFormat 参数，不要给该工具传 context 专用的格式字段。
+
+原始参数按 UTF-8 JSON 共享 64 KiB 上限，包含未知字段。query/symbolName 最长 256，kind 最长 128，路径/target 最长 4096，goal 最长 8192；其他字段按当前 schema。各字段分别合法但合计超限仍拒绝。32 个业务槽包含排队与执行，组合工具不重复占用外层容量；SERVER_BUSY 不自动重试，排队计入整个请求预算。
 
 0.14.0 的 local-text 查询每次有界扫描实际输入，按内容哈希复用声明解析；新建、删除或修改文件后重新查询，不依据 Git 暂存状态或监听事件认定旧结果有效。内置打包先读取选中文件，再校验内容身份复用；CLI 输出没有可核验输入清单时不缓存。overflow 缺失会重建，但返回的临时文件不是永久存档，跨调用读取失败应重新获取。以上不提供多文件原子快照，也不把文本定位升级为 Roslyn 精确身份。
 
@@ -14,7 +18,7 @@
 
 Roslyn 调用顺序：用 wincode_find_code_symbol 搜索（query 最长 256 字符），根据 signature、file 和 location.project 选择具体声明；再把该项的 name 作为 symbolName、完整 location 对象作为 symbolLocation 传给 wincode_find_references。location 包含 snapshotId（32 位小写十六进制）、project/file（工作区内相对路径）和 position（非负零基 UTF-16）。不手工猜偏移；同名/重载返回候选，不能自动选第一项。简单名称查询在当前不完整范围下只返回候选，单候选也需明确定位；candidatesTruncated=true 时 candidateCount 可能缺省，不能当作全量计数。
 
-受跟踪输入的变化、重载或工作区切换会使 location 失效；无关文件编辑不等于编译输入变化。SNAPSHOT_STALE/INPUTS_CHANGED 后，下一次显式符号搜索执行所需重载；失败请求不自动重放。若源码编辑后直接搜索，首个请求也可能报告过期，再显式搜索恢复。HOST_RESTART_REQUIRED 按诊断手册重新打开工作区。本地文本实例明确拒绝 symbolLocation；旧 namePath/重载序号不能迁移为 Roslyn 身份。semanticContext 保留快照、输入检查点、排除生成器数和范围，queryComplete=false 时零引用仍不能证明可删除。
+受跟踪输入变化、重载、手动释放或连接更换会使 location 失效；无关文件编辑不等于编译输入变化。SNAPSHOT_STALE/INPUTS_CHANGED 后，下一次显式符号搜索执行所需重载；失败请求不自动重放。源码编辑后首次搜索也可能报告过期，再显式搜索恢复。HOST_RESTART_REQUIRED 按诊断手册对同一工作区执行恢复。本地文本实例拒绝 symbolLocation；旧 namePath/重载序号不能迁移为 Roslyn 身份。semanticContext 保留快照、输入检查点、排除生成器数和范围，queryComplete=false 时零引用仍不能证明可删除。
 
 维护者可用启动参数 `--roslyn-config <配置 JSON 的绝对路径>` 显式选择；不从目标仓库自动发现执行配置。JSON 对应宿主 WinCodeConfig.adapters.roslyn，最多 16 KiB，示例路径须替换成已安装/已构建的实际文件：
 
@@ -31,11 +35,11 @@ Roslyn 调用顺序：用 wincode_find_code_symbol 搜索（query 最长 256 字
 }
 ```
 
-allowProjectEvaluation 表示允许 MSBuild 设计时求值执行项目 targets，须符合用户授权；不会自动 restore 或下载 SDK。project 是相对当前工作区的固定入口；A→B 切换后使用 B 中同一路径，缺失就报错，不猜其他项目。配置和 TFM 当前固定于实例，要改变它们需更新启动配置并重启 Gateway。dotnetPath/hostPath 必须为绝对普通文件，重解析路径不支持；子进程使用指定 dotnet 的安装根，不改系统环境。可选 loadTimeoutMs 为 1–120000（默认 120000），queryTimeoutMs 为 1–60000（默认 30000），不属于 MCP 请求参数。
+allowProjectEvaluation 表示允许 MSBuild 设计时求值执行项目 targets，须符合用户授权；不会自动 restore 或下载 SDK。project 是相对固定启动工作区的入口，缺失就报错，不猜其他项目。工作区、配置和 TFM 固定于实例，改变它们需按授权更新启动配置并重新建立连接。dotnetPath/hostPath 必须为绝对普通文件，重解析路径不支持；子进程使用指定 dotnet 安装根，不改系统环境。可选 loadTimeoutMs 为 1–120000（默认 120000），queryTimeoutMs 为 1–60000（默认 30000），不属于 MCP 请求参数。
 
 维护验收使用 `npm run test:roslyn-host`（独立 Host）和 `npm run test:roslyn-gateway`（真实 stdio MCP）。维护脚本按显式 WINCODE_DOTNET_PATH、项目 .deps、DOTNET_HOST_PATH、PATH 顺序寻找已安装 SDK，并核对 global.json 的精确版本；不下载安装。当前要求 10.0.303。这些脚本会锁定还原并构建/发布 WinCode Code Host，也会还原生成的测试夹具，保留 test-tmp 报告；不还原用户目标应用。现有 NuGet 缓存缺包时还原可能访问包源，不能将“不下载 SDK”理解成完全离线。Gateway 验收使用完整发布目录的异地副本。此验收不证明当前 Codex 连接已更新或无 SDK 的机器可运行。
 
-`additionalInputs` 是可选启动配置，默认空数组。例如自定义构建读取现存的 `schema.yaml` 和非标准导入 `build-inputs/custom.rules`，可填 `["schema.yaml","build-inputs/custom.rules"]`。最多 32 个工作区相对文件路径，数组 JSON 最长 4096 个 UTF-16 字符；不接受根外/绝对路径、重复项、目录、通配符或链接。缺失项报 INPUT_UNAVAILABLE，不静默删除；创建或恢复文件后再显式搜索。切换工作区后列表按新根解释，各根均须具备所列文件。修改列表需更新启动配置并重启 Gateway，普通 MCP 参数不能添加输入或获取项目执行许可。
+`additionalInputs` 是可选启动配置，默认空数组。例如构建读取 schema.yaml 和 build-inputs/custom.rules，可填 ["schema.yaml","build-inputs/custom.rules"]。最多 32 个固定工作区相对文件路径，数组 JSON 最长 4096 个 UTF-16 字符；不接受根外/绝对路径、重复项、目录、通配符或链接。缺失项报 INPUT_UNAVAILABLE，不静默删除；创建或恢复文件后再显式搜索。其他项目连接分别配置自己的列表。修改列表需更新启动配置并重启 Gateway，普通 MCP 参数不能添加输入或获取项目执行许可。
 
 Host 通过独立进程的 JSON 行协议 v2 工作，非 MCP tools/call：启动参数为 `--allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK [ADDITIONAL_INPUTS_JSON]`；加载后 ready 帧给出 protocolVersion=2、snapshot 及 inputPolicy={version:1,additionalInputs:[...]}。Gateway 必须核对实际列表；旧 Host 缺少输入策略确认或列表不一致时拒绝接入，即使同为协议 v2 也不能假定兼容。项目求值可能执行 targets，不自动 restore；本维护验收只使用获准的生成夹具。协议及启动方式以源码 `tools/WinCode.Code.Host/Program.cs` 注释为准，尚非稳定公共接口。
 
@@ -109,7 +113,7 @@ lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details
 
 | 目的 | 调用 |
 |---|---|
-| 打开/切换项目 | workspace_open({path: "I:/project"}) |
+| 确认固定项目 | workspace_open({path: "I:/project"})；其他项目选择对应连接 |
 | 按需浏览目录 | wincode_list_directory({path: "src", maxDepth: 1, maxEntries: 100}) |
 | 项目依赖概览 | wincode_analyze_workspace({maxDepth: 2}) |
 | 找符号 | wincode_find_code_symbol({query: "Save"}) |
@@ -121,7 +125,7 @@ lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details
 
 选定 Roslyn 重载后，将其 name 和 location 原样传给后续工具：引用使用 symbolName，影响分析及重构使用 target，同时传 symbolLocation。后两者先验证定位再分析，不按名字重选目标；SNAPSHOT_STALE/INPUTS_CHANGED 时须重新搜索。简单名称歧义检查 resolution/candidateCount/candidatesTruncated，不能选第一项。queryComplete=false 不等于零引用。
 
-健康同根 workspace_open 保留 Host/snapshot，不等待业务排空；取消概览确认不会使健康实例进入恢复。真实换根、已知 SDK 重启要求或清理失败仍遵守诊断手册；当前仍允许切换活动根，不能在同一连接交错处理不同项目。
+健康同根 workspace_open 保留 Host/snapshot，不等待业务排空；取消概览确认不会使健康实例进入恢复。已知 SDK 重启要求或清理失败仍遵守诊断手册；另一根在任何重置、缓存、watcher 或 trash 变更前被拒绝，内部 WorkspaceManager 也不能改根。
 
 workspace_open 默认返回项目摘要和最多 8 个入口，整份 JSON 默认不超过 8000 个 UTF-16 字符；不生成目录树或统计全仓大小。检查 projectScanComplete，null 统计不等于零。需要目录时用 wincode_list_directory 指定窄路径，查看 scanComplete/truncated/omissions。includeTree:true 可显式取得有界兼容树，不能当成完整仓库清单。maxOutputChars 为 2048–32768；目录 maxDepth 为 1–5，maxEntries 为 1–500。需要生成目录时显式 includeIgnored:true，但不能越过工作区边界。
 
@@ -145,7 +149,7 @@ candidateFiles 最多 20 个，仅表示优先，仍可能追加符号检索结�
 
 lineRanges 为闭区间、1 起始行号，最多 8 个文件，每文件一个范围、最多 500 行；越界报告缺口，预算不足仍可能截断。它跳过符号搜索，仅返回指定范围；不能与 symbol 或 includeFullText=true 同用。
 
-取证路由与停止条件：已知行号直接 lineRanges；只需声明附近片段时用 scopeFiles+symbol。审核已知方法的异常处理、取消或资源释放时，默认 24 行窗口往往不足；若已有文件读取工具，优先用有界 rg 上下文和文件读取一起覆盖所需分支，不必先调用 MCP 再逐段续读。小文件也可用 scopeFiles+includeFullText:true 在预算内读取正文，仍检查截断。仅知道文件用 scopeFiles 预览；需要发现其他文件时才用 candidateFiles/关键词检索。先检查片段是否覆盖问题所需代码，覆盖则继续分析，不例行再拉全文或重复相同范围。重名/缺失时收窄文件或转向已知行号；语义完整性不足需要相应语义工具，重复同一正则请求不能补足。文件修改、工作区切换、截断或新问题需要不同代码时重新取证；本工具没有跨调用证据有效期保证，不能把旧片段当成当前文件。
+取证路由与停止条件：已知行号直接 lineRanges；只需声明附近片段时用 scopeFiles+symbol。审核已知方法的异常处理、取消或资源释放时，默认 24 行窗口往往不足；若已有文件读取工具，优先用有界 rg 上下文和文件读取一起覆盖所需分支，不必先调用 MCP 再逐段续读。小文件也可用 scopeFiles+includeFullText:true 在预算内读取正文，仍检查截断。仅知道文件用 scopeFiles 预览；需要发现其他文件时才用 candidateFiles/关键词检索。先检查片段是否覆盖问题所需代码，覆盖则继续分析，不例行再拉全文或重复相同范围。重名/缺失时收窄文件或转向已知行号；语义完整性不足需要相应语义工具，重复同一正则请求不能补足。文件修改、更换连接、截断或新问题需要不同代码时重新取证；本工具没有跨调用证据有效期保证，不能把旧片段当成当前文件。
 
 维护者可运行 npm run benchmark:agent -- 1 做单轮检查，或 -- 3 做三轮对照；报告在 test-tmp/agent-efficiency。它比较十类固定脚本场景（含既有 C# 夹具）的调用、返回字符、重复显示行和证据断言，使用真实 MCP handler 与本地回退，关闭外部后端。数据不代表真实用户任务频率、模型完成率或缓存收益，不据此宣称通用提速。Schema v2 校验当前文件、行号、正文和状态，异常保留为失败记录；复用只依赖受控夹具的可信无变化事件，修改后必须重取，不能作为生产环境的新鲜度判断。
 

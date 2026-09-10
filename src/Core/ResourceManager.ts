@@ -110,13 +110,15 @@ export class GatewayRestartRequiredError extends AggregateError {
  * Cancels queue waiting. Once fn starts, it owns cooperative cancellation and cleanup;
  * releasing this lock on abort before fn settles would permit concurrent owners.
  */
+export interface QueueObserver { wait(): () => void }
+
 export class Mutex {
   private running = false;
   private readonly waiting = new Set<() => void>();
 
   get pendingCount(): number { return this.waiting.size; }
 
-  runExclusive<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  runExclusive<T>(fn: () => Promise<T>, signal?: AbortSignal, observer?: QueueObserver): Promise<T> {
     if (signal?.aborted) {
       return Promise.reject(
         new AbortError(signal.reason ? String(signal.reason) : 'The operation was aborted')
@@ -124,14 +126,17 @@ export class Mutex {
     }
 
     return new Promise<T>((resolve, reject) => {
+      const resume = this.running ? observer?.wait() : undefined;
       const cancelled = () => {
         // Set insertion order is FIFO; removal releases the closure immediately.
         if (!this.waiting.delete(execute)) return;
+        resume?.();
         signal?.removeEventListener('abort', cancelled);
         reject(new AbortError(signal?.reason ? String(signal.reason) : 'The operation was aborted'));
       };
       const execute = () => {
         this.waiting.delete(execute);
+        resume?.();
         signal?.removeEventListener('abort', cancelled);
         this.running = true;
         // Keep asynchronous entry and recheck cancellation before invoking work.
@@ -163,9 +168,20 @@ function processExists(pid: number): boolean {
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
 }
 
-async function waitForProcessExit(pid: number): Promise<void> {
+type OwnedProcess = ChildProcess | {
+  pid?: number | null;
+  kill?: (sig?: NodeJS.Signals) => boolean;
+  exitCode?: number | null;
+  signalCode?: NodeJS.Signals | null;
+};
+
+function hasExited(proc: OwnedProcess): boolean {
+  return proc.exitCode != null || proc.signalCode != null;
+}
+
+async function waitForProcessExit(proc: OwnedProcess, pid: number): Promise<void> {
   const deadline = Date.now() + 2000;
-  while (processExists(pid)) {
+  while (!hasExited(proc) && processExists(pid)) {
     if (Date.now() >= deadline) throw new Error(`Owned process ${pid} did not exit after termination.`);
     await new Promise(resolve => setTimeout(resolve, 20));
   }
@@ -178,8 +194,10 @@ async function waitForProcessExit(pid: number): Promise<void> {
  * (Codex #34614, MCP typescript-sdk #2023, python-sdk #850).
  */
 export async function killProcessTree(
-  proc: ChildProcess | { pid?: number | null; kill?: (sig?: NodeJS.Signals) => boolean }
+  proc: OwnedProcess
 ): Promise<void> {
+  // A ChildProcess retains its old PID after exit. That number may now belong to another process.
+  if (hasExited(proc)) return;
   const pid = proc.pid;
   if (!pid) {
     try {
@@ -194,12 +212,13 @@ export async function killProcessTree(
 
   if (process.platform === 'win32') {
     await taskkillTree(pid);
+    if (hasExited(proc)) return;
     try {
       proc.kill?.('SIGKILL');
     } catch {
       // already reaped by taskkill
     }
-    await waitForProcessExit(pid);
+    await waitForProcessExit(proc, pid);
     return;
   }
 
@@ -216,6 +235,7 @@ export async function killProcessTree(
     const timer = setTimeout(resolve, 40);
     timer.unref?.();
   });
+  if (hasExited(proc)) return;
   try {
     process.kill(-pid, 'SIGKILL');
   } catch {
@@ -225,7 +245,7 @@ export async function killProcessTree(
       // ignore
     }
   }
-  await waitForProcessExit(pid);
+  await waitForProcessExit(proc, pid);
 }
 
 export interface ResourceCloseResult extends ManagedResourceInfo {
@@ -304,9 +324,16 @@ export class ResourceManager {
 
   registerProcess(owner: string, proc: ChildProcess): string {
     const id = this.register('process', owner, () => killProcessTree(proc));
-    const drop = () => this.unregister(id);
-    proc.once('exit', drop);
-    proc.once('close', drop);
+    const drop = () => {
+      this.unregister(id);
+      proc.removeListener('exit', drop);
+      proc.removeListener('close', drop);
+    };
+    if (hasExited(proc)) drop();
+    else {
+      proc.once('exit', drop);
+      proc.once('close', drop);
+    }
     return id;
   }
 
@@ -337,10 +364,17 @@ export class ResourceManager {
     const failures: Error[] = [];
     for (const [index, item] of items.entries()) {
       try {
-        const pending = Promise.resolve().then(() => item.dispose());
+        let invoked = false;
+        const pending = Promise.resolve().then(() => {
+          // Recheck at invocation, including unregisters during the preceding await/microtask.
+          if (this.resources.get(item.id) !== item) return;
+          invoked = true;
+          return item.dispose();
+        });
         if (Number.isFinite(this.closeDeadline))
           await withTimeout(pending, Math.max(1, (this.closeDeadline - Date.now()) / (items.length - index)), `close-${item.owner}`);
         else await pending;
+        if (!invoked) continue;
         this.resources.delete(item.id);
         this.recordClose(item);
       } catch (error) {

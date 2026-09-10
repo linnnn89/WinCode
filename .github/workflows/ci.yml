@@ -59,13 +59,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:manual-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Preserve bounded check report
+      - name: Preserve check reports and stage logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: check-node-${{ matrix.node }}
           path: |
             test-tmp/check/**/report.json
+            test-tmp/check/**/*.log
+            test-tmp/check/**/*.xml
             test-tmp/error-contracts/**/report.json
             test-tmp/roslyn-host/**/report.json
             test-tmp/roslyn-gateway/**/report.json

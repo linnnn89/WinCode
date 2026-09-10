@@ -9,17 +9,19 @@ import { resolveTrayEndpoint, TrayClient } from './Gateway/TrayClient.js';
 
 async function main() {
   let workspaceRoot = process.cwd();
+  let workspaceRootSource: 'argument' | 'cwd' = 'cwd';
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--workspace' || args[i] === '-w') {
-      if (args[i + 1]) {
-        workspaceRoot = args[i + 1];
-        i++;
-      }
+      const target = args[++i];
+      if (!target || !path.isAbsolute(target)) throw new Error('--workspace requires an absolute directory path.');
+      workspaceRoot = target;
+      workspaceRootSource = 'argument';
     }
   }
 
   const config = getDefaultConfig(workspaceRoot);
+  config.workspaceRootSource = workspaceRootSource;
   // 此文件是用户显式选择的启动配置，不从目标仓库自动发现或接受 MCP 参数指定执行程序。
   const roslynIndex = args.indexOf('--roslyn-config');
   if (roslynIndex >= 0) {

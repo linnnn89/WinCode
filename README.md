@@ -22,7 +22,7 @@ WinCode is a local MCP server built for Windows and .NET engineering. It bridges
 - **Inspect the running app:** Enumerate visible windows, query specific controls or subtrees, and capture numbered visual overlays without activating or stealing focus from the target.
 - **Review with evidence:** Trace on-screen widgets back to literal XAML declaration tags, line numbers, and file hashes, with transparent reporting for ambiguity, truncation, or degraded upstreams.
 
-Current source version: **0.14.0**. All UI tools are strictly read-only and non-destructive. See [CHANGELOG](CHANGELOG.md) for full version history.
+Current source version: **0.15.0**. All UI tools are read-only. See [CHANGELOG](CHANGELOG.md) for the fixed-workspace migration and version history.
 
 **Platform and compatibility:** Windows 11 x64 is the baseline for this project's local development and testing. Identical functionality, behavior, and performance are not guaranteed on other operating systems, other Windows versions, or different dependency versions. macOS and Linux users are encouraged to **fork this repository and adapt and validate it locally** for their platform. Use the dependency versions documented and pinned in this repository as the reference environment.
 
@@ -40,9 +40,9 @@ npm run check
 npm run delivery:verify
 ```
 
-Add WinCode as a stdio MCP server in your agent client configuration (for clients that support `mcpServers`). Choose either startup mode below.
+Add WinCode as a stdio MCP server in your agent client configuration (for clients that support `mcpServers`). Each connection binds one project at startup; an explicit absolute `--workspace` is recommended.
 
-**Choose a project when needed:** If the target project is not yet known, or you want to query different projects in sequence, configure only the server entry point:
+**Bind the launch directory:** Use this only when the client reliably starts the server in the intended project:
 
 ```json
 {
@@ -55,9 +55,13 @@ Add WinCode as a stdio MCP server in your agent client configuration (for client
 }
 ```
 
-Without `--workspace`, WinCode initially uses the server process's current working directory, which may differ from your intended project. Before querying, ask the agent to call `workspace_open` with the target project's absolute path, for example `workspace_open({"path":"C:/path/to/project"})`. Repeat this when switching projects; the server installation path stays the same. Confirming the same healthy workspace keeps the Roslyn Host/snapshot warm and does not drain active queries. Cancelling that confirmation does not force recovery; known restart/cleanup failures still follow the explicit recovery path. One server process has one active workspace, so calls sharing that process must not interleave queries for different projects. For concurrent independent projects, configure separate server instances with distinct names and explicit workspace paths.
+Without `--workspace`, WinCode binds the launch directory for the lifetime of that connection. `health.workspaceBinding` reports the fixed root and its source. `workspace_open` confirms or recovers that root; a different root returns `WORKSPACE_MISMATCH` before draining requests or changing resources. Select a connection configured for the other project. Project-scoped configurations may reuse a server name; multiple instances in one shared configuration need distinct names. Healthy same-root confirmation preserves the Host/snapshot and does not drain active queries; known recovery failures still follow the explicit recovery path.
 
-**Specify a project at startup:** Add `--workspace` followed by the project directory:
+Known limitation: two Roslyn Hosts cold-loading the same physical project concurrently can collide on MSBuild-generated files under `obj` and return `PROJECT_LOAD_FAILED`. Fixed workspace binding does not isolate those build outputs. This remains an open issue; the passing admission benchmark starts the second same-project Host afterward.
+
+Draft checkpoint: a private design-time output implementation is now in source, but its final build and production MCP acceptance are pending. Earlier passing reports and existing local artifacts do not validate this last integration. See the [next-session checklist](WinCode-下一轮工程化迭代计划书.md#2026-09-11-恢复顺序).
+
+**Specify a project at startup (recommended):** Add `--workspace` followed by the existing project directory's absolute path:
 
 ```json
 {
@@ -74,7 +78,7 @@ Without `--workspace`, WinCode initially uses the server process's current worki
 
 For graphical configuration interfaces:
 
-| Field | Choose a project when needed | Specify a project at startup |
+| Field | Bind the launch directory | Specify a project at startup |
 | --- | --- | --- |
 | Name / Type | `wincode` / `stdio` | `wincode` / `stdio` |
 | Command | `node` | `node` |
@@ -82,7 +86,7 @@ For graphical configuration interfaces:
 | Argument 2 | Omit | `--workspace` |
 | Argument 3 | Omit | `C:/path/to/project` |
 
-Add each argument as a separate entry, without extra surrounding quotes even when a path contains spaces. To defer project selection, remove both `--workspace` and its value; do not leave an empty value. Ensure `node` is available in PATH, or specify its absolute executable path. No additional environment variables are required for this basic configuration.
+Add each argument as a separate entry, without extra surrounding quotes even when a path contains spaces. Explicit `--workspace` (or `-w`) requires a nonempty absolute path; omission binds the launch directory. Ensure `node` is available in PATH, or specify its absolute executable path. No extra environment variables are required.
 
 For prompt engineering and token-efficient skill routing, refer to the optional [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md).
 
@@ -149,7 +153,7 @@ The 2026-09-08 check of the current Codex connection against TavernDesk source p
 
 | Tool | Purpose |
 | --- | --- |
-| `workspace_open` | Open or switch workspace, isolate caches and return a bounded project summary. |
+| `workspace_open` | Confirm or recover the fixed workspace and return a bounded summary; reject other roots. |
 | `wincode_list_directory` | Browse a specific workspace directory with entry, depth and output limits. |
 | `wincode_analyze_workspace` | Parse solution structure and declared `.sln`/`.csproj` project references. |
 | `wincode_prepare_context` | Prepare scoped code evidence and actual line ranges within a character-based output budget. |
@@ -170,6 +174,8 @@ Architecture analysis accepts integer depths 1–5 and returns `scanComplete`, `
 
 Git probes use a detected absolute installation path outside the workspace, require Git 2.36 or later and disable executable fsmonitor configuration. Missing or failed Git status is `unknown`, with no assertion that the tree is clean. Cache/trash writes reject existing symlinks and junctions in their paths. Cache cleanup manages versioned WinCode JSON and reserved overflow names; legacy/unrecognized files remain untouched and are outside the managed quota. These checks do not provide an atomic sandbox against concurrent filesystem replacement.
 
+Raw arguments, including unknown fields, are limited to 64 KiB of UTF-8 JSON before normalization. SERVER_BUSY includes workStarted:false, retryable:true and a capacity snapshot; retry only when needed, without automatic replay or Host restart. REQUEST_TIMEOUT includes queue time and does not prove work never started. health.admission exposes counters and timing. Passive hello uses known disk observations, with null values before an explicit diagnostic scan. These limits do not remove SDK parsed-frame allocation or bound process RSS.
+
 ### Architecture and resource control
 
 See the [architecture, data-flow and verification-gate guide](WinCode-架构与数据流说明.md) for the current component boundaries, request sequences, storage lifecycle and delivery checks (Chinese).
@@ -183,7 +189,7 @@ Coding agent ── stdio MCP ── WinCode
 ```
 
 - **Owned-process cleanup:** UI inspection executes out-of-process via an isolated helper (`tools/WinCode.UIA.Host`). All process cleanups target only the owned helper process tree via Windows `taskkill /T`; the inspected target application is never terminated or injected.
-- **Concurrency Protection:** UI inspection and health checks share a serial execution mutex to prevent native UIA message pump deadlocks. Workspace switches safely drain in-flight calls before changing cache namespaces.
+- **Concurrency Protection:** UI inspection and health checks share a serial mutex. Each connection keeps its startup workspace; other-root requests are rejected before lifecycle work. Same-root recovery drains in-flight calls within its deadline. Admission accepts at most 32 unfinished business calls and four shared hello/tools-list calls per instance. Existing adapter mutexes keep FIFO waiting; other work can still run in parallel. Queueing consumes the request deadline, and active cancellation retains capacity until cleanup completes.
 - **Byte-Bounded Cache:** The shared cache manager bounds retained serialized data (default 32 MiB memory, 128 MiB disk including overflow); these are not process RSS limits. Local-text queries re-enumerate bounded inputs and reuse declarations by content hash. Builtin packs validate the actual selected contents before reuse; CLI output without a verified input manifest is not cached. Missing overflow files become cache misses. Watch/index probes invalidate the ~2.5s change-hint memo; that hint is not proof of source identity or a guarantee that watcher events are complete.
 
 | UI budget | Limit / behavior |
@@ -254,7 +260,7 @@ WinCode 是面向 Windows 与 .NET 工程研发的本地 MCP 服务。它将项�
 - **观察实际界面：**发现系统可见窗口，按条件定向查询目标控件或子树，并在不激活、不抢占前台焦点的前提下获取数字标注截图。
 - **源码双向印证：**将运行时抓取的控件关联回 XAML 源码声明的起始行号、代码片段与文件哈希，清晰报告歧义、截断与降级状态。
 
-当前源码版本为 **0.14.0**。所有 UI 取证工具均为纯只读与非侵入设计。版本历史见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 **0.15.0**。UI 工具仅执行只读取证；固定工作区迁移和版本历史见 [CHANGELOG](CHANGELOG.md)。
 
 **平台与兼容性说明：**本项目以 **Windows 11 x64** 为本地开发与测试基准。其他操作系统、其他 Windows 版本或不同依赖版本下，功能表现、运行行为与性能不保证完全一致。建议 **macOS、Linux 用户通过 fork 本仓库进行本地适配与验证**；请以本项目文档和锁定文件中列出的依赖版本作为参考环境。
 
@@ -272,9 +278,9 @@ npm run check
 npm run delivery:verify
 ```
 
-在 Agent 客户端配置文件中添加 stdio MCP 服务（以支持 `mcpServers` 的客户端为例），可按需要选择以下两种启动方式。
+在 Agent 客户端配置文件中添加 stdio MCP 服务（以支持 `mcpServers` 的客户端为例）。每条连接在启动时固定一个项目，推荐显式指定绝对路径 `--workspace`。
 
-**使用时再选择项目：**如果暂时不确定目标项目，或需要依次查询多个项目，只配置服务入口：
+**绑定启动目录：**仅在客户端能够保证服务启动目录就是目标项目时使用：
 
 ```json
 {
@@ -287,9 +293,13 @@ npm run delivery:verify
 }
 ```
 
-省略 `--workspace` 时，WinCode 初始使用服务进程的当前工作目录，它不一定是你要分析的项目。查询前，让 Agent 调用 `workspace_open` 并传入目标项目的绝对路径，例如 `workspace_open({"path":"C:/path/to/project"})`。换项目时再次调用即可，服务安装路径无需修改。同一健康工作区的重复确认保留 Roslyn Host/快照，不等待在途业务排空；取消该确认不会强制进入恢复。已知重启要求和清理失败仍走显式恢复路径。一个服务进程只有一个活动工作区，共享该进程的调用不能交错查询不同项目；如需同时独立查询多个项目，应配置名称不同、各自明确指定工作区路径的服务实例。
+省略 `--workspace` 会将启动目录固定为本连接的工作区，不能留待后续选择。`health.workspaceBinding` 返回固定根及其来源。`workspace_open` 仅确认或恢复同根；其他根返回 `WORKSPACE_MISMATCH`，不会排空请求或修改资源，应选择绑定该项目的连接。不同项目的局部配置可复用服务名；同一共享配置中的实例需要不同名称。同根健康确认保留 Host、快照及监听，不等待业务排空；已知故障仍按诊断手册恢复。
 
-**启动时指定项目：**添加 `--workspace`，并在其后填写项目目录：
+已知限制：两个 Roslyn Host 同时冷加载同一物理项目，可能竞争 `obj` 内的 MSBuild 生成文件并返回 `PROJECT_LOAD_FAILED`。固定工作区没有隔离这类构建产物，该问题仍待修复；已通过的准入压力验收采用先后启动同项目 Host 的方式。
+
+草稿交接：私有设计时输出已接入源码，最终构建与正式 MCP 验收尚未完成。较早通过的报告和现有磁盘构建不覆盖这次接入，不能据此标记并发问题已修复。明日恢复顺序见[待办清单](WinCode-下一轮工程化迭代计划书.md#2026-09-11-恢复顺序)。
+
+**启动时指定项目（推荐）：**添加 `--workspace` 和已存在的项目目录绝对路径：
 
 ```json
 {
@@ -306,7 +316,7 @@ npm run delivery:verify
 
 若通过图形界面添加：
 
-| 配置字段 | 使用时再选择项目 | 启动时指定项目 |
+| 配置字段 | 绑定启动目录 | 启动时指定项目 |
 | --- | --- | --- |
 | 服务名称 / 类型 | `wincode` / `stdio` | `wincode` / `stdio` |
 | 启动命令 | `node` | `node` |
@@ -314,7 +324,7 @@ npm run delivery:verify
 | 参数 2 | 不添加 | `--workspace` |
 | 参数 3 | 不添加 | `C:/path/to/project` |
 
-每个参数独立添加为一行，路径包含空格时也无需额外加引号。使用时再选择项目，应同时删除 `--workspace` 及其值，不要保留空值。确保系统环境变量 PATH 中包含 `node`，或直接填写 node.exe 的绝对路径。这一基础配置无需额外设置环境变量。
+每个参数独立添加为一行，路径包含空格时也无需额外加引号。显式 `--workspace`（或 `-w`）必须附带非空绝对路径；省略参数表示绑定启动目录。确保 PATH 中包含 `node`，或填写 node.exe 的绝对路径。无需额外设置环境变量。
 
 如需配合 Agent Skill 获得低 Token 开销的精准任务路由，请参阅可选的 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。
 
@@ -369,7 +379,7 @@ npm run delivery:verify
 
 默认以 `local-text` 启动，并明确报告语义能力未配置。显式配置直接 Roslyn 后，将搜索返回的完整 `location` 作为 `symbolLocation` 传给引用、影响分析或重构工具，名称使用原结果的简单名称。外部 Serena 启动配置及 namePath 身份已退役；过期快照须重新显式搜索。
 
-`wincode_hello_world` 返回启动时固定的实例 ID、构建指纹及当前注册工具定义的 hash。传 `toolName: "wincode_prepare_context"` 可按需查看单个工具参数，与同一连接的 `tools/list` 对照。`npm run build` 生成 manifest；直接运行 `tsc`、产物缺失/失配或源码开发模式会明确报告 `unknown`。构建指纹校验本地产物一致性，不证明发布来源可信；切换分析工作区不会改变运行构建。
+`wincode_hello_world` 返回启动时固定的实例 ID、构建指纹及当前注册工具定义的 hash。传 `toolName: "wincode_prepare_context"` 可按需查看单个工具参数，与同一连接的 `tools/list` 对照。`npm run build` 生成 manifest；直接运行 `tsc`、产物缺失/失配或源码开发模式会明确报告 `unknown`。构建指纹校验本地产物一致性，不证明发布来源可信；本连接的分析工作区在启动时固定，health.workspaceBinding 返回根及来源。
 
 显式 `lineRanges` 的 `coverage` 按最终返回正文计算：请求/完整行数、实际返回区间、未返回区间及原因。尾行只有一部分字符（`endLineComplete:false`）不计完整覆盖；可补取缺口可带有界 `nextRequest`，EOF/缺文件不建议盲重试。明细超预算会记录 `omittedItemCount` 并保留总计。其他请求 `coverage:null`，`taskCoverage` 始终为 null，片段非空不证明整个方法或任务证据充足。`npm run test:tavern-context -- <TavernDesk仓库>` 在新 stdio 进程执行显式启动的只读源码验收。
 
@@ -381,7 +391,7 @@ npm run delivery:verify
 
 | 工具名称 | 功能描述 |
 | --- | --- |
-| `workspace_open` | 打开或切换工作区、隔离缓存，并返回有界项目摘要。 |
+| `workspace_open` | 确认或恢复本连接固定的工作区，返回有界摘要；拒绝其他根目录。 |
 | `wincode_list_directory` | 按指定目录浏览，限制条目、深度与整份输出。 |
 | `wincode_analyze_workspace` | 解析工程依赖拓扑，提取 `.sln`/`.csproj` 项目引用关系。 |
 | `wincode_prepare_context` | 在基于字符数估算的输出预算内，按文件、符号或行号范围提供代码证据。 |
@@ -402,6 +412,8 @@ npm run delivery:verify
 
 Git 探测从工作区外的安装位置取得绝对可执行路径，要求 Git 2.36 及以上，并禁用可执行的 fsmonitor 配置；缺失或查询失败明确为 `unknown`，不报告干净。缓存和回收写入拒绝路径中已有的符号链接/junction。缓存仅管理带版本标记的 WinCode JSON 与保留命名的 overflow；旧版及无法识别的文件保留，不计入受管配额。这些校验不提供对抗并发路径替换的原子沙盒保证。
 
+原始参数（含未知字段）按 UTF-8 JSON 限制为 64 KiB。SERVER_BUSY 附 workStarted=false、retryable=true 和容量快照；按需稍后重试，不自动重放或重启 Host。REQUEST_TIMEOUT 包括排队时间，不证明业务尚未执行。health.admission 提供计数与耗时；被动 hello 仅读取最近磁盘观察，显式诊断前磁盘数值为 null。这些限制不能消除 SDK 解析帧的瞬时分配，也不是 RSS 硬上限。
+
 ### 架构设计与资源管控
 
 ```text
@@ -413,7 +425,7 @@ Coding Agent ── stdio MCP ── WinCode
 ```
 
 - **目标进程绝对免疫：**UI 取证由独立的 C# 辅助进程（`tools/WinCode.UIA.Host`）在进程外执行。所有清理操作严格仅终止自身派生的 Helper 辅助进程树（通过 Windows `taskkill /T`），**被测目标应用进程受绝对免疫保护，绝不被终止或注入**。
-- **防死锁与并发保护：**UI 自动化访问与健康检查共用串行互斥锁，杜绝底层 Win32/UIA 消息泵死锁。切换工作区前会先等待排空在途请求，超时则拒绝切换，保证会话隔离安全。
+- **并发保护：**UI 访问与健康检查共用串行互斥锁。每条连接固定启动工作区，其他根在生命周期操作前被拒绝。同根恢复限时等待在途请求排空；每实例最多受理 32 个未完成业务请求，hello/tools/list 共享 4 个轻量槽。既有适配器互斥保持 FIFO；排队计入请求预算，执行中取消须在实际清理后归还容量。
 - **按字节约束缓存：**缓存条目按工作区 namespace 隔离，多个实例仍可能共用磁盘目录；默认序列化内存预算 32 MiB、磁盘配额 128 MiB（含 overflow），不等于进程 RSS 上限。local-text 每次有界扫描实际输入，按内容哈希复用声明解析；内置打包核对实际选中文件的内容后复用，没有可核验输入清单的 CLI 结果不缓存。附件缺失按缓存未命中重建。150 ms 去抖监听与索引探测只使约 2.5 秒的变更提示 memo 失效，不能证明源码完整身份或保证监听事件无遗漏。
 
 | 取证预算指标 | 限制值与行为策略 |
@@ -452,7 +464,7 @@ Coding Agent ── stdio MCP ── WinCode
 
 已知行号用 `lineRanges`；只需声明及附近上下文时用 `scopeFiles` 加 `symbol`，预算裁剪前为 24 行窗口。审核已知方法的异常处理、取消或资源释放时，若已有文件读取工具，优先结合有界 `rg` 上下文一次读到所需分支。小文件也可用 `scopeFiles` 加 `includeFullText:true` 在预算内读取正文。仅知道文件时用 `scopeFiles` 预览。需要发现候选之外的文件时再用 `candidateFiles`，它仍然是优先列表，不是排他范围。限定范围的符号定位目前使用 C#/TS/JS/Python 本地声明模式，会明确保留语义不完整、重名和缺失提示。
 
-默认 `compact` 返回一个 JSON 文本块；`responseFormat: "legacy"` 返回 JSON 加 Markdown。`maxTokens` 接受 512–65536，以全部返回文本的 UTF-16 字符数除以四估算，包含元数据，不等于真实模型 Token 数。结合实际行号、`queryComplete`、截断信息和 `bodyStatus` 判断证据是否够用；满足后继续分析，文件修改或工作区切换后重新取证。WinCode 没有跨调用证据有效期保证，基准中的复用策略也不是生产缓存。参数组合与限制见[代码手册](skills/wincode/references/code.md)。
+默认 `compact` 返回一个 JSON 文本块；`responseFormat: "legacy"` 返回 JSON 加 Markdown。`maxTokens` 接受 512–65536，以全部返回文本的 UTF-16 字符数除以四估算，包含元数据，不等于真实模型 Token 数。结合实际行号、`queryComplete`、截断信息和 `bodyStatus` 判断证据是否够用；满足后继续分析，文件修改或更换连接后重新取证。WinCode 没有跨调用证据有效期保证，基准中的复用策略也不是生产缓存。参数组合与限制见[代码手册](skills/wincode/references/code.md)。
 
 ### 本地开发与测试验证
 

@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export const WINCODE_VERSION = '0.14.0';
+export const WINCODE_VERSION = '0.15.0';
 
 /**
  * Bounded waits for every external process/RPC. None of these may be Infinity.
@@ -33,7 +33,7 @@ export interface WinCodeCacheLimits {
 export interface RoslynConfig {
   enabled: boolean;
   allowProjectEvaluation: boolean;
-  /** 工作区内入口 csproj 的相对路径；工作区切换后使用新根中的同一路径。 */
+  /** 固定启动工作区内入口 csproj 的相对路径。其他项目使用独立连接。 */
   project: string;
   configuration: string;
   targetFramework: string;
@@ -47,7 +47,8 @@ export interface RoslynConfig {
 }
 
 export interface WinCodeConfig {
-  workspaceRoot: string;
+  readonly workspaceRoot: string;
+  workspaceRootSource?: 'argument' | 'cwd' | 'configuration';
   cacheDir: string;
   trashDir: string;
   maxTokensPerContext: number;
@@ -105,6 +106,7 @@ export function getDefaultConfig(workspaceRoot?: string): WinCodeConfig {
   const cacheLimits = getDefaultCacheLimits();
   return {
     workspaceRoot: root,
+    workspaceRootSource: workspaceRoot ? 'configuration' : 'cwd',
     cacheDir: path.join(root, '.cache', 'wincode'),
     trashDir: path.join(root, 'trash'),
     maxTokensPerContext: 128000,

@@ -41,17 +41,34 @@ async function fixture(run: (router: ToolRouter, a: string, b: string, client: C
 
 const body = (result: any) => JSON.parse(result.content[0].text);
 
-it('native watcher creation failure blocks queries and a later open recreates the watcher', async t => fixture(async (router, _a, b) => {
+for (const stage of ['fingerprint', 'overview'] as const) {
+  it(`same-root recovery ${stage} failure keeps business calls blocked until repair`, async t => fixture(async (router, a) => {
+    await (router as any).watch.stop();
+    const target = stage === 'fingerprint' ? router.cache : router.workspace;
+    const method = stage === 'fingerprint' ? 'computeWorkspaceFingerprint' : 'openWorkspace';
+    const fault = t.mock.method(target as any, method, async () => { throw new Error(`fixture ${stage} failure`); });
+    try { await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError); }
+    finally { fault.mock.restore(); }
+    assert.equal(router.config.workspaceRoot, a);
+    await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
+    await router.openWorkspace(a);
+    await router.acquireRequestSlot(); router.endRequest();
+    assert.equal((await router.getRuntimeHealth()).workspaceWatch.root, a);
+  }));
+}
+
+it('native watcher creation failure blocks queries and a later open recreates the watcher', async t => fixture(async (router, a) => {
+  await (router as any).watch.stop();
   const failed = t.mock.method(nativeFs, 'watch', () => { throw new Error('fixture native watch creation failure'); });
-  try { await assert.rejects(router.openWorkspace(b), WorkspaceRecoveryRequiredError); }
+  try { await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError); }
   finally { failed.mock.restore(); }
   assert.equal(router.workspaceRecoveryState?.recoveryAction, 'workspace_open');
   assert.equal((await router.getRuntimeHealth()).workspaceWatch.active, false);
   await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
-  await router.openWorkspace(b);
+  await router.openWorkspace(a);
   assert.equal(router.workspaceRecoveryState, null);
   assert.equal((await router.getRuntimeHealth()).workspaceWatch.active, true);
-  assert.equal((await router.getRuntimeHealth()).workspaceWatch.root, b);
+  assert.equal((await router.getRuntimeHealth()).workspaceWatch.root, a);
 }));
 
 it('a retained native watcher close failure requires restart and is not advertised as reopenable', async t => {
@@ -59,17 +76,20 @@ it('a retained native watcher close failure requires restart and is not advertis
   native.close = () => { throw new Error('fixture native close failure'); };
   const mock = t.mock.method(nativeFs, 'watch', () => native);
   try {
-    await fixture(async (router, _a, b) => {
-      await assert.rejects(router.openWorkspace(b), WorkspaceRecoveryRequiredError);
+    await fixture(async (router, a, b) => {
+      native.emit('error', new Error('fixture watcher error before failed close'));
+      await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError);
       assert.equal(router.workspaceRecoveryState?.recoveryAction, 'restart_gateway');
       const sessionId = router.session.current?.id;
-      await assert.rejects(router.openWorkspace(b), WorkspaceRecoveryRequiredError);
+      await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError);
+      await assert.rejects(router.openWorkspace(b), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
       assert.equal(router.session.current?.id, sessionId);
     }, true);
   } finally { mock.mock.restore(); }
 });
 
-it('watcher failure during adapter initialization cannot commit a successful workspace switch', async t => fixture(async (router, _a, b) => {
+it('watcher failure during adapter initialization cannot commit a successful same-root recovery', async t => fixture(async (router, a) => {
+  await (router as any).watch.stop();
   const original = nativeFs.watch;
   let targetWatch: nativeFs.FSWatcher | undefined;
   t.mock.method(nativeFs, 'watch', (...args: Parameters<typeof original>) => { targetWatch = original(...args); return targetWatch; });
@@ -78,17 +98,17 @@ it('watcher failure during adapter initialization cannot commit a successful wor
     await initialize();
     targetWatch!.emit('error', new Error('fixture asynchronous watch failure'));
   });
-  try { await assert.rejects(router.openWorkspace(b), WorkspaceRecoveryRequiredError); }
+  try { await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError); }
   finally { fault.mock.restore(); }
   assert.equal(router.workspaceRecoveryState?.phase, 'watch-confirmation');
   await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
-  await router.openWorkspace(b);
+  await router.openWorkspace(a);
   assert.equal(router.workspaceRecoveryState, null);
 }));
 
 it('invalid target preserves the old workspace and still admits requests', async () => fixture(async (router, a, b) => {
   const before = router.session.current?.id;
-  await assert.rejects(router.openWorkspace(path.join(b, 'missing')), /Invalid workspace/);
+  await assert.rejects(router.openWorkspace(path.join(b, 'missing')), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
   assert.equal(router.config.workspaceRoot, a);
   assert.equal(router.session.current?.id, before);
   assert.equal(router.workspaceRecoveryState, null);
@@ -98,6 +118,7 @@ it('invalid target preserves the old workspace and still admits requests', async
 for (const stage of ['namespace', 'session', 'watch', 'dispose', 'initialize', 'text', 'composites']) {
   it(`failure at ${stage} blocks queries; same-root recovery performs a full rebind`, async t => fixture(async (router, a, b, client) => {
     await router.cache.set('isolation', 'A');
+    await (router as any).watch.stop();
     const targets: Record<string, [any, string]> = {
       namespace: [router.cache, 'setNamespace'], session: [router.session, 'open'],
       watch: [router, 'bindWatch'], dispose: [router.repomix, 'dispose'],
@@ -106,9 +127,9 @@ for (const stage of ['namespace', 'session', 'watch', 'dispose', 'initialize', '
     };
     const [target, method] = targets[stage];
     const fault = t.mock.method(target, method, () => { throw new Error(`fixture:${stage}`); });
-    try { await assert.rejects(router.openWorkspace(b), WorkspaceRecoveryRequiredError); }
+    try { await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError); }
     finally { fault.mock.restore(); }
-    assert.equal(router.config.workspaceRoot, b);
+    assert.equal(router.config.workspaceRoot, a);
     await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
     assert.equal(router.inFlightRequests, 0);
     const query = await client.callTool({ name: 'wincode_list_directory', arguments: {} });
@@ -122,24 +143,25 @@ for (const stage of ['namespace', 'session', 'watch', 'dispose', 'initialize', '
     await assert.rejects(router.openWorkspace(path.join(b, 'missing')));
     await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
     const resets = t.mock.method(router.text, 'initialize', router.text.initialize.bind(router.text));
-    const opened = await client.callTool({ name: 'wincode_workspace_open', arguments: { path: b } });
+    const opened = await client.callTool({ name: 'wincode_workspace_open', arguments: { path: a } });
     assert.notEqual(opened.isError, true);
     // 同根恢复仍须重新绑定本地能力；外部连接已退出。
     assert.equal(resets.mock.callCount(), 1);
     assert.equal(router.workspaceRecoveryState, null);
     const health = await router.getRuntimeHealth();
-    assert.equal(health.session?.workspaceRoot, b);
-    assert.equal(health.workspaceWatch.root, b);
+    assert.equal(health.session?.workspaceRoot, a);
+    assert.equal(health.workspaceWatch.root, a);
     assert.equal(health.session?.cacheNamespace, router.cache.currentNamespace);
-    assert.equal(await router.cache.get('isolation'), null);
+    assert.equal(await router.cache.get('isolation'), 'A', 'same-root recovery retains correctly namespaced disk entries');
     const listing = body(await client.callTool({ name: 'wincode_list_directory', arguments: {} }));
-    assert.ok(listing.entries.some((entry: any) => entry.path === 'OnlyB.cs'));
-    assert.ok(!listing.entries.some((entry: any) => entry.path === 'OnlyA.cs'));
+    assert.ok(listing.entries.some((entry: any) => entry.path === 'OnlyA.cs'));
+    assert.ok(!listing.entries.some((entry: any) => entry.path === 'OnlyB.cs'));
     await router.openWorkspace(a);
   }));
 }
 
-it('cancellation after root preparation rejects queued queries until recovery', async t => fixture(async (router, a, b) => {
+it('cancellation during same-root recovery rejects queued queries until recovery', async t => fixture(async (router, a) => {
+  await (router as any).watch.stop();
   const controller = new AbortController();
   const original = router.workspace.openWorkspace.bind(router.workspace);
   let entered!: () => void, release!: () => void;
@@ -148,12 +170,12 @@ it('cancellation after root preparation rejects queued queries until recovery', 
   const fault = t.mock.method(router.workspace, 'openWorkspace', async (...args: Parameters<typeof original>) => {
     const result = await original(...args); entered(); await proceed; return result;
   });
-  const switching = assert.rejects(router.openWorkspace(b, {}, controller.signal), /cancel|abort/i);
+  const switching = assert.rejects(router.openWorkspace(a, {}, controller.signal), /cancel|abort/i);
   await started;
   const query = assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
   controller.abort(); release();
   try { await Promise.all([switching, query]); } finally { fault.mock.restore(); }
-  assert.equal(router.config.workspaceRoot, b);
+  assert.equal(router.config.workspaceRoot, a);
   assert.equal(router.workspaceRecoveryState?.phase, 'workspace');
   await router.openWorkspace(a);
   await router.acquireRequestSlot(); router.endRequest();

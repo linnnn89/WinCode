@@ -28,6 +28,13 @@ export interface CacheStats {
   estimatedDiskBytes: number;
 }
 
+export interface KnownCacheStats extends Omit<CacheStats, 'diskEntries' | 'estimatedDiskBytes'> {
+  diskEntries: number | null;
+  estimatedDiskBytes: number | null;
+  diskObservation: 'not-observed' | 'known' | 'incomplete';
+  diskObservedAt: string | null;
+}
+
 /**
  * Memory LRU + disk JSON cache with byte caps.
  * Namespace isolates workspaces; fingerprint memo avoids repeating git status
@@ -47,6 +54,8 @@ export class CacheManager {
   private namespace = '';
   private writeChain: Promise<void> = Promise.resolve();
   private diskIdentity: string | null = null;
+  private diskStats: Pick<KnownCacheStats, 'diskEntries' | 'estimatedDiskBytes' | 'diskObservation' | 'diskObservedAt'> =
+    { diskEntries: null, estimatedDiskBytes: null, diskObservation: 'not-observed', diskObservedAt: null };
 
   constructor(
     cacheDir: string,
@@ -586,6 +595,7 @@ export class CacheManager {
   async getStats(): Promise<CacheStats> {
     let diskEntries = 0;
     let estimatedDiskBytes = 0;
+    let complete = true;
     try {
       await this.assertDiskBoundary();
       const files = await fs.readdir(this.cacheDir);
@@ -596,23 +606,28 @@ export class CacheManager {
           const s = await fs.stat(path.join(this.cacheDir, f));
           estimatedDiskBytes += s.size;
         } catch {
-          // skip
+          complete = false;
         }
       }
       const overflowDir = path.join(this.cacheDir, 'overflow');
       await this.assertDiskBoundary('overflow');
-      const overflowFiles = await fs.readdir(overflowDir).catch(() => []);
+      const overflowFiles = await fs.readdir(overflowDir).catch(error => {
+        if (error.code !== 'ENOENT') complete = false;
+        return [];
+      });
       for (const of of overflowFiles) {
         if (!OVERFLOW_FILE.test(of)) continue;
         diskEntries++;
         try {
           const s = await fs.stat(path.join(overflowDir, of));
           estimatedDiskBytes += s.size;
-        } catch {}
+        } catch { complete = false; }
       }
     } catch {
-      // unreadable cache dir
+      complete = false;
     }
+    this.diskStats = { diskEntries: complete ? diskEntries : null, estimatedDiskBytes: complete ? estimatedDiskBytes : null,
+      diskObservation: complete ? 'known' : 'incomplete', diskObservedAt: new Date().toISOString() };
     return {
       namespace: this.namespace,
       memoryEntries: this.memoryCache.size,
@@ -620,6 +635,11 @@ export class CacheManager {
       diskEntries,
       estimatedDiskBytes,
     };
+  }
+
+  /** Passive status reads memory and the last explicit disk observation, never the filesystem. */
+  getKnownStats(): KnownCacheStats {
+    return { namespace: this.namespace, memoryEntries: this.memoryCache.size, estimatedMemoryBytes: this.memoryBytes, ...this.diskStats };
   }
 
   /** 保留 CacheManager 的既有入口，由独立组件管理指纹观察。 */

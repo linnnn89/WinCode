@@ -51,7 +51,8 @@ export class RepomixAdapter implements IAdapter {
       health: this.healthCache ? { ...this.healthCache.value, lastError: this.lastError ?? this.healthCache.value.lastError } : null };
   }
 
-  async checkHealth(timeoutMs?: number): Promise<AdapterHealth> {
+  async checkHealth(timeoutMs?: number, operation?: OperationContext): Promise<AdapterHealth> {
+    checkOperation(operation);
     // Configuration is authoritative even when an earlier probe found an installed CLI.
     if (!this.config.adapters.repomix.useCli) {
       this.isCliAvailable = false;
@@ -64,14 +65,13 @@ export class RepomixAdapter implements IAdapter {
       };
     }
     const defaultMs = this.config.timeouts?.repomixHealthMs ?? getDefaultTimeouts().repomixHealthMs;
-    const waitMs = timeoutMs ?? defaultMs;
     // Explicit timeout (tests / force) bypasses the short health memo.
     if (timeoutMs === undefined && this.healthCache && Date.now() - this.healthCache.at < 30_000) {
       return this.healthCache.value;
     }
 
     this.cliEntry = await this.resolveCliEntry();
-    if (!this.config.adapters.repomix.useCli) return this.checkHealth(timeoutMs);
+    if (!this.config.adapters.repomix.useCli) return this.checkHealth(timeoutMs, operation);
     if (!this.cliEntry) {
       this.isCliAvailable = false;
       const health: AdapterHealth = { available: true, source: 'fallback',
@@ -79,6 +79,8 @@ export class RepomixAdapter implements IAdapter {
       this.healthCache = { at: Date.now(), value: health };
       return health;
     }
+    checkOperation(operation);
+    const waitMs = Math.max(1, Math.min(timeoutMs ?? defaultMs, (operation?.deadline ?? Infinity) - Date.now()));
     const health = await new Promise<AdapterHealth>((resolve) => {
       let isSettled = false;
       const proc = spawn(process.execPath, [this.cliEntry!, '--version'], {

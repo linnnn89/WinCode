@@ -37,11 +37,13 @@ for (const [index, directory] of roots.entries()) {
   await fs.writeFile(path.join(directory, `Only${index}.cs`), [`class Only${index} {}`,
     ...Array.from({ length: 10 }, (_, round) => `class Probe${round}Only${index} {}`)].join('\n'));
 }
-const config = getDefaultConfig(roots[0]);
-
-config.adapters.flaui.enabled = false;
-config.adapters.repomix.useCli = false;
-const router = new ToolRouter(config);
+const routers = roots.map(workspace => {
+  const config = getDefaultConfig(workspace);
+  config.adapters.flaui.enabled = false;
+  config.adapters.repomix.useCli = false;
+  return new ToolRouter(config);
+});
+let router = routers[0];
 const children: cp.ChildProcess[] = [];
 const originalSpawn = cp.spawn;
 cp.spawn = ((...args: any[]) => {
@@ -61,22 +63,24 @@ async function call<T>(name: string, work: () => Promise<T>): Promise<T> {
   return result;
 }
 async function query(index: number) {
-  await router.acquireRequestSlot();
+  const active = routers[index];
+  await active.acquireRequestSlot();
   try {
-    const result = await router.findCodeSymbols(`Only${index}`);
+    const result = await active.findCodeSymbols(`Only${index}`);
     assert.ok(result.symbols.some(symbol => symbol.name === `Only${index}`));
     assert.ok(result.symbols.every(symbol => !symbol.file.includes(`Only${1 - index}`)));
     return result;
-  } finally { router.endRequest(); }
+  } finally { active.endRequest(); }
 }
 try {
-  await router.initialize();
+  for (const instance of routers) await instance.initialize();
   for (let round = 0; round < 10; round++) {
     if (round && sampleIntervalMs) await new Promise(resolve => setTimeout(resolve, sampleIntervalMs));
     const index = round % 2;
-    await call('switch', () => router.openWorkspace(roots[index]));
+    router = routers[index];
+    await call('confirm-bound-workspace', () => router.openWorkspace(roots[index]));
     await call('query-before-interleaving', () => query(index));
-    // 调度门只控制文本查询开始时刻；保留真实扫描及工作区排空逻辑。
+    // The gate controls entry only; scanning and rejection use the real fixed-workspace implementation.
     const cancel = round % 2 === 0;
     const upstreamMetrics = processMetrics([process.pid]);
     const controller = new AbortController();
@@ -109,14 +113,17 @@ try {
     void queryWork.catch(() => {});
     try {
       await withTimeout(ready, 5000, 'mixed-load-query-entry');
-      switching = call('switch-during-query', () => router.openWorkspace(roots[1 - index]));
+      switching = call('reject-other-root-during-query', async () => {
+        await assert.rejects(router.openWorkspace(roots[1 - index]), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
+        return { rejected: true };
+      });
       void switching.catch(() => {});
-      await new Promise(resolve => setImmediate(resolve));
-      assert.equal(router.isSwitchingWorkspace, true);
+      await switching;
+      assert.equal(router.isSwitchingWorkspace, false);
       assert.equal(router.inFlightRequests, 1);
       assert.equal(router.config.workspaceRoot, roots[index], 'root cannot change while the old query owns its slot');
       interleavings.push({ round, mode: cancel ? 'cancel' : 'text-completion',
-        queryStarted: true, switchWaiting: true, oldRootPreserved: true });
+        queryStarted: true, wrongRootRejected: true, oldRootPreserved: true });
       if (cancel) controller.abort();
       release();
       await Promise.all([queryWork, switching]);
@@ -127,13 +134,13 @@ try {
     }
 
     await router.text.initialize();
-    await Promise.all([call('query-after-interleaving-1', () => query(1 - index)),
+    await Promise.all([call('query-after-interleaving-1', () => query(index)),
       call('query-after-interleaving-2', () => query(1 - index))]);
     const health = await call('health', () => router.getRuntimeHealth());
     assert.equal(health.inFlightRequests, 0);
     assert.equal(health.workspaceRecovery, null);
-    assert.equal(health.session?.workspaceRoot, roots[1 - index]);
-    assert.equal(health.workspaceWatch.root, roots[1 - index]);
+    assert.equal(health.session?.workspaceRoot, roots[index]);
+    assert.equal(health.workspaceWatch.root, roots[index]);
     samples.push({ round, elapsedMs: Date.now() - started, gatewayPid: process.pid,
       upstreamMetrics, settledMetrics: processMetrics([process.pid]),
       memory: process.memoryUsage(), activeResources: process.getActiveResourcesInfo(),
@@ -144,7 +151,7 @@ try {
 } catch (caught) {
   error = caught instanceof Error ? caught.stack : String(caught);
 } finally {
-  try { await router.dispose(); }
+  try { await Promise.all(routers.map(instance => instance.dispose())); }
   catch (caught) { error = `${error ?? ''}\nCleanup: ${String(caught)}`; }
   cp.spawn = originalSpawn;
   syncBuiltinESMExports();

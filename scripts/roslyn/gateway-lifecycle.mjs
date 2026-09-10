@@ -45,14 +45,20 @@ export async function verifyGatewayLifecycle({ root, a, host, appProject, client
     const cleanupStarted = Date.now();
     let health = (await call('wincode_hello_world')).health;
     const initialInFlight = health.inFlightRequests;
-    while (health.inFlightRequests > 1 && Date.now() - cleanupStarted < 8000) {
+    const initialAdmitted = health.admission.business.active;
+    // Hello uses the status lane and is excluded from business in-flight accounting.
+    while ((health.inFlightRequests > 0 || health.admission.business.active > 0) && Date.now() - cleanupStarted < 8000) {
       await new Promise(resolve => setTimeout(resolve, 25));
       health = (await call('wincode_hello_world')).health;
     }
     report.processes.at(-1).cleanupObservation = {
-      initialInFlight, finalInFlight: health.inFlightRequests, waitMs: Date.now() - cleanupStarted,
+      initialInFlight, finalInFlight: health.inFlightRequests,
+      initialAdmitted, finalAdmitted: health.admission.business.active,
+      finalWaiting: health.admission.business.waiting, waitMs: Date.now() - cleanupStarted,
     };
-    assert.equal(health.inFlightRequests, 1, 'only the heartbeat may remain after bounded cancellation cleanup');
+    assert.equal(health.inFlightRequests, 0, 'cancelled business work must finish actual cleanup');
+    assert.equal(health.admission.business.active, 0, 'business capacity must be released only after actual cleanup');
+    assert.equal(health.admission.business.waiting, 0, 'no cancelled business request may remain queued');
     assertExited(processes);
     await fs.writeFile(path.join(a, 'App/App.csproj'), appProject);
     await references(await integerTarget(), 1, a);

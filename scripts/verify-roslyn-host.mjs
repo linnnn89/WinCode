@@ -112,7 +112,7 @@ try {
   const ready = await next(150000);
   assert.equal(ready.type, 'ready', JSON.stringify(ready));
   assert.equal(ready.protocolVersion, 2);
-  assert.equal(ready.inputPolicy.version, 1);
+  assert.equal(ready.inputPolicy.version, 2);
   assert.deepEqual(ready.inputPolicy.additionalInputs.map(file => file.replaceAll('\\', '/')), additionalInputs);
   assert.equal(ready.freshness.scope, 'compilation-inputs-and-explicit-files');
   assert.equal(ready.projects, 2);

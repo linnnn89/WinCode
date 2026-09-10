@@ -44,14 +44,12 @@ it('project summaries use WPF build declarations despite an unrelated directory 
   assert.ok(report.recommendedAgentFocus.includes('not an architecture judgment'));
 }));
 
-it('workspace metadata failure restores root and trash paths before rejecting', async () => isolated(async root => {
+it('workspace metadata failure preserves the fixed root and trash paths', async () => isolated(async root => {
   const config = getDefaultConfig(root);
   const previousTrash = config.trashDir;
   const workspace = new WorkspaceManager(config);
-  const next = path.join(root, 'next');
-  await fs.mkdir(next);
   (workspace as any).discoverProject = async () => { throw new Error('simulated read failure'); };
-  await assert.rejects(workspace.openWorkspace(next), /simulated read failure/);
+  await assert.rejects(workspace.openWorkspace(root), /simulated read failure/);
   assert.equal(config.workspaceRoot, root);
   assert.equal(config.trashDir, previousTrash);
 }));

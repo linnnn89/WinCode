@@ -130,7 +130,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
     }
     // 必须确认 Host 实际采用了补充输入；旧 Host 或漏传配置不能被当成成功加载。
     const policy = reply.inputPolicy as { version?: unknown; additionalInputs?: unknown } | undefined;
-    if (policy?.version !== 1 || !Array.isArray(policy.additionalInputs) ||
+    if (policy?.version !== 2 || !Array.isArray(policy.additionalInputs) ||
         policy.additionalInputs.length !== this.options.additionalInputs!.length ||
         policy.additionalInputs.some((file, index) => typeof file !== 'string' ||
           path.relative(this.localPath(file), this.localPath(this.options.additionalInputs![index])) !== ''))
@@ -227,7 +227,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
           await this.stopClient(true);
         throw error;
       }
-    }, operation?.signal).finally(() => { this.operations--; });
+    }, operation?.signal, operation?.queue).finally(() => { this.operations--; });
   }
 
   /** 名称搜索不读语义缓存；过期时要求下一次显式搜索重载，不重放本次失败请求。 */

@@ -212,11 +212,11 @@ it('MCP cancellation stops local scanning, releases the opened file and permits 
   assert.equal(JSON.parse(next.content[0].text).symbols[0].name, 'Target');
 }));
 
-it('cancelled queued workspace switch preserves the current workspace', async () => fixture(async router => {
+it('cancelled queued workspace recovery preserves the fixed workspace', async () => fixture(async router => {
   await router.acquireRequestSlot();
   const controller = new AbortController();
   const before = router.config.workspaceRoot;
-  const pending = router.openWorkspace(path.join(before, 'other'), {}, controller.signal);
+  const pending = router.openWorkspace(before, {}, controller.signal);
   controller.abort();
   await assert.rejects(pending, /cancel|abort/i);
   router.endRequest();

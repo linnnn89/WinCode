@@ -123,10 +123,8 @@ internal sealed class WorkspaceSession : IDisposable
             var configurationBefore = Interlocked.Read(ref configurationGeneration);
             var before = await CaptureAsync(token, checkEvents: false);
             sdkSelection ??= before.SdkSelection;
-            workspace = MSBuildWorkspace.Create(new Dictionary<string, string> {
-                ["Configuration"] = configuration, ["TargetFramework"] = framework,
-                ["RunAnalyzers"] = "false", ["RunAnalyzersDuringBuild"] = "false"
-            });
+            DesignTimeBuild.Prepare(root, projectPath, configuration, framework, OwnedBuildOutputs.Instance, token);
+            workspace = MSBuildWorkspace.Create(DesignTimeBuild.Properties(configuration, framework));
             try
             {
                 await workspace.OpenProjectAsync(projectPath, cancellationToken: token);
@@ -192,7 +190,7 @@ internal sealed class WorkspaceSession : IDisposable
                 return new { id, type = "ready", success = true, protocolVersion = 2, snapshot,
                     hostIdentity = HostBuildIdentity.Current,
                     projects = candidate.ProjectIds.Count, configuration, framework, loadMs = clock.ElapsedMilliseconds,
-                    inputPolicy = new { version = 1, additionalInputs = additionalInputs.Select(file => Path.GetRelativePath(root, file)).ToArray() },
+                    inputPolicy = new { version = 2, additionalInputs = additionalInputs.Select(file => Path.GetRelativePath(root, file)).ToArray() },
                     loadDiagnostics, compilationErrors, excludedAnalyzers, scope = "loaded-solution-snapshot",
                     processTreeGuard = OperatingSystem.IsWindows(), diskFreshnessVerified = false, freshness = Freshness(after) };
             }
@@ -357,7 +355,7 @@ internal sealed class WorkspaceSession : IDisposable
         invalidated = true;
         try { watcher.Dispose(); }
         catch (Exception error) { cleanupFailure ??= error; }
-        finally { ReleaseWorkspace(); }
+        finally { ReleaseWorkspace(); OwnedBuildOutputs.Current?.Dispose(); }
         if (cleanupFailure != null) throw new HostFailure("HOST_RESTART_REQUIRED", cleanupFailure.Message);
     }
 }

@@ -65,7 +65,7 @@ const expectedCalls: Record<string, { method: string; args: unknown[] }> = {
   wincode_find_references: { method: 'findCodeReferences', args: ['Target', 'Target.ts', '<signal>'] },
   analyze_change_impact: { method: 'analyzeChangeImpact', args: ['Target', '<signal>'] },
   wincode_analyze_change_impact: { method: 'analyzeChangeImpact', args: ['Target', '<signal>'] },
-  wincode_diagnose_project: { method: 'diagnoseProject', args: [] },
+  wincode_diagnose_project: { method: 'diagnoseProject', args: ['<signal>'] },
   wincode_plan_refactoring: { method: 'planRefactoring', args: ['Target', 'Improve reliability', '<signal>'] },
   wincode_safe_move_to_trash: { method: 'moveToTrash', args: ['Target.ts', 'fixture'] },
   wincode_ui_list_windows: { method: 'listUiWindows', args: [{ pid: 5 }, '<signal>'] },
@@ -94,7 +94,8 @@ it('calls all 15 published tools and the hidden alias; unknown fields do not rea
   assert.ok(!published.some(tool => tool.name === 'wincode_workspace_open'));
   assert.deepEqual(new Set([...published.map(tool => tool.name), 'wincode_workspace_open']), new Set(Object.keys(examples)));
   const responses = new Map<string, unknown>();
-  for (const [name, args] of Object.entries(examples)) {
+  for (const [name, input] of Object.entries(examples)) {
+    const args = name === 'workspace_open' || name === 'wincode_workspace_open' ? { ...input, path: router.config.workspaceRoot } : input;
     calls.length = 0;
     const baseline: any = await client.callTool({ name, arguments: args });
     assert.notEqual(baseline.isError, true, `${name}: ${JSON.stringify(baseline)}`);
@@ -103,7 +104,8 @@ it('calls all 15 published tools and the hidden alias; unknown fields do not rea
     // AbortSignal is transport-owned and differs for every call; normalize only that field.
     const comparable = (call: { method: string; args: unknown[] }) => ({ method: call.method,
       args: call.args.map(value => value instanceof AbortSignal ? '<signal>' : value) });
-    const expected = expectedCalls[name];
+    const expected = structuredClone(expectedCalls[name]);
+    if (name === 'workspace_open' || name === 'wincode_workspace_open') expected.args[0] = router.config.workspaceRoot;
     assert.deepEqual(comparable(calls[0]), expected, `${name} dispatch`);
     calls.length = 0;
     const extended: any = await client.callTool({ name, arguments: { ...args, futureOption: { enabled: true } } });

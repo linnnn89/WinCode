@@ -376,32 +376,35 @@ describe('WinCode MCP UI Inspect Protocol & End-to-End Suite', () => {
     assert.strictEqual(nextData.success, true);
   });
 
-  it('14. cross-workspace switch to external project still resolves helper and executes inspect successfully', async () => {
+  it('14. a rejected switch preserves UI access and an independent external workspace resolves the installed helper', async () => {
     const tempWs = path.resolve(root, 'test-tmp/external_wpf_target');
     await fsPromises.mkdir(tempWs, { recursive: true });
 
-    // Switch workspace to external directory which has NO tools/ directory
+    // The external directory has no tools/ folder and requires its own connection.
     const switchRes = await client.callTool({
       name: 'workspace_open',
       arguments: { path: tempWs },
     });
-    assert.ok(!switchRes.isError);
-
-    // Now inspect target application from this external workspace
-    const res = await client.callTool({
-      name: 'wincode_ui_inspect',
-      arguments: { pid: wpfPid, capture: 'none', maxDepth: 2 },
-    });
-    assert.ok(!res.isError);
-    const data = JSON.parse(getContent(res)[0].text!);
-    assert.strictEqual(data.success, true);
-    assert.strictEqual(data.pid, wpfPid);
-
-    // Switch back to root workspace
-    await client.callTool({
-      name: 'workspace_open',
-      arguments: { path: root },
-    });
+    assert.strictEqual(switchRes.isError, true);
+    assert.strictEqual(JSON.parse(getContent(switchRes)[0].text!).errorCode, 'WORKSPACE_MISMATCH');
+    assert.strictEqual(router.config.workspaceRoot, root);
+    const peerConfig = getDefaultConfig(tempWs);
+    peerConfig.adapters.repomix.useCli = false;
+    const peerRouter = new ToolRouter(peerConfig), peerServer = new WinCodeMcpServer(peerRouter);
+    const peer = new Client({ name: 'external-ui-workspace', version: '1' });
+    try {
+      await peerRouter.initialize();
+      const [left, right] = InMemoryTransport.createLinkedPair();
+      await Promise.all([peer.connect(left), (peerServer as any).server.connect(right)]);
+      for (const connection of [client, peer]) {
+        const res = await connection.callTool({ name: 'wincode_ui_inspect',
+          arguments: { pid: wpfPid, capture: 'none', maxDepth: 2 } });
+        assert.ok(!res.isError);
+        const data = JSON.parse(getContent(res)[0].text!);
+        assert.strictEqual(data.success, true);
+        assert.strictEqual(data.pid, wpfPid);
+      }
+    } finally { await peer.close(); await peerServer.stop(); }
   });
 
   it('15. inspect returns image scale and dimension metadata preserving coordinate alignment', async () => {

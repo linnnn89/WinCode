@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.15.0 (unreleased)
+
+- **Draft checkpoint, not yet validated as a complete build:** add per-Host design-time intermediate outputs, original project exclusion/import preservation, conservative generated-input filtering, and owned output cleanup. Internal Host input policy is now 2. The revised prototypes and 23 targeted TypeScript tests passed; final native build, full regression and production MCP concurrency acceptance remain pending. The same-project collision is not yet closed as a production fix.
+
+- Bound admission to 32 unfinished business calls and four shared lightweight status calls per instance, with 64 KiB raw UTF-8 JSON arguments before normalization. Report SERVER_BUSY before execution; preserve FIFO in existing mutexes, cancellation through actual cleanup, and a deadline that includes queue wait. Do not automatically replay calls or restart a Host on overload.
+- Remove cancelled startup/recovery waiters, expose admission counters/timings, and keep status available during business saturation. Passive hello uses known cache observations, with explicit unknown/incomplete disk values; diagnosis refreshes disk statistics. Retain manual-release and shutdown barriers through pending work and cleanup.
+- Preserve a newly reproduced MSBuild `obj` write collision between two Hosts cold-loading the same project as an open issue. Keep parallel same-root startup as the default acceptance case; an explicit separated-startup mode scopes the admission benchmark without claiming that collision is fixed.
+
+- Bind each connection to its startup workspace. `workspace_open` now only confirms or recovers that root; other roots return `WORKSPACE_MISMATCH` with the active/requested paths and `select_workspace_connection`. Configure a separate connection for each project. Both the MCP and core entry points reject mismatches before queueing or changing resources.
+- Expose `health.workspaceBinding` with the fixed root and binding source. Explicit `--workspace` / `-w` requires an absolute path; omission fixes the launch directory. Validate the existing, link-free root before initializing caches. Preserve healthy same-root Host/snapshot reuse and failure-gated recovery.
+- Migrate lifecycle and real Roslyn/UI verification to independent fixed connections, retain same-root fault injection, and add startup, mismatch, relative-path and Windows alias regression coverage. Synchronize managed manuals and native version metadata; native UI inspection behavior is unchanged.
+
+- Preserve failed check-stage exit status, TAP totals, captured logs and native Node JUnit assertions before returning failure; upload these bounded diagnostics in CI. Reject incomplete test summaries and mark interrupted output capture explicitly.
+- Skip snapshotted resources unregistered before disposal starts, release process listeners on natural exit, and stop probing or signalling retained ChildProcess PIDs after a known exit. Preserve real owned-process cleanup and deadline behavior; OS-level atomic PID identity validation is not added.
+
 ## 0.14.0 (unreleased)
 
 - Resolve Git from launch-time installation paths outside the workspace and use absolute argv-based execution. Disable executable fsmonitor configuration, require Git 2.36+, recognize linked worktrees and report unknown status when Git fails.

@@ -13,9 +13,9 @@ assert.ok(path.isAbsolute(options.workspace) && path.isAbsolute(options.output))
 const count = options.iterations ?? 1;
 assert.ok(Number.isInteger(count) && count >= 1 && count <= 20);
 await fs.mkdir(options.output, { recursive: true });
-// Bootstrap outside the target project: gateway cache stays in WinCode.
+// Bind the explicitly selected project at startup; output is not another workspace.
 const transport = new StdioClientTransport({ command: process.execPath,
-  args: [path.resolve('dist/index.js'), '--workspace', process.cwd()], cwd: process.cwd(), stderr: 'pipe' });
+  args: [path.resolve('dist/index.js'), '--workspace', options.workspace], cwd: process.cwd(), stderr: 'pipe' });
 const client = new Client({ name: 'ui-runtime-acceptance', version: '1' });
 const samples: unknown[] = [];
 let gatewayPid: number | null = null;
@@ -34,7 +34,11 @@ try {
   for (let index = 0; index < count; index++) {
     const started = Date.now();
     if (index > 0 && index % 5 === 0) {
-      await call('workspace_open', { path: options.output });
+      if (path.relative(options.workspace, options.output) !== '') {
+        const rejected = await client.callTool({ name: 'workspace_open', arguments: { path: options.output } });
+        assert.equal(rejected.isError, true);
+        assert.equal(JSON.parse((rejected.content[0] as any).text).errorCode, 'WORKSPACE_MISMATCH');
+      }
       await call('workspace_open', { path: options.workspace });
     }
     let cancelled = false;

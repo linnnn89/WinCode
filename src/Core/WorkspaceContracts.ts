@@ -1,5 +1,19 @@
 import path from 'node:path';
 
+export interface WorkspaceBinding {
+  readonly mode: 'fixed';
+  readonly root: string;
+  readonly source: 'argument' | 'cwd' | 'configuration';
+}
+
+export class WorkspaceMismatchError extends Error {
+  readonly errorCode = 'WORKSPACE_MISMATCH';
+  constructor(readonly activeWorkspace: string, readonly requestedWorkspace: string) {
+    super(`This connection is fixed to "${activeWorkspace}". Select the connection configured for "${requestedWorkspace}"; workspace_open cannot switch projects.`);
+    this.name = 'WorkspaceMismatchError';
+  }
+}
+
 /** 工作区公开数据与路径校验契约；不执行文件移动或改变当前根。 */
 export interface TrashMoveResult {
   success: boolean;

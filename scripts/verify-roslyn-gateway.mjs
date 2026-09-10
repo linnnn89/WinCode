@@ -33,7 +33,7 @@ let stderr = '';
 
 
 
-/** 工作区切换只关闭 Code Host 子树；Gateway 自己的控制台宿主应保持到 Gateway 退出。 */
+/** Observe the owned Code Host subtree; the Gateway remains until its connection closes. */
 function codeProcesses() {
   const all = owned(transport.pid);
   const code = all.find(item => item.CommandLine?.includes(host));
@@ -42,8 +42,8 @@ function codeProcesses() {
 }
 
 /** tools/call 使用真实 MCP 客户端；默认失败立即终止场景，故障测试显式读取错误响应。 */
-async function call(name, args = {}, failure = false) {
-  const response = await client.callTool({ name, arguments: args }, { timeout: 60000 });
+async function call(name, args = {}, failure = false, activeClient = client) {
+  const response = await activeClient.callTool({ name, arguments: args }, { timeout: 60000 });
   const data = JSON.parse(response.content[0].text);
   if (!failure) assert.notEqual(response.isError, true, JSON.stringify(data));
   else assert.equal(response.isError, true, JSON.stringify(data));
@@ -51,8 +51,8 @@ async function call(name, args = {}, failure = false) {
 }
 
 /** 选择真实重载签名；测试不人工填 UTF-16 位置，必须通过公共符号搜索取得定位。 */
-async function integerTarget() {
-  const result = await call('wincode_find_code_symbol', { query: 'Save', kind: 'method' });
+async function integerTarget(activeClient = client) {
+  const result = await call('wincode_find_code_symbol', { query: 'Save', kind: 'method' }, false, activeClient);
   assert.equal(result.source, 'roslyn');
   assert.equal(result.queryComplete, false);
   assert.equal(result.semanticContext.freshness.status, 'checked');
@@ -63,8 +63,8 @@ async function integerTarget() {
 }
 
 /** 仅传回搜索结果里的身份；按实际源码字符串断言位置，避免自己重算同一实现作为真值。 */
-async function references(target, expected, expectedRoot) {
-  const result = await call('wincode_find_references', { symbolName: target.name, symbolLocation: target.location });
+async function references(target, expected, expectedRoot, activeClient = client) {
+  const result = await call('wincode_find_references', { symbolName: target.name, symbolLocation: target.location }, false, activeClient);
   assert.equal(result.source, 'roslyn');
   assert.equal(result.resolution, 'resolved');
   assert.equal(result.queryComplete, false);
@@ -123,6 +123,7 @@ try {
   await client.connect(transport);
   transport.stderr?.on('data', chunk => { stderr = (stderr + chunk).slice(-16384); });
   const initial = await call('wincode_hello_world');
+  assert.deepEqual(initial.health.workspaceBinding, { mode: 'fixed', root: a, source: 'argument' });
   assert.equal(initial.codeProvider, 'roslyn');
   assert.equal(initial.health.roslyn.processAlive, false);
   assert.equal(initial.health.text.semanticConfigured, false);
@@ -214,17 +215,36 @@ try {
   report.scenarios.push('ten same-root opens and four concurrent confirmations preserve the real Host and observed owned-process PIDs, snapshot, watcher and session while references remain valid');
   const beforeSwitch = codeProcesses();
   report.beforeSwitch = { gatewayPid: transport.pid, processes: beforeSwitch };
-  await call('workspace_open', { path: b });
-  assertExited(beforeSwitch);
-  assert.equal((await call('wincode_find_references', { symbolName: 'Save', symbolLocation: edited.location }, true)).errorCode, 'SNAPSHOT_STALE');
-  const inB = await integerTarget();
-  await references(inB, 1, b);
-  await call('workspace_open', { path: a });
+  const rejected = await call('workspace_open', { path: b }, true);
+  assert.equal(rejected.errorCode, 'WORKSPACE_MISMATCH');
+  assert.equal(rejected.activeWorkspace, a); assert.equal(rejected.requestedWorkspace, b);
+  assert.deepEqual(codeProcesses().map(item => item.ProcessId).sort(), beforeSwitch.map(item => item.ProcessId).sort());
+  await references(edited, 1, a);
+  const peerClient = new Client({ name: 'roslyn-gateway-peer-B', version: '1' });
+  const peerTransport = new StdioClientTransport({ command: process.execPath,
+    args: [path.join(repo, 'dist/index.js'), '--workspace', b, '--roslyn-config', config], cwd: root, env, stderr: 'pipe' });
+  let peerProcesses = [];
+  try {
+    await peerClient.connect(peerTransport);
+    const peerHello = await call('wincode_hello_world', {}, false, peerClient);
+    assert.notEqual(peerHello.runtime.instanceId, initial.runtime.instanceId);
+    assert.equal(peerHello.workspace, b);
+    const [inB] = await Promise.all([integerTarget(peerClient), references(edited, 1, a)]);
+    await references(inB, 1, b, peerClient);
+    peerProcesses = owned(peerTransport.pid); report.processes.push(...peerProcesses);
+    assert.equal((await call('wincode_find_references', { symbolName: 'Save', symbolLocation: edited.location }, true, peerClient)).errorCode, 'SNAPSHOT_STALE');
+    assert.equal((await call('wincode_find_references', { symbolName: 'Save', symbolLocation: inB.location }, true)).errorCode, 'SNAPSHOT_STALE');
+    const preserved = (await call('wincode_hello_world')).health;
+    assert.equal(preserved.session.id, confirmedHealth.session.id);
+    assert.equal(preserved.cache.namespace, confirmedHealth.cache.namespace);
+    assert.deepEqual(preserved.workspaceWatch, confirmedHealth.workspaceWatch);
+    assert.equal(preserved.roslyn.snapshotId, edited.location.snapshotId);
+    assert.deepEqual(codeProcesses().map(item => item.ProcessId).sort(), beforeSwitch.map(item => item.ProcessId).sort());
+  } finally { await peerClient.close(); assertExited(peerProcesses); }
   const againA = await integerTarget();
   await references(againA, 1, a);
-  assert.notEqual(againA.location.snapshotId, edited.location.snapshotId);
-  assert.equal((await call('wincode_find_references', { symbolName: 'Save', symbolLocation: inB.location }, true)).errorCode, 'SNAPSHOT_STALE');
-  report.scenarios.push('A to B to A closes the old Host and rejects identities from both prior sessions');
+  assert.equal(againA.location.snapshotId, edited.location.snapshotId);
+  report.scenarios.push('wrong-root open preserves the warm A Host, snapshot, session and watcher; independent B queries work and both connections reject foreign locations');
 
   // 配置经生产 CLI/Adapter/Host 三层传递；无关文件和显式输入必须产生相反的失效行为。
   await fs.writeFile(path.join(a, 'README.md'), '# Unrelated notes\n');

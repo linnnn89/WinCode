@@ -29,7 +29,7 @@ const inspectDefinition = defineTool<UiInspectRequest>({
         description: 'Process ID of the target Windows desktop application.',
       },
       hwnd: {
-        type: 'string',
+        type: 'string', maxLength: 32,
         description: 'Window handle of the target window (hex e.g. "0x00120ABC" or decimal string).',
       },
       capture: {
@@ -77,6 +77,7 @@ const inspectDefinition = defineTool<UiInspectRequest>({
   },
 }, {
   invalidArguments, validate: validateInspect,
+  requestBudget: 'ui',
   execute: async (args, { router, signal }) => uiResponse(await router.inspectUi({ ...args, hwnd: args.hwnd?.trim() }, signal)),
 });
 const uiInspectTool = inspectDefinition.tool;
@@ -95,6 +96,7 @@ export const UI_TOOLS = [
   }, {
     invalidArguments,
     validate: args => validateWindowQuery(args),
+    requestBudget: 'ui',
     execute: async (args, { router, signal }) => {
       const result = await router.listUiWindows(args, signal);
       const text = JSON.stringify(result);
@@ -137,6 +139,7 @@ export const UI_TOOLS = [
       validateCandidateCodeFiles(args.candidateCodeFiles);
       validateTextQueries(args.textQueries);
     },
+    requestBudget: 'ui',
     execute: async (args, { router, signal }) => {
       const { candidateFiles, candidateCodeFiles, textQueries, ...input } = args;
       return uiResponse(await router.reviewUi({ ...input, hwnd: input.hwnd?.trim() }, candidateFiles, signal, textQueries, candidateCodeFiles));

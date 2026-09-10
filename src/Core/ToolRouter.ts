@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { WinCodeConfig, WINCODE_VERSION } from './Config.js';
-import { CacheManager, CacheStats } from './Cache.js';
+import { CacheManager, KnownCacheStats } from './Cache.js';
+import { RequestAdmission } from './RequestAdmission.js';
 import { WorkspaceManager, WorkspaceOpenOptions, WorkspaceDirectoryOptions } from './Workspace.js';
 import { ContextManager, PreparedContextOptions } from './Context.js';
 import { RepomixAdapter } from '../Adapters/RepomixAdapter.js';
@@ -54,6 +55,7 @@ export interface RuntimeHealth {
   uptimeMs: number;
   startedAt: string;
   activeWorkspace: string | null;
+  workspaceBinding: WorkspaceManager['binding'];
   workspaceWatch: ReturnType<WorkspaceWatch['getStatus']>;
   session: WorkspaceSession | null;
   text: { available: boolean; semanticConfigured: false; details: string };
@@ -70,7 +72,8 @@ export interface RuntimeHealth {
     details?: string;
     lastError?: AdapterLastError;
   };
-  cache: CacheStats;
+  cache: KnownCacheStats;
+  admission: ReturnType<RequestAdmission['snapshot']>;
   managedChildProcesses: number;
   nodeMemory: NodeJS.MemoryUsage;
   inFlightRequests: number;
@@ -79,6 +82,7 @@ export interface RuntimeHealth {
 }
 
 export class ToolRouter {
+  readonly admission = new RequestAdmission();
   readonly config: WinCodeConfig;
   readonly cache: CacheManager;
   readonly workspace: WorkspaceManager;
@@ -114,10 +118,11 @@ export class ToolRouter {
 
   private async runCode<T>(signal: AbortSignal | undefined, work: (operation: OperationContext) => Promise<T>): Promise<T> {
     const controller = new AbortController();
-    const cancel = () => controller.abort();
+    const cancel = () => controller.abort(signal?.reason);
     const budget = (this.roslyn?.operationBudgetMs ?? 0) + this.config.timeouts.fileScanMs;
-    const operation = { signal: controller.signal, deadline: Date.now() + budget };
-    const timer = setTimeout(() => controller.abort(new TimeoutError('operation', budget)), budget);
+    const admitted = this.admission.operation(signal);
+    const operation = { signal: controller.signal, deadline: Math.min(Date.now() + budget, admitted?.deadline ?? Infinity), queue: admitted?.queue };
+    const timer = setTimeout(() => controller.abort(new TimeoutError('operation', budget)), Math.max(1, operation.deadline - Date.now()));
     this.codeOperations.add(controller);
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted || this.shuttingDown) cancel();
@@ -189,9 +194,9 @@ export class ToolRouter {
     return { version: WINCODE_VERSION, workspace: this.config.workspaceRoot,
       provider: this.roslyn ? 'roslyn' as const : 'local-text' as const,
       automaticRelease: false as const, state: this.shuttingDown ? 'shutting-down' : this.workspaceRecovery ? 'recovery-required' :
-        this.releasing ? 'releasing' : this.inFlight || this.codeOperations.size || this.pendingWorkspaceChanges ? 'busy' : 'idle',
+        this.releasing ? 'releasing' : this.admission.pendingCount || this.inFlight || this.codeOperations.size || this.pendingWorkspaceChanges ? 'busy' : 'idle',
       roslynLoaded: roslyn?.processAlive ?? false, snapshotId: roslyn?.snapshotId ?? null,
-      activeRequests: this.inFlight, managedChildProcesses: this.resources.childProcessCount(), nodeRssBytes: process.memoryUsage().rss,
+      activeRequests: Math.max(this.inFlight, this.admission.pendingCount), managedChildProcesses: this.resources.childProcessCount(), nodeRssBytes: process.memoryUsage().rss,
       lastError: this.workspaceRecovery?.message ?? roslyn?.health?.lastError?.message ?? null };
   }
 
@@ -201,12 +206,12 @@ export class ToolRouter {
       ({ success: ['released', 'already-cold', 'not-configured'].includes(status), status, message });
     if (this.shuttingDown) return Promise.resolve(reply('shutting-down', '实例正在退出。'));
     if (this.workspaceRecovery) return Promise.resolve(reply('recovery-required', '请先按已有恢复提示处理实例故障。'));
-    if (this.releasing || this.inFlight || this.codeOperations.size || this.pendingWorkspaceChanges)
+    if (this.releasing || this.admission.pendingCount || this.inFlight || this.codeOperations.size || this.pendingWorkspaceChanges)
       return Promise.resolve(reply('busy', 'Agent 正在工作或收尾，本次未释放；任务结束后可再次点击。'));
     if (!this.roslyn) return Promise.resolve(reply('not-configured', '此实例使用本地文本，没有 Roslyn 内存需要释放。'));
     const adapter = this.roslyn;
     this.releasing = this.workspaceLock.runExclusive(async () => {
-      const canRelease = () => !this.shuttingDown && !this.workspaceRecovery && !this.inFlight && !this.codeOperations.size && !this.pendingWorkspaceChanges;
+      const canRelease = () => !this.shuttingDown && !this.workspaceRecovery && !this.admission.pendingCount && !this.inFlight && !this.codeOperations.size && !this.pendingWorkspaceChanges;
       if (!canRelease()) return reply('busy', '已有新任务或工作区切换，本次未释放。');
       try {
         const status = await adapter.releaseWarmState(canRelease);
@@ -248,11 +253,16 @@ export class ToolRouter {
     return this.runCode(signal, operation => this.impact.analyzeImpact(target, operation, location));
   }
 
-  async diagnoseProject() {
-    const diagnostics = await this.diagnostics.runDiagnostics();
-    await this.repomix.checkHealth(this.config.timeouts.repomixHealthMs);
-    await this.flaui.checkHealth(this.config.timeouts.healthProbeMs);
-    const runtime = await this.getRuntimeHealth();
+  async diagnoseProject(signal?: AbortSignal) {
+    const operation = this.admission.operation(signal) ?? { signal };
+    checkOperation(operation);
+    const diagnostics = await this.diagnostics.runDiagnostics(operation);
+    checkOperation(operation);
+    await this.repomix.checkHealth(this.config.timeouts.repomixHealthMs, operation);
+    checkOperation(operation);
+    await this.flaui.checkHealth(this.config.timeouts.healthProbeMs, operation);
+    checkOperation(operation);
+    const runtime = await this.getRuntimeHealth(true);
     return { ...diagnostics, runtime };
   }
 
@@ -269,29 +279,16 @@ export class ToolRouter {
     return this.runCode(signal, operation => this.workspace.listDirectory(options, operation));
   }
 
+  assertWorkspace(targetPath: string): string {
+    return this.workspace.assertWorkspace(targetPath);
+  }
+
   async acquireRequestSlot(signal?: AbortSignal, allowDuringRecovery = false): Promise<void> {
     if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
     if (signal?.aborted) throw new AbortError('The tool call was cancelled.');
     while (this.switchingPromise || this.releasing) {
-      const barrier = this.switchingPromise ?? this.releasing!;
-      if (!signal) {
-        await barrier;
-      } else {
-        await new Promise<void>((resolve, reject) => {
-          const onAbort = () => reject(new AbortError('The tool call was cancelled.'));
-          signal.addEventListener('abort', onAbort, { once: true });
-          barrier.then(
-            () => {
-              signal.removeEventListener('abort', onAbort);
-              resolve();
-            },
-            () => {
-              signal.removeEventListener('abort', onAbort);
-              resolve();
-            }
-          );
-        });
-      }
+      // Reuse the cancellable FIFO instead of retaining one Promise reaction per cancelled call.
+      await this.workspaceLock.runExclusive(async () => {}, signal, this.admission.operation(signal)?.queue);
       if (signal?.aborted) throw new AbortError('The tool call was cancelled.');
     }
     if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
@@ -322,6 +319,8 @@ export class ToolRouter {
   }
 
   private async initializeOnce(): Promise<void> {
+    await this.workspace.validateRoot();
+    this.assertActive();
     this.cache.setNamespace(this.config.workspaceRoot);
     this.session.open(this.config.workspaceRoot, this.cache.currentNamespace);
     for (const initialize of [() => this.cache.initialize(), () => this.repomix.initialize(),
@@ -366,10 +365,12 @@ export class ToolRouter {
   }
 
   /**
-   * Switch the active workspace. Serialized so two MCP calls cannot interleave
-   * provider cleanup/reinitialization and cache namespace changes.
+   * Confirm or recover the fixed workspace. Serialize recovery so provider cleanup,
+   * cache/session renewal and watcher rebinding cannot interleave.
    */
   async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, signal?: AbortSignal) {
+    const resolved = this.workspace.assertWorkspace(targetPath);
+    const queue = this.admission.operation(signal)?.queue;
     signal = signal ? AbortSignal.any([signal, this.shutdownSignal]) : this.shutdownSignal;
     this.pendingWorkspaceChanges++;
     return this.workspaceLock.runExclusive(async () => {
@@ -379,9 +380,11 @@ export class ToolRouter {
       if (this.workspaceRecovery?.recoveryAction === 'restart_gateway')
         throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
 
+      await this.workspace.validateRoot();
+      checkOperation({ signal });
+
       const previousRoot = this.config.workspaceRoot;
       // A healthy same-root confirmation is read-only. Do not put business/status requests behind a drain barrier.
-      const resolved = path.relative(previousRoot, targetPath) === '' ? path.resolve(previousRoot) : path.resolve(targetPath);
       const knownRoslyn = this.roslyn?.getKnownHealth();
       const sameWorkspace = !this.workspaceRecovery && this.watch.getStatus().active &&
         Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
@@ -405,12 +408,12 @@ export class ToolRouter {
       let rootPrepared = false;
       let phase = 'drain';
       try {
-        // Wait for existing in-flight queries on the old workspace to settle before re-binding
+        // Recovery waits for existing requests before rebinding resources in this same workspace.
         const drainTimeout = this.config.timeouts?.shutdownMs ?? 8_000;
         const drained = await this.waitForIdle(drainTimeout, signal);
         if (!drained) {
           throw new Error(
-            `Workspace switch rejected: in-flight queries failed to drain within ${drainTimeout}ms (in-flight: ${this.inFlight}).`
+            `Workspace recovery rejected: in-flight queries failed to drain within ${drainTimeout}ms (in-flight: ${this.inFlight}).`
           );
         }
 
@@ -441,9 +444,7 @@ export class ToolRouter {
           return result;
         }
 
-        // Keep the process cache directory; isolate by namespace so we do not
-        // write `.cache/wincode` into every opened repo, and so project A
-        // symbols cannot be read as project B.
+        // Recover participants against the original root; no cross-project rebinding is permitted.
         phase = 'cache';
         this.cache.invalidateFingerprint(previousRoot);
         this.cache.setNamespace(this.config.workspaceRoot);
@@ -477,7 +478,7 @@ export class ToolRouter {
         this.workspaceRecovery = null;
         return result;
       } catch (error) {
-        if (rootPrepared || this.config.workspaceRoot !== previousRoot || this.workspaceRecovery) {
+        if (rootPrepared || !sameWorkspace || this.workspaceRecovery) {
           this.workspaceRecovery = {
             activeWorkspace: this.config.workspaceRoot, attemptedWorkspace: path.resolve(targetPath),
             phase, message: (error instanceof Error ? error.message : String(error)).slice(0, 1024),
@@ -493,7 +494,7 @@ export class ToolRouter {
         this.resolveSwitching = null;
         resolve?.();
       }
-    }, signal).finally(() => { this.pendingWorkspaceChanges--; });
+    }, signal, queue).finally(() => { this.pendingWorkspaceChanges--; });
   }
 
   private bindCompositeTools(): void {
@@ -504,9 +505,9 @@ export class ToolRouter {
     this.diagnostics = new ProjectDiagnostics(this.workspace, this.config, this.code);
   }
 
-  async waitForIdle(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+  async waitForIdle(timeoutMs: number, signal?: AbortSignal, includeAdmission = false): Promise<boolean> {
     const start = Date.now();
-    while (this.inFlight > 0) {
+    while (this.inFlight > 0 || (includeAdmission && this.admission.pendingCount > 0)) {
       checkOperation({ signal });
       if (Date.now() - start >= timeoutMs) {
         return false;
@@ -516,14 +517,22 @@ export class ToolRouter {
     return true;
   }
 
-  async getRuntimeHealth(): Promise<RuntimeHealth> {
+  requestBudget(kind?: 'ui' | 'diagnostics' | 'workspace', args: Record<string, unknown> = {}): number {
+    const timeouts = this.config.timeouts;
+    if (kind === 'ui') return timeouts.fileScanMs + (typeof args.timeoutMs === 'number' ? args.timeoutMs : this.config.adapters.flaui.timeoutMs ?? timeouts.flauiInspectMs);
+    if (kind === 'diagnostics') return timeouts.fileScanMs + timeouts.dotnetMs * 4 + timeouts.gitMs + timeouts.commandProbeMs * 4 + timeouts.repomixHealthMs + timeouts.healthProbeMs;
+    return timeouts.fileScanMs + (this.roslyn?.operationBudgetMs ?? 0) + (kind === 'workspace' ? timeouts.shutdownMs : 0);
+  }
+
+  async getRuntimeHealth(refreshCacheStats = false): Promise<RuntimeHealth> {
     const snapshots = { text: this.text.getKnownHealth(), repomix: this.repomix.getKnownHealth(), flaui: this.flaui.getKnownHealth() };
     const unknown = { available: null, source: 'unknown', details: 'Not probed; use wincode_diagnose_project for an active check.', lastError: undefined };
     const textHealth = snapshots.text.health;
     const repomixHealth = snapshots.repomix.health ?? unknown;
     const flauiHealth = { ...(snapshots.flaui.health ?? unknown),
       lastError: this.flaui.lastError ?? snapshots.flaui.health?.lastError };
-    const cache = await this.cache.getStats();
+    if (refreshCacheStats) await this.cache.getStats();
+    const cache = this.cache.getKnownStats();
     const lastAdapterError = this.pickLastError(
       { error: repomixHealth.lastError, provider: 'repomix' },
       { error: flauiHealth.lastError, provider: 'flaui' },
@@ -539,6 +548,7 @@ export class ToolRouter {
       uptimeMs: Date.now() - this.startedAt,
       startedAt: new Date(this.startedAt).toISOString(),
       activeWorkspace: this.config.workspaceRoot,
+      workspaceBinding: this.workspace.binding,
       workspaceWatch: this.watch.getStatus(),
       session: this.session.current,
       text: { available: true, semanticConfigured: false, details: textHealth.details! },
@@ -556,6 +566,7 @@ export class ToolRouter {
         lastError: flauiHealth.lastError,
       },
       cache,
+      admission: this.admission.snapshot(),
       managedChildProcesses: this.resources.childProcessCount(),
       nodeMemory: process.memoryUsage(),
       inFlightRequests: this.inFlight,
@@ -581,11 +592,11 @@ export class ToolRouter {
   }
 
   async inspectUi(request: UiInspectRequest, signal?: AbortSignal): Promise<UiInspectResult> {
-    return this.flaui.inspect(request, signal);
+    return this.flaui.inspect(request, signal, this.admission.operation(signal));
   }
 
   async listUiWindows(request: import('./UiContracts.js').UiListWindowsRequest, signal?: AbortSignal): Promise<UiInspectResult> {
-    return this.flaui.listWindows(request, signal);
+    return this.flaui.listWindows(request, signal, this.admission.operation(signal));
   }
 
   async reviewUi(request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[], candidateCodeFiles?: string[]): Promise<UiReviewResult> {
@@ -620,7 +631,7 @@ export class ToolRouter {
       await this.initialization?.catch(() => {});
       await this.switchingPromise?.catch(() => {});
       await this.releasing?.catch(() => {});
-      const drained = await this.waitForIdle(Math.max(1, Math.min(3_000, softDeadline - Date.now())));
+      const drained = await this.waitForIdle(Math.max(1, Math.min(3_000, softDeadline - Date.now())), undefined, true);
       if (!drained) throw new Error('Requests did not settle before shutdown.');
     }, Math.min(3_000, (softDeadline - Date.now()) / 3));
     const drained = failures.length === 0;

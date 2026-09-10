@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { WorkspaceManager, ProjectIdentity } from '../Core/Workspace.js';
 import { WinCodeConfig } from '../Core/Config.js';
 import { AdapterHealthQuery } from '../Core/AdapterStatus.js';
+import { checkOperation, type OperationContext } from '../Core/OperationContext.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -31,8 +32,9 @@ export class ProjectDiagnostics {
     this.queries = queries;
   }
 
-  async runDiagnostics(): Promise<DiagnosticsReport> {
-    const identity: ProjectIdentity = await this.workspace.identifyProject();
+  async runDiagnostics(operation?: OperationContext): Promise<DiagnosticsReport> {
+    checkOperation(operation);
+    const identity: ProjectIdentity = await this.workspace.identifyProject(operation);
     const items: DiagnosticItem[] = [];
 
     // Check Windows platform
@@ -52,10 +54,12 @@ export class ProjectDiagnostics {
 
     // Check .NET SDK availability — presence is not semantic analysis capability
     try {
+      checkOperation(operation);
       const executable = this.config.adapters.roslyn?.enabled ? this.config.adapters.roslyn.dotnetPath : 'dotnet';
       const { stdout } = await execFileAsync(executable, ['--version'], {
         windowsHide: true,
-        timeout: this.config.timeouts?.dotnetMs ?? 5000,
+        timeout: Math.max(1, Math.min(this.config.timeouts?.dotnetMs ?? 5000, (operation?.deadline ?? Infinity) - Date.now())),
+        signal: operation?.signal,
       });
       items.push({
         category: 'Environment',
@@ -63,6 +67,7 @@ export class ProjectDiagnostics {
         message: `.NET SDK detected (Version: ${stdout.trim()}). This does not mean semantic reference analysis is available.`,
       });
     } catch {
+      checkOperation(operation);
       items.push({
         category: 'Environment',
         status: identity.isDotNet ? 'FAIL' : 'WARN',
@@ -72,6 +77,7 @@ export class ProjectDiagnostics {
     }
 
     if (this.queries) {
+      checkOperation(operation);
       const health = await this.queries.checkHealth();
       if (this.config.adapters.roslyn?.enabled) {
         items.push({ category: 'Dependencies', status: health.available ? 'PASS' : 'WARN',

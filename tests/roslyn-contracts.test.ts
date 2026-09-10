@@ -204,7 +204,7 @@ it('rejects a Host that fails to confirm the configured additional inputs and re
     const host = path.join(root, 'host.cjs');
     await fs.writeFile(path.join(root, 'App.csproj'), '<Project />');
     await fs.writeFile(path.join(root, 'schema.yaml'), 'mode: original');
-    await fs.writeFile(host, `console.log(JSON.stringify({id:null,type:'ready',success:true,protocolVersion:2,snapshot:'${'a'.repeat(32)}',configuration:'Debug',framework:'net10.0',processTreeGuard:true,hostIdentity:{version:'${WINCODE_VERSION}',configuration:'Release',protocolVersion:2},inputPolicy:{version:1,additionalInputs:[]}})); process.stdin.resume(); setInterval(()=>{},1000);`);
+    await fs.writeFile(host, `console.log(JSON.stringify({id:null,type:'ready',success:true,protocolVersion:2,snapshot:'${'a'.repeat(32)}',configuration:'Debug',framework:'net10.0',processTreeGuard:true,hostIdentity:{version:'${WINCODE_VERSION}',configuration:'Release',protocolVersion:2},inputPolicy:{version:2,additionalInputs:[]}})); process.stdin.resume(); setInterval(()=>{},1000);`);
     config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'App.csproj', configuration: 'Debug',
       targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: host, additionalInputs: ['schema.yaml'] };
     const adapter = new RoslynAdapter(config, resources, () => []);
@@ -264,10 +264,12 @@ it('Roslyn cleanup failure enters sticky E1 recovery and never starts Local text
   try {
     await router.initialize();
     (router.roslyn as any).client = { close: async () => { closes++; throw new Error('injected cleanup failure'); } };
-    await assert.rejects(router.openWorkspace(b), WorkspaceRecoveryRequiredError);
+    await (router as any).watch.stop();
+    await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError);
     assert.equal(router.workspaceRecoveryState?.recoveryAction, 'restart_gateway');
     await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError);
-    assert.equal(config.workspaceRoot, b);
+    await assert.rejects(router.openWorkspace(b), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
+    assert.equal(config.workspaceRoot, a);
     assert.equal(closes, 1);
     await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
     const health = await router.getRuntimeHealth();
@@ -294,7 +296,7 @@ for (const identity of [undefined, { version: '0.0.0', configuration: 'Release',
       await fs.writeFile(path.join(root, 'App.csproj'), '<Project />');
       const ready = { id: null, type: 'ready', success: true, protocolVersion: 2, snapshot: 'a'.repeat(32),
         configuration: 'Debug', framework: 'net10.0', processTreeGuard: true, hostIdentity: identity,
-        inputPolicy: { version: 1, additionalInputs: [] } };
+        inputPolicy: { version: 2, additionalInputs: [] } };
       await fs.writeFile(host, 'console.log(' + JSON.stringify(JSON.stringify(ready)) + '); process.stdin.resume(); setInterval(()=>{},1000);');
       config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'App.csproj', configuration: 'Debug',
         targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: host };

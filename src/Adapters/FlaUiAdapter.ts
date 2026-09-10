@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { IAdapter, AdapterHealth, AdapterLastError } from './IAdapter.js';
 import { WinCodeConfig } from '../Core/Config.js';
+import { checkOperation, type OperationContext } from '../Core/OperationContext.js';
 import {
   ResourceManager,
   Mutex,
@@ -87,8 +88,9 @@ export class FlaUiAdapter implements IAdapter {
     return null;
   }
 
-  async checkHealth(timeoutMs?: number): Promise<AdapterHealth> {
-    const health = await this.probeHealth(timeoutMs);
+  async checkHealth(timeoutMs?: number, operation?: OperationContext): Promise<AdapterHealth> {
+    checkOperation(operation);
+    const health = await this.probeHealth(timeoutMs, false, operation);
     // Availability and recent operation failure are different facts. A successful/cached
     // health probe must not erase a recent inspect timeout or cleanup failure.
     const latest = [health.lastError, this.lastError].filter(Boolean)
@@ -109,7 +111,7 @@ export class FlaUiAdapter implements IAdapter {
       health: this.healthCache ? { ...this.healthCache.value, lastError: this.lastError ?? this.healthCache.value.lastError } : null };
   }
 
-  private async probeHealth(timeoutMs?: number, validateOnly = false): Promise<AdapterHealth> {
+  private async probeHealth(timeoutMs?: number, validateOnly = false, operation?: OperationContext): Promise<AdapterHealth> {
     if (this.shuttingDown) return { available: false, source: 'unavailable', details: 'FlaUI is shutting down.' };
     if (timeoutMs === undefined && this.healthCache && Date.now() - this.healthCache.at < 5_000) {
       return this.healthCache.value;
@@ -179,8 +181,10 @@ export class FlaUiAdapter implements IAdapter {
 
     if (validateOnly) return { available: false, source: 'unavailable', details: 'UIA runtime has not been probed.' };
 
-    const probeTimeout = timeoutMs ?? this.config.timeouts?.healthProbeMs ?? 3_000;
+    checkOperation(operation);
+    const probeTimeout = Math.max(1, Math.min(timeoutMs ?? this.config.timeouts?.healthProbeMs ?? 3_000, (operation?.deadline ?? Infinity) - Date.now()));
     const probeAbortController = new AbortController();
+    const probeSignal = operation?.signal ? AbortSignal.any([operation.signal, probeAbortController.signal]) : probeAbortController.signal;
     const probeTimer = setTimeout(() => probeAbortController.abort(), probeTimeout);
     probeTimer.unref?.();
 
@@ -197,7 +201,7 @@ export class FlaUiAdapter implements IAdapter {
             pid: 0,
           },
           probeTimeout,
-          probeAbortController.signal
+          probeSignal
         );
 
         if (res.success && res.status === 'healthy') {
@@ -212,7 +216,7 @@ export class FlaUiAdapter implements IAdapter {
         }
 
         throw new Error(res.errorMessage || 'Host probe failed');
-      }, probeAbortController.signal);
+      }, probeSignal, operation?.queue);
     } catch (err) {
       const isAbort = err instanceof AbortError || probeAbortController.signal.aborted;
       const msg = isAbort
@@ -238,20 +242,20 @@ export class FlaUiAdapter implements IAdapter {
     }
   }
 
-  async listWindows(request: UiListWindowsRequest, signal?: AbortSignal): Promise<UiInspectResult> {
+  async listWindows(request: UiListWindowsRequest, signal?: AbortSignal, operation?: OperationContext): Promise<UiInspectResult> {
     try { validateWindowQuery(request); }
     catch (error) {
       return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: randomUUID(), success: false,
         errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message };
     }
     // Reuse the same queue, cancellation deadline and exit-confirmed cleanup as inspection.
-    return this.inspect({ ...request, action: 'listWindows', timeoutMs: 3000 }, signal);
+    return this.inspect({ ...request, action: 'listWindows', timeoutMs: 3000 }, signal, operation);
   }
 
   async inspect(
-    request: UiInspectRequest, signal?: AbortSignal
+    request: UiInspectRequest, signal?: AbortSignal, operation?: OperationContext
   ): Promise<UiInspectResult> {
-    const result = await this.inspectOnce(request, signal);
+    const result = await this.inspectOnce(request, signal, operation);
     if (!result.success) this.lastError = {
       at: new Date().toISOString(),
       reason: result.errorCode === UiErrorCodes.TIMEOUT ? 'timeout' :
@@ -267,7 +271,8 @@ export class FlaUiAdapter implements IAdapter {
 
   private async inspectOnce(
     request: UiInspectRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    operation?: OperationContext
   ): Promise<UiInspectResult> {
     const requestId = request.requestId || randomUUID();
     try { validateUiQuery(request.query, request.readStates); }
@@ -332,9 +337,9 @@ export class FlaUiAdapter implements IAdapter {
       this.config.timeouts?.flauiInspectMs ??
       UI_INSPECT_DEFAULTS.TIMEOUT_MS;
 
-    const deadline = Date.now() + effectiveTimeout;
+    const deadline = Math.min(Date.now() + effectiveTimeout, operation?.deadline ?? Infinity);
     const deadlineController = new AbortController();
-    const deadlineTimer = setTimeout(() => deadlineController.abort(), effectiveTimeout);
+    const deadlineTimer = setTimeout(() => deadlineController.abort(), Math.max(1, deadline - Date.now()));
     const executionSignal = signal
       ? AbortSignal.any([signal, deadlineController.signal])
       : deadlineController.signal;
@@ -368,7 +373,7 @@ export class FlaUiAdapter implements IAdapter {
           return { ...result, errorCode: UiErrorCodes.TIMEOUT, errorMessage: 'UI inspection deadline exceeded.' };
         }
         return result;
-      }, executionSignal);
+      }, executionSignal, operation?.queue);
     } catch (err) {
       if (err instanceof AbortError) {
         return {

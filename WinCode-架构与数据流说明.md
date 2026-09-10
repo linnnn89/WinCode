@@ -1,21 +1,23 @@
 # WinCode 架构、数据流与检查关口
 
-**源码契约：0.14.0；基于已合并 PR #35 的 main 7d53fda，本地架构边界修复位于 codex/architecture-boundaries，更新日期：2026-09-10（北京时间）。具体提交、测试与合并状态见工作记录和 GitHub PR。**
+**源码契约：0.15.0；分支 codex/runtime-baseline-and-cleanup，基线为已合并 PR #36 的 main fb3cd48，更新日期：2026-09-10（北京时间）。当前作为草稿 PR 交接：N4 私有输出已接入源码，尚未完成正式构建与全链路验收，未合并或发布。**
 
 本说明描述当前源码中已实现的结构。GitHub 分支保护的历史只读核查日期为 2026-09-08；本轮核对 PR 检查状态，不把它等同重新审计全部保护设置。历史实测结果见[工作记录](docs/codex_worklog.md)。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
+
+N4 待验接入：`DesignTimeBuild` 使用已有 SDK 的 ProjectCollection 做原项目求值，保留原中间目录的 Compile 排除规则及自定义导入；目标运行仍交给 MSBuildWorkspace，使用每 Host UUID 的私有 IntermediateOutputPath。输入扫描仅过滤已判定不参与默认编译的原中间产物，实际文档/显式输入仍校验，自定义 Compile 保守处理。`OwnedBuildOutputs` 记录原生所有权清单，正常关闭回收；`RoslynHostClient` 在实际退出后调用 `DesignTimeArtifacts` 回收所属命名空间。内部 inputPolicy 已切至 2，旧策略 Host 会被拒绝。上述为当前源码设计，最终构建、复杂项目兼容性及全部崩溃路径尚待验收；磁盘上的较早构建不代表此实现已生效。
 
 ## 1. 整体定位与结构
 
 WinCode 是一个运行在本机的 **MCP 工具网关**：接收编码 Agent 的结构化请求，组织代码或桌面证据，再把正文与证据边界一起返回。Agent 的模型推理在客户端侧；WinCode 自身没有模型推理服务或向量数据库。
 
-主体采用**分层单体 + 外部工具适配器 + 进程外桌面取证**。每个 Gateway 进程只有一个活动工作区；外部上游与 UI Helper 各有独立生命周期。
+主体采用**分层单体 + 外部工具适配器 + 进程外桌面取证**。每个 Gateway 进程在启动时固定一个工作区；外部上游与 UI Helper 各有独立生命周期。
 
 ```mermaid
 flowchart TB
   Client["Codex / 其他 MCP 客户端\n模型推理、请求选择、用户授权"]
   subgraph Node["WinCode Node 进程"]
     Gate["Gateway\nMCP 接入 · 工具契约 · 参数校验 · 响应封装"]
-    Router["ToolRouter\n组件装配 · 用例入口 · 工作区切换 · 生命周期"]
+    Router["ToolRouter\n组件装配 · 用例入口 · 固定根与资源恢复 · 生命周期"]
     Use["用例与证据处理\nContext / Architecture / Impact / Refactor / UiReview"]
     State["横向状态与资源\nWorkspace · Session · Cache · Watch · ResourceManager"]
     Adapters["适配器\nLocalTextAdapter / RoslynAdapter · RepomixAdapter · FlaUiAdapter"]
@@ -66,9 +68,13 @@ sequenceDiagram
   G->>G: 剔除未知字段，检查已知字段组合
   alt 参数无效
     G-->>A: 错误；业务能力不执行
+  else tools/list 或 hello
+    G->>G: 获取 4 个轻量槽之一，直接读取已知状态
+    G-->>A: 状态或 SERVER_BUSY
   else 普通请求
+    G->>G: 校验 64 KiB 参数并获取 32 个业务槽之一
     G->>R: acquireRequestSlot(signal)
-    R->>R: 等待工作区切换结束，增加在途计数
+    R->>R: 等待同根恢复结束，增加在途计数
     G->>U: 经 Router 执行对应能力
     U->>E: 有界读取 / 上游 RPC / Helper 请求
     E-->>U: 数据、错误或不完整结果
@@ -77,10 +83,12 @@ sequenceDiagram
     G-->>A: MCP 文本 / 可选图片
     G->>R: finally 释放在途计数
   else workspace_open
-    G->>R: 工作区互斥锁，不计入普通在途请求
-    alt 同根健康确认
+    G->>R: 先校验固定根；一致时才进入工作区互斥锁
+    alt 请求其他根
+      R-->>G: WORKSPACE_MISMATCH，不排空、不修改资源
+    else 同根健康确认
       R->>R: 读取概览，保留 Host，不等待业务排空
-    else 切换或已知故障恢复
+    else 同根已知故障恢复
       R->>R: 排空、重绑或重置；失败保留恢复状态
     end
     R-->>G: 工作区摘要或领域错误
@@ -92,9 +100,11 @@ sequenceDiagram
 
 **容忍未知字段，严格校验已知字段。** 未声明字段可出现在协议请求中，但会在递归整理参数时被剔除，不能影响业务或原生请求；声明字段不做字符串→数字等隐式类型转换。例如，拼错 `lineRanges` 不会自动启用范围检索。
 
-互斥等待节点采用 FIFO，排队取消会立即删除实际节点，正在执行的任务仍在清理完成后归还执行权。被动 hello 在健康同根确认期间可响应，但真正切换屏障和完整过载准入仍待 N3。
+互斥等待节点采用 FIFO，排队取消会立即删除实际节点，正在执行的任务仍在清理完成后归还执行权。运行中取消在实际清理后才归还受理容量。启动、同根恢复和适配器等待共用一份受理归属与 deadline；启动等待取消后从 Set 删除实际节点，不为每轮取消保留 Promise 回调。
 
-**准入不是全局限流器。** 在途计数主要用于保护工作区切换和关闭；当前没有一个统一的“全部请求最多并发 N 个”策略。UI 请求及 UI 健康探测另有适配器互斥锁。
+**有界受理和实际执行分开。** 每实例最多 32 个未完成业务请求（含 workspace_open），hello/tools/list 共享 4 个轻量槽。既有 Roslyn/UI/恢复互斥决定 FIFO 等待；其他已有并行能力继续并行。满额在执行前返回 SERVER_BUSY，不驱逐先来者或自动重放。恢复占用业务容量，但不计入它自己等待排空的 inFlight；关闭和手动释放同时考虑未完成受理与实际清理。
+
+原始参数含未知字段，在归一化前按 UTF-8 JSON 限制为 64 KiB。外层预算包含排队，Router/Adapter 使用剩余 deadline。health.admission 给出计数和等待/执行耗时；hello 仅读取缓存磁盘观察，诊断才刷新统计。这些限制不能消除 SDK 解析帧的瞬时内存，也不提供挂起 OS I/O 的强制终止保证。
 
 ## 3. 代码证据的数据流
 
@@ -173,7 +183,7 @@ flowchart TB
 | 数据位置 | 保存内容 | 生命周期 / 边界 |
 |---|---|---|
 | Node 进程内 | 当前 session、请求计数、适配器连接状态、内存缓存、资源记录 | 每 Gateway 一个活动工作区；退出后不保留这些内存状态 |
-| 启动配置的 `cacheDir`，默认 `.cache/wincode` | 缓存 JSON、打包临时文件、overflow 正文 | 按工作区 namespace 隔离；切换项目保留缓存目录，避免向每个项目散写缓存 |
+| 启动配置的 `cacheDir`，默认 `.cache/wincode` | 缓存 JSON、打包临时文件、overflow 正文 | 使用固定根的 namespace；不同连接可配置同一目录，跨进程物理存储隔离仍需专项验证 |
 | 工作区源码与项目文件 | 输入证据 | 代码分析通常读取；不会因为生成重构计划就自动修改源码 |
 | 配置的 `trashDir` | 被移动的文件和 `.meta.json` 元数据 | `safe_move_to_trash` 是实际写操作；路径/真实路径检查后移动，非永久删除 |
 | `%LOCALAPPDATA%/WinCode/logs/ui-audit` | UI 取证审计 | 有容量准入；不自动删除审计来恢复访问 |
@@ -189,13 +199,17 @@ flowchart TB
 
 架构概览不再另走无总量限制的旧树/项目读取：共用 ProjectDiscovery、WorkspaceBrowser 和 OperationContext。发现上限 2000 项、树 500 项；图上限 16 个项目/64 KiB 单文件/256 KiB 合计、入口枚举 2000 项，返回完整性与遗漏；整份报告上限 32768 UTF-16 字符。取消后的读取在实际返回并关闭句柄后结束归属，不靠外层超时提前释放。文本声明先规范化空白并拒绝超过 16384 字符的规范化单行，避免原有重叠可选空白匹配；不是完整语法分析器。
 
-### 5.2 工作区切换
+### 5.2 固定工作区与同根恢复
 
-健康同根确认：`工作区互斥锁 → 读取概览/刷新提示 → 保留 Host、快照、watcher 和 session`。它不设置切换屏障、不等待普通查询排空；取消只读确认不会制造恢复门。
+启动时捕获并保护 config.workspaceRoot，内部 setRoot 与 openWorkspace 也校验固定根。显式 CLI 路径须为绝对路径；缺省绑定 cwd。初始化前验证目录已存在且路径无链接，其他根或 junction 别名不能作为切换入口。这不是对抗并发文件系统替换的原子沙盒。
 
-真正换根或已知恢复：`工作区互斥锁 → 暂停普通请求进入 → 等待旧请求结束 → 校验/打开目标 → 更新 namespace/session/fingerprint → 重绑 watcher → 按状态重置相关上游 → 恢复请求准入`。SDK 重启要求、清理失败及部分重绑定不能走健康确认捷径。
+独立实例仍可能共享同一物理项目的 MSBuild 输出。本轮已复现两个 Host 同时冷加载时竞争 obj 内的 GeneratedMSBuildEditorConfig.editorconfig，返回 PROJECT_LOAD_FAILED；属于 N4 待修问题。默认多实例验收保留此场景，分阶段启动同根 Host 的 N3 通过回执不能覆盖它。
 
-旧请求不能在限定时间内结束时，拒绝切换；等待期间可以取消。开始提交切换后完成必要收尾，当前实现不承诺跨文件系统、适配器与缓存的事务性回滚。
+健康同根确认：`固定根校验 → 工作区互斥锁 → 读取概览/刷新提示 → 保留 Host、快照、watcher 和 session`。它不设置恢复屏障、不等待普通查询排空；取消只读确认不会制造恢复门。
+
+同根已知恢复：`固定根校验 → 工作区互斥锁 → 暂停普通请求进入 → 等待旧请求结束 → 验证固定根 → 更新 namespace/session/fingerprint → 重绑 watcher → 按状态重置相关上游 → 恢复请求准入`。SDK 重启要求、清理失败及部分重绑定不能走健康确认捷径。
+
+其他根在以上步骤前返回 WORKSPACE_MISMATCH。旧请求不能在限定时间内结束时，拒绝同根恢复；等待期间可取消。开始恢复后完成必要收尾，失败保留恢复门；当前实现不承诺跨文件系统、适配器与缓存的事务性回滚。
 
 ### 5.3 取消与退出
 
@@ -208,7 +222,7 @@ flowchart TB
 | 关口 | 位置 | 检查 / 处理 | 不能据此声称什么 |
 |---|---|---|---|
 | G1 工具契约 | ToolRegistry | 名称、类型、范围、字段组合；未知字段剔除 | 容忍拼写错误不表示对应能力生效 |
-| G2 请求与工作区 | Gateway / ToolRouter | 取消/关闭检查；切换互斥与在途排空 | 不是所有请求统一串行，也不是多租户隔离 |
+| G2 请求与工作区 | Gateway / ToolRouter | 固定根校验；32/4 受理容量；64 KiB 参数；共享 deadline；同根恢复排空 | 不是 OS 多租户安全隔离或 RSS 硬上限 |
 | G3 文件与范围 | Workspace、Context、UI 源码 mapper | 相对/真实路径、工作区边界、候选数量、文件/读取预算 | 路径检查不是 OS 沙盒或完整文件事务 |
 | G4 上游启动 | 各 Adapter | 配置禁用、可用性、超时；Repomix Node 直启 JS | 已安装脚本本身的可信性没有因此被证明 |
 | G5 语义身份 | LocalTextAdapter / RoslynAdapter / ImpactAnalyzer | 完整身份、重载、歧义、协议错误、完成状态 | fallback、零引用或非空结果不等于安全重构 |

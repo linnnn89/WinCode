@@ -10,7 +10,7 @@ import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 import { WINCODE_TOOLS, contractHash, toolsContractHash } from '../src/Gateway/Protocol.js';
 
-it('hello and tools/list share an immutable registered contract and runtime survives workspace switching', async () => {
+it('hello and tools/list share an immutable registered contract and runtime survives a rejected workspace switch', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-contract-'));
   const config = getDefaultConfig(root);
 
@@ -42,7 +42,9 @@ it('hello and tools/list share an immutable registered contract and runtime surv
     assert.equal(selected.toolContract.tool.schemaHash, contractHash(schema));
     await fs.mkdir(path.join(root, 'other'));
     const switched = await client.callTool({ name: 'workspace_open', arguments: { path: path.join(root, 'other') } });
-    assert.notEqual(switched.isError, true);
+    assert.equal(switched.isError, true);
+    assert.equal(JSON.parse((switched.content[0] as any).text).errorCode, 'WORKSPACE_MISMATCH');
+    assert.equal((await call()).workspace, root);
     assert.deepEqual((await call()).runtime, hello.runtime);
     for (const args of [{ toolName: 'missing' }, { greeting: 5 }]) {
       assert.equal((await client.callTool({ name: 'wincode_hello_world', arguments: args })).isError, true);

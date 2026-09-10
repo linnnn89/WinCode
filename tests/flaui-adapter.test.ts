@@ -100,7 +100,8 @@ describe('FlaUiAdapter Unit & Lifecycle Suite', () => {
       maxNodes: 50,
     });
 
-    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.success, true, JSON.stringify({ requestId: res.requestId,
+      errorCode: res.errorCode, errorMessage: res.errorMessage, captureMethod: res.captureMethod }));
     assert.ok(res.tree, 'Result must contain tree root');
     assert.strictEqual(res.tree?.controlType, 'Window');
     assert.ok((res.totalNodes ?? 0) >= 15, `Expected >= 15 nodes, got ${res.totalNodes}`);

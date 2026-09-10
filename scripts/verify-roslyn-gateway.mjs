@@ -192,6 +192,26 @@ try {
   assert.notEqual(edited.location.snapshotId, target.location.snapshotId);
   await references(edited, 1, a);
   report.scenarios.push('edit rejects old evidence; explicit new search reloads and returns changed references');
+  const warmProcesses = codeProcesses();
+  const warmHealth = (await call('wincode_hello_world')).health;
+  for (let iteration = 0; iteration < 10; iteration++) {
+    await call('workspace_open', { path: a });
+    const confirmed = await integerTarget();
+    assert.equal(confirmed.location.snapshotId, edited.location.snapshotId);
+    await references(edited, 1, a);
+  }
+  await Promise.all([
+    ...Array.from({ length: 4 }, () => call('workspace_open', { path: a })),
+    references(edited, 1, a),
+  ]);
+  const confirmedHealth = (await call('wincode_hello_world')).health;
+  assert.equal(confirmedHealth.session.id, warmHealth.session.id);
+  assert.deepEqual(confirmedHealth.workspaceWatch, warmHealth.workspaceWatch);
+  assert.equal(confirmedHealth.roslyn.snapshotId, warmHealth.roslyn.snapshotId);
+  assert.deepEqual(codeProcesses().map(item => item.ProcessId).sort(), warmProcesses.map(item => item.ProcessId).sort());
+  report.warmConfirmations = { sequential: 10, concurrent: 4, snapshotId: confirmedHealth.roslyn.snapshotId,
+    processes: warmProcesses, sessionId: confirmedHealth.session.id };
+  report.scenarios.push('ten same-root opens and four concurrent confirmations preserve the real Host and observed owned-process PIDs, snapshot, watcher and session while references remain valid');
   const beforeSwitch = codeProcesses();
   report.beforeSwitch = { gatewayPid: transport.pid, processes: beforeSwitch };
   await call('workspace_open', { path: b });
@@ -229,7 +249,18 @@ try {
   assert.equal((await call('wincode_hello_world')).health.lastAdapterError.provider, 'roslyn');
   report.scenarios.push('configured extra input changes and absence invalidate evidence; explicit repair and search recover');
 
+  // SDK input changes really require a fresh process. This also establishes an
+  // actual cold state for the following initial-load failure assertion.
+  const beforeSdk = await integerTarget();
+  const sdkProcesses = codeProcesses();
+  await fs.writeFile(path.join(a, 'global.json'), JSON.stringify({ sdk: { version: '10.0.303', rollForward: 'disable' } }));
+  const sdkChanged = await call('wincode_find_references', { symbolName: 'Save', symbolLocation: beforeSdk.location }, true);
+  assert.equal(sdkChanged.errorCode, 'HOST_RESTART_REQUIRED');
+  assert.equal(sdkChanged.recoveryAction, 'workspace_open');
   await call('workspace_open', { path: a });
+  assertExited(sdkProcesses);
+  assert.equal((await call('wincode_hello_world')).health.roslyn.processAlive, false);
+  report.scenarios.push('real SDK-selection input change requires workspace_open, closes the old Host and leaves a cold reusable adapter');
   await fs.writeFile(path.join(a, 'App/App.csproj'), '<Project');
   const failedLoad = await call('wincode_find_code_symbol', { query: 'Api' }, true);
   assert.equal(failedLoad.errorCode, 'PROJECT_LOAD_FAILED');
@@ -237,6 +268,15 @@ try {
   await fs.writeFile(path.join(a, 'App/App.csproj'), appProject);
   await references(await integerTarget(), 1, a);
   report.scenarios.push('initial project load failure returns its domain error and permits explicit repair without false cleanup failure');
+
+  const beforeMalformed = await integerTarget();
+  await fs.writeFile(path.join(a, 'App/App.csproj'), '<Project');
+  const invalidated = await call('wincode_find_references', { symbolName: 'Save', symbolLocation: beforeMalformed.location }, true);
+  assert.ok(['SNAPSHOT_STALE', 'INPUTS_CHANGED'].includes(invalidated.errorCode));
+  assert.equal((await call('wincode_find_code_symbol', { query: 'Api' }, true)).errorCode, 'PROJECT_LOAD_FAILED');
+  await fs.writeFile(path.join(a, 'App/App.csproj'), appProject);
+  await references(await integerTarget(), 1, a);
+  report.scenarios.push('malformed input in a warm project rejects old evidence before explicit reload fails; repairing and searching recovers');
 
   await verifyGatewayLifecycle({ root, a, host, appProject, client, call, markerReady, codeProcesses, report, references, integerTarget });
   const final = await call('wincode_hello_world');

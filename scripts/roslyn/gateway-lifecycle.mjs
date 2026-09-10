@@ -14,8 +14,11 @@ export async function verifyGatewayLifecycle({ root, a, host, appProject, client
   for (const mode of ['cancel', 'crash', 'timeout']) {
     console.log(`[roslyn-gateway] active MSBuild ${mode}`);
     await call('workspace_open', { path: a });
+    const beforeChange = await integerTarget();
     await fs.rm(marker, { force: true });
     await fs.writeFile(path.join(a, 'App/App.csproj'), appProject.replace('</Project>', targetXml + '</Project>'));
+    const stale = await call('wincode_find_references', { symbolName: 'Save', symbolLocation: beforeChange.location }, true);
+    assert.ok(['SNAPSHOT_STALE', 'INPUTS_CHANGED'].includes(stale.errorCode));
     const controller = new AbortController();
     const pending = client.callTool({ name: 'wincode_find_code_symbol', arguments: { query: 'Api' } }, { timeout: 30000, signal: controller.signal });
     const settled = pending.then(value => ({ value }), error => ({ error: String(error) }));
@@ -36,8 +39,20 @@ export async function verifyGatewayLifecycle({ root, a, host, appProject, client
       assert.equal(outcome.value?.isError, true, JSON.stringify(outcome));
       assert.equal(JSON.parse(outcome.value.content[0].text).errorCode, mode === 'timeout' ? 'HOST_TIMEOUT' : 'HOST_CRASHED');
     }
-    // 客户端取消会先结束本地等待；同根打开等待 Gateway 占用清理完成后，才应确认恢复。
+    // Client cancellation ends its own wait first. Same-root confirmation is now read-only,
+    // so observe actual Gateway completion instead of treating workspace_open as a drain barrier.
     await call('workspace_open', { path: a });
+    const cleanupStarted = Date.now();
+    let health = (await call('wincode_hello_world')).health;
+    const initialInFlight = health.inFlightRequests;
+    while (health.inFlightRequests > 1 && Date.now() - cleanupStarted < 8000) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      health = (await call('wincode_hello_world')).health;
+    }
+    report.processes.at(-1).cleanupObservation = {
+      initialInFlight, finalInFlight: health.inFlightRequests, waitMs: Date.now() - cleanupStarted,
+    };
+    assert.equal(health.inFlightRequests, 1, 'only the heartbeat may remain after bounded cancellation cleanup');
     assertExited(processes);
     await fs.writeFile(path.join(a, 'App/App.csproj'), appProject);
     await references(await integerTarget(), 1, a);

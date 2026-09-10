@@ -13,6 +13,64 @@ import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { Mutex } from '../src/Core/ResourceManager.js';
 import { SessionManager } from '../src/Core/SessionManager.js';
 
+const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; };
+
+it('queued cancellations physically remove waiters and preserve FIFO among surviving requests', async () => {
+  const mutex = new Mutex(), hold = deferred(), entered = deferred();
+  const order: number[] = [];
+  const owner = mutex.runExclusive(async () => { entered.resolve(); await hold.promise; });
+  await entered.promise;
+  const controllers = Array.from({ length: 128 }, () => new AbortController());
+  const pending = controllers.map((controller, index) => mutex.runExclusive(async () => {
+    order.push(index);
+  }, controller.signal).then(() => 'completed', error => { assert.equal(error.name, 'AbortError'); return 'cancelled'; }));
+  assert.equal(mutex.pendingCount, 128);
+  controllers.forEach((controller, index) => { if (index % 2 === 0) controller.abort(); });
+  assert.equal(mutex.pendingCount, 64, 'cancelled closures must disappear while the owner is still blocked');
+  assert.equal(order.length, 0);
+  hold.resolve(); await owner;
+  const results = await Promise.all(pending);
+  assert.equal(results.filter(value => value === 'cancelled').length, 64);
+  assert.deepStrictEqual(order, Array.from({ length: 64 }, (_, index) => index * 2 + 1));
+  assert.equal(mutex.pendingCount, 0);
+  await mutex.runExclusive(async () => { order.push(128); });
+  assert.equal(order.at(-1), 128);
+});
+
+it('cancelling an active owner does not release the lock before asynchronous cleanup', async () => {
+  const mutex = new Mutex(), entered = deferred(), cleanup = deferred(), controller = new AbortController();
+  const owner = mutex.runExclusive(async () => {
+    entered.resolve();
+    await new Promise<void>(resolve => controller.signal.addEventListener('abort', () => resolve(), { once: true }));
+    await cleanup.promise;
+    throw new Error('work failed after cleanup');
+  }, controller.signal);
+  const rejected = assert.rejects(owner, /after cleanup/);
+  await entered.promise;
+  let nextStarted = false;
+  const next = mutex.runExclusive(async () => { nextStarted = true; });
+  controller.abort();
+  await Promise.resolve();
+  assert.equal(nextStarted, false);
+  assert.equal(mutex.pendingCount, 1);
+  cleanup.resolve(); await rejected; await next;
+  assert.equal(nextStarted, true);
+  assert.equal(mutex.pendingCount, 0);
+});
+
+it('cancellation before entry and synchronous work failure both leave the mutex reusable', async () => {
+  const mutex = new Mutex(), controller = new AbortController();
+  let invoked = false;
+  const pending = mutex.runExclusive(async () => { invoked = true; }, controller.signal);
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(invoked, false);
+  await assert.rejects(mutex.runExclusive(() => { throw new Error('sync failure'); }), /sync failure/);
+  await mutex.runExclusive(async () => { invoked = true; });
+  assert.equal(invoked, true);
+  assert.equal(mutex.pendingCount, 0);
+});
+
 const execAsync = promisify(exec);
 
 async function pidAlive(pid: number): Promise<boolean> {

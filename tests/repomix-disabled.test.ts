@@ -259,27 +259,28 @@ it('disabled packing does not join an enabled CLI operation already in flight', 
 });
 
 for (const initiallyEnabled of [false, true]) {
-  it(`keeps the entry policy while fingerprinting when CLI changes from ${initiallyEnabled}`, async () => {
+  it(`keeps the entry policy across asynchronous preparation when CLI changes from ${initiallyEnabled}`, async () => {
     await fixture(async (adapter, config) => {
-      let release!: (fingerprint: string) => void;
+      let release!: () => void;
       let cliCalls = 0;
       const internals = adapter as any;
-      const originalFingerprint = internals.cache.computeWorkspaceFingerprint;
-      internals.cache.computeWorkspaceFingerprint = () => new Promise<string>((resolve) => { release = resolve; });
+      const originalPack = internals.packWorkspaceUncached.bind(adapter);
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      internals.packWorkspaceUncached = async (...args: unknown[]) => { await gate; return originalPack(...args); };
       Object.assign(adapter, { isCliAvailable: true, packWithCli: async () => { cliCalls++; return cliSnapshot; } });
       config.adapters.repomix.useCli = initiallyEnabled;
       const first = adapter.packWorkspace();
       config.adapters.repomix.useCli = !initiallyEnabled;
-      release('unchanged-fixture');
+      release();
       const result = await first;
       assert.equal(result.source, 'builtin-fallback');
       assert.equal(cliCalls, 0);
-      internals.cache.computeWorkspaceFingerprint = originalFingerprint;
+      internals.packWorkspaceUncached = originalPack;
       config.adapters.repomix.useCli = false;
       const disabled = await adapter.packWorkspace();
       assert.equal(disabled.source, 'builtin-fallback');
       assert.match(disabled.content, /builtinEvidence/);
-      assert.equal(disabled.fromCache, !initiallyEnabled);
+      assert.equal(disabled.fromCache, true, 'only verified builtin content is reusable across policy changes');
     });
   });
 }

@@ -131,6 +131,31 @@ export class CacheManager {
     }
   }
 
+  /** Content-addressed parsing reuse within the existing memory budget; never persists source-derived AST hints. */
+  memoizeContent<T>(key: string, fingerprint: string, create: () => T): T {
+    const memKey = this.namespacedKey(key);
+    const entry = this.memoryCache.get(memKey);
+    if (entry?.fingerprint === fingerprint) {
+      this.memoryCache.delete(memKey);
+      this.memoryCache.set(memKey, entry);
+      return entry.data as T;
+    }
+    const data = create();
+    const byteSize = this.estimateBytes(data);
+    if (byteSize <= this.maxEntryBytes) this.setMemoryEntry(memKey, { data, fingerprint, byteSize, timestamp: Date.now() });
+    else this.deleteMemory(memKey);
+    return data;
+  }
+
+  private async backingFileExists(data: unknown): Promise<boolean> {
+    const file = (data as { overflowPath?: unknown } | null)?.overflowPath;
+    if (file === undefined) return true;
+    if (typeof file !== 'string') return false;
+    const relative = path.relative(path.join(this.cacheDir, 'overflow'), file);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
+    return fs.stat(file).then(stat => stat.isFile(), () => false);
+  }
+
   /**
    * Retrieves data from memory or disk cache with LRU access refresh.
    * Disk files larger than maxEntryBytes are deleted instead of being loaded.
@@ -144,6 +169,10 @@ export class CacheManager {
       if (memEntry.ttlMs && now - memEntry.timestamp > memEntry.ttlMs) {
         this.deleteMemory(memKey);
       } else if (!currentFingerprint || memEntry.fingerprint === currentFingerprint) {
+        if (!await this.backingFileExists(memEntry.data)) {
+          this.deleteMemory(memKey);
+          return null;
+        }
         this.memoryCache.delete(memKey);
         this.memoryCache.set(memKey, memEntry);
         return memEntry.data as T;
@@ -173,6 +202,8 @@ export class CacheManager {
       if (currentFingerprint && entry.fingerprint !== currentFingerprint) {
         return null;
       }
+
+      if (!await this.backingFileExists(entry.data)) return null;
 
       this.setMemoryEntry(memKey, {
         ...entry,

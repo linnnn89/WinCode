@@ -14,7 +14,7 @@ const version = '1.2.3';
 const identity = { version, configuration: 'Release', informationalVersion: version, framework: '.NET fixture' };
 const toolchains = { node: 'fixture', dotnet: 'fixture', npm: null };
 
-async function fixture(run: (root: string, manifest: any) => Promise<void>, includeCodeHost = false) {
+async function fixture(run: (root: string, manifest: any) => Promise<void>, includeCodeHost = false, includeTray = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-delivery-'));
   async function write(file: string, content: string) {
     const target = path.join(root, file);
@@ -26,6 +26,7 @@ async function fixture(run: (root: string, manifest: any) => Promise<void>, incl
       'package.json': JSON.stringify({ version }), 'package-lock.json': '{}', 'global.json': '{}', 'tsconfig.json': '{}',
       'scripts/build.mjs': '// fixture', 'src/Main.ts': 'export const fixture = true;', 'dist/Main.js': 'export const fixture = true;',
       'tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj': '<Project />', 'tools/WinCode.UIA.Host/packages.lock.json': '{}',
+      'tools/WinCode.UIA.Host/Program.cs': '// host', 'tools/Shared/OwnerProcessGuard.cs': '// shared',
       'skills/wincode/SKILL.md': 'fixture skill', 'skills/wincode/references/code.md': 'code',
       'skills/wincode/references/ui.md': 'ui', 'skills/wincode/references/diagnostics.md': 'diagnostics',
     })) await write(file, content);
@@ -41,10 +42,18 @@ async function fixture(run: (root: string, manifest: any) => Promise<void>, incl
         await write(`${delivery.codeHostDirectory}/${file}`, 'fixture Code Host bytes; never executed');
       }
     }
+    if (includeTray) {
+      await write('tools/WinCode.Tray/WinCode.Tray.csproj', '<Project />');
+      await write('tools/WinCode.Tray/packages.lock.json', '{}');
+      for (const file of ['WinCode.Tray.exe', 'WinCode.Tray.dll', 'WinCode.Tray.deps.json', 'WinCode.Tray.runtimeconfig.json'])
+        await write(`${delivery.trayDirectory}/${file}`, 'fixture Tray bytes; never executed');
+    }
     const gateway = await build.createBuildManifest(root, await build.collectBuildInputs(root), version);
     await write('dist/build-manifest.json', JSON.stringify(gateway));
+    for (const component of ['host', ...(includeCodeHost ? ['codeHost'] : []), ...(includeTray ? ['tray'] : [])])
+      await delivery.sealNativeBuild(root, component, await delivery.collectNativeInputs(root, component));
     const contents = await delivery.collectDelivery(root, identity, toolchains,
-      includeCodeHost ? { ...identity, protocolVersion: 2 } : undefined);
+      includeCodeHost ? { ...identity, protocolVersion: 2 } : undefined, includeTray ? { ...identity, protocolVersion: 1 } : undefined);
     await run(root, { formatVersion: 1, contentId: delivery.deliveryId(contents), delivery: contents, revision: null, createdAt: 'first' });
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
@@ -99,6 +108,33 @@ it('optional Code Host records all runtime files and rejects damaged BuildHost a
   await fs.unlink(buildHost);
   await assert.rejects(delivery.verifyDelivery(root, manifest), /Missing Code Host sidecar/);
 }, true));
+
+for (const file of ['tools/WinCode.UIA.Host/Program.cs', 'tools/Shared/OwnerProcessGuard.cs']) {
+  it(`native source edits cannot be blessed by regenerating delivery: ${file}`, async () => fixture(async root => {
+    await fs.appendFile(path.join(root, file), '\n// edited after publish');
+    await assert.rejects(delivery.collectDelivery(root, identity, toolchains), /source changed after build/);
+  }));
+}
+
+it('native inputs include added source and inherited build settings, excluding build outputs', async () => fixture(async root => {
+  const before = await delivery.collectNativeInputs(root, 'host');
+  await fs.mkdir(path.join(root, 'tools/WinCode.UIA.Host/obj'), { recursive: true });
+  await fs.writeFile(path.join(root, 'tools/WinCode.UIA.Host/obj/generated.cs'), '// generated');
+  assert.deepEqual(await delivery.collectNativeInputs(root, 'host'), before);
+  await fs.writeFile(path.join(root, 'Directory.Build.targets'), '<Project />');
+  await assert.rejects(delivery.collectDelivery(root, identity, toolchains), /source changed after build/);
+  await assert.rejects(delivery.sealNativeBuild(root, 'host', before), /changed during build/);
+}));
+
+it('optional Tray delivery validates version and all required sidecars', async () => fixture(async (root, manifest) => {
+  assert.equal((await delivery.verifyDelivery(root, manifest)).matched, true);
+  await assert.rejects(delivery.collectDelivery(root, identity, toolchains, undefined, { ...identity, protocolVersion: 99 }), /Tray version/);
+  const sidecar = path.join(root, delivery.trayDirectory, 'WinCode.Tray.deps.json');
+  await fs.appendFile(sidecar, 'changed');
+  await assert.rejects(delivery.verifyDelivery(root, manifest), /changed|incomplete/);
+  await fs.unlink(sidecar);
+  await assert.rejects(delivery.verifyDelivery(root, manifest), /Missing Tray sidecar/);
+}, false, true));
 
 it('Code Host rejects added unrecorded dependencies and incompatible release identities', async () => fixture(async (root, manifest) => {
   await fs.writeFile(path.join(root, delivery.codeHostDirectory, 'extra.dll'), 'extra');

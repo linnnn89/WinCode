@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -67,19 +67,31 @@ describe('watch-invalidation', () => {
       assert.ok(fired >= 1, `expected watch callback, fired=${fired}`);
     });
 
-    it('filesystem watch invalidates fingerprint memo after a write', async () => {
-      const config = getDefaultConfig(root);
+    it('filesystem watch invalidates fingerprint memo after a write', async (t) => {
+      // 隔离被监视的工作区，避免其他并行测试写文件不断推迟尾沿 debounce。
+      const workspace = path.join(testCacheDir, 'watch-workspace');
+      await fs.mkdir(workspace, { recursive: true });
+      await promisify(execFile)('git', ['init', '--quiet', workspace], { windowsHide: true, timeout: 5000 });
+      const config = getDefaultConfig(workspace);
       config.cacheDir = path.join(testCacheDir, 'watch');
       const router = new ToolRouter(config);
       await router.initialize();
-      const before = await router.cache.computeWorkspaceFingerprint(root);
-      const probe = path.join(root, 'v051_watch_probe.txt');
-      await fs.writeFile(probe, `watch-${Date.now()}`);
+      const before = await router.cache.computeWorkspaceFingerprint(workspace);
+      const probe = path.join(workspace, 'watch_probe.txt');
+      let observed!: () => void;
+      const changed = new Promise<void>(resolve => { observed = resolve; });
+      const noteChange = router.cache.noteFilesystemChange.bind(router.cache);
+      t.mock.method(router.cache, 'noteFilesystemChange', (directory: string) => { noteChange(directory); observed(); });
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await new Promise((r) => setTimeout(r, 500));
-        const after = await router.cache.computeWorkspaceFingerprint(root);
+        await fs.writeFile(probe, `watch-${Date.now()}`);
+        await Promise.race([changed, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Actual filesystem invalidation callback was not observed')), 3000);
+        })]);
+        const after = await router.cache.computeWorkspaceFingerprint(workspace);
         assert.notStrictEqual(after, before, 'watch or cheap probe must drop memo after a working-tree write');
       } finally {
+        clearTimeout(timer);
         await fs.unlink(probe).catch(() => { });
         await router.dispose();
       }

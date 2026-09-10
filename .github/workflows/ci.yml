@@ -53,6 +53,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:roslyn-gateway
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:owner-death
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/verify-owner-death.mjs --repomix
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:manual-release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Preserve bounded check report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -63,5 +69,7 @@ jobs:
             test-tmp/error-contracts/**/report.json
             test-tmp/roslyn-host/**/report.json
             test-tmp/roslyn-gateway/**/report.json
+            test-tmp/owner-death/**/report.json
+            test-tmp/manual-release/**/report.json
           if-no-files-found: warn
           retention-days: 7

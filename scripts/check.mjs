@@ -58,8 +58,10 @@ if (inventoryOnly) {
   const tsx = path.join(root, 'node_modules/tsx/dist/cli.mjs');
   const native = 'tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj';
   const codeHost = 'tools/WinCode.Code.Host/WinCode.Code.Host.csproj';
+  const tray = 'tools/WinCode.Tray/WinCode.Tray.csproj';
   const audit = 'tests/fixtures/ui-audit-check/ui-audit-check.csproj';
   const query = 'tests/fixtures/ui-query-check/ui-query-check.csproj';
+  const ownerGuard = 'tests/fixtures/owner-guard-check/owner-guard-check.csproj';
   const wpf = 'tests/fixtures/wpf-ui-review/wpf-ui-review.csproj';
   const deterministic = ['-p:ContinuousIntegrationBuild=true', `-p:PathMap=${root}=/_/WinCode`];
   try {
@@ -69,15 +71,20 @@ if (inventoryOnly) {
       await run('restore-wpf', 'dotnet', ['restore', wpf, '--locked-mode']);
       await run('publish-wpf', 'dotnet', ['publish', wpf, '-c', 'Release', '-r', 'win-x64', '--no-self-contained', '--no-restore', ...deterministic]);
       report.tests = testTotals(await node('desktop-tests', [tsx, '--test', '--test-reporter=tap', '--test-concurrency=1', ...groups['test:ui'], ...groups['test:ui-code']]));
+      await node('desktop-owner-death', ['scripts/verify-owner-death.mjs', '--desktop']);
+      await node('desktop-tray', ['scripts/verify-tray.mjs']);
+      await node('desktop-tray-workflow', ['scripts/verify-tray-workflow.mjs']);
     } else {
       await node('typecheck', [tsc, '-p', 'tsconfig.test.json']);
       await node('build-gateway', ['scripts/build.mjs']);
-      for (const [name, project] of [['host', native], ['code-host', codeHost], ['audit', audit], ['query', query]])
+      for (const [name, project] of [['host', native], ['code-host', codeHost], ['tray', tray], ['audit', audit], ['query', query], ['owner-guard', ownerGuard]])
         await run(`restore-${name}`, 'dotnet', ['restore', project, '--locked-mode']);
-      await run('publish-host', 'dotnet', ['publish', native, '-c', 'Release', '-r', 'win-x64', '--no-self-contained', '--no-restore', ...deterministic]);
-      await run('publish-code-host', 'dotnet', ['publish', codeHost, '-c', 'Release', '--no-self-contained', '--no-restore', ...deterministic]);
+      await node('publish-host', ['scripts/publish-native.mjs', 'host']);
+      await node('publish-code-host', ['scripts/publish-native.mjs', 'codeHost']);
+      await node('publish-tray', ['scripts/publish-native.mjs', 'tray']);
       await run('build-audit', 'dotnet', ['build', audit, '-c', 'Debug', '--no-restore', ...deterministic]);
       await run('build-query', 'dotnet', ['build', query, '-c', 'Release', '--no-restore', ...deterministic]);
+      await run('build-owner-guard', 'dotnet', ['build', ownerGuard, '-c', 'Release', '--no-restore', ...deterministic]);
       report.tests = testTotals(await node('regression', [tsx, '--test', '--test-reporter=tap', ...groups.test]));
       const stdio = JSON.parse(await node('stdio', [tsx, 'scripts/test-mcp-client.ts']));
       report.runtime = { build: stdio.runtime?.build, schemaHash: stdio.schemaHash, toolCount: stdio.toolCount,

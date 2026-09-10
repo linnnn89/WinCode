@@ -29,6 +29,12 @@ export interface WorkspaceRecovery {
   recoveryAction: 'workspace_open' | 'restart_gateway';
 }
 
+export interface MemoryReleaseResult {
+  success: boolean;
+  status: 'released' | 'already-cold' | 'not-configured' | 'busy' | 'shutting-down' | 'recovery-required';
+  message: string;
+}
+
 export class WorkspaceRecoveryRequiredError extends Error {
   constructor(readonly recovery: WorkspaceRecovery) {
     super(recovery.recoveryAction === 'restart_gateway'
@@ -103,6 +109,8 @@ export class ToolRouter {
   private watchRegistered = false;
   private workspaceRecovery: WorkspaceRecovery | null = null;
   private readonly codeOperations = new Set<AbortController>();
+  private pendingWorkspaceChanges = 0;
+  private releasing: Promise<MemoryReleaseResult> | null = null;
 
   private async runCode<T>(signal: AbortSignal | undefined, work: (operation: OperationContext) => Promise<T>): Promise<T> {
     const controller = new AbortController();
@@ -113,7 +121,7 @@ export class ToolRouter {
     this.codeOperations.add(controller);
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted || this.shuttingDown) cancel();
-    try { checkOperation(operation); const result = await work(operation); checkOperation(operation); return result; }
+    try { await this.releasing; checkOperation(operation); const result = await work(operation); checkOperation(operation); return result; }
     catch (error) {
       // 查询清理失败同样会留下不可信的自有 Host 状态；按 E1 阻止后续业务，不能只返回一次错误。
       if (this.roslyn && error instanceof GatewayRestartRequiredError) {
@@ -175,6 +183,47 @@ export class ToolRouter {
     return this.workspaceRecovery ? { ...this.workspaceRecovery } : null;
   }
 
+  /** 托盘只读取内存中的已知事实；不能为了展示状态启动 Host 或枚举磁盘缓存。 */
+  getMemoryControlStatus() {
+    const roslyn = this.roslyn?.getKnownHealth();
+    return { version: WINCODE_VERSION, workspace: this.config.workspaceRoot,
+      provider: this.roslyn ? 'roslyn' as const : 'local-text' as const,
+      automaticRelease: false as const, state: this.shuttingDown ? 'shutting-down' : this.workspaceRecovery ? 'recovery-required' :
+        this.releasing ? 'releasing' : this.inFlight || this.codeOperations.size || this.pendingWorkspaceChanges ? 'busy' : 'idle',
+      roslynLoaded: roslyn?.processAlive ?? false, snapshotId: roslyn?.snapshotId ?? null,
+      activeRequests: this.inFlight, managedChildProcesses: this.resources.childProcessCount(), nodeRssBytes: process.memoryUsage().rss,
+      lastError: this.workspaceRecovery?.message ?? roslyn?.health?.lastError?.message ?? null };
+  }
+
+  /** 本地设置入口；默认无自动释放定时器，调用者不能指定 PID 或改变工作区/求值配置。 */
+  releaseRoslynMemory(): Promise<MemoryReleaseResult> {
+    const reply = (status: MemoryReleaseResult['status'], message: string): MemoryReleaseResult =>
+      ({ success: ['released', 'already-cold', 'not-configured'].includes(status), status, message });
+    if (this.shuttingDown) return Promise.resolve(reply('shutting-down', '实例正在退出。'));
+    if (this.workspaceRecovery) return Promise.resolve(reply('recovery-required', '请先按已有恢复提示处理实例故障。'));
+    if (this.releasing || this.inFlight || this.codeOperations.size || this.pendingWorkspaceChanges)
+      return Promise.resolve(reply('busy', 'Agent 正在工作或收尾，本次未释放；任务结束后可再次点击。'));
+    if (!this.roslyn) return Promise.resolve(reply('not-configured', '此实例使用本地文本，没有 Roslyn 内存需要释放。'));
+    const adapter = this.roslyn;
+    this.releasing = this.workspaceLock.runExclusive(async () => {
+      const canRelease = () => !this.shuttingDown && !this.workspaceRecovery && !this.inFlight && !this.codeOperations.size && !this.pendingWorkspaceChanges;
+      if (!canRelease()) return reply('busy', '已有新任务或工作区切换，本次未释放。');
+      try {
+        const status = await adapter.releaseWarmState(canRelease);
+        return reply(status, status === 'released' ? '已释放 Roslyn 内存；下次搜索会重新加载。先前的符号定位需要重新搜索。' :
+          status === 'already-cold' ? 'Roslyn 尚未加载，无需释放。' : 'Agent 正在工作或收尾，本次未释放。');
+      } catch (error) {
+        if (error instanceof GatewayRestartRequiredError) {
+          this.workspaceRecovery = { activeWorkspace: this.config.workspaceRoot, attemptedWorkspace: this.config.workspaceRoot,
+            phase: 'roslyn-manual-release', message: error.message.slice(0, 1024), recoveryAction: 'restart_gateway' };
+          return reply('recovery-required', 'Roslyn 退出未能确认；请检查自有进程并重启此 Gateway。');
+        }
+        throw error;
+      }
+    }).finally(() => { this.releasing = null; });
+    return this.releasing;
+  }
+
   findCodeSymbols(query: string, kind?: string, signal?: AbortSignal) {
     return this.runCode(signal, operation => this.code.findSymbolsDetailed(query, kind, undefined, operation));
   }
@@ -223,14 +272,15 @@ export class ToolRouter {
   async acquireRequestSlot(signal?: AbortSignal, allowDuringRecovery = false): Promise<void> {
     if (this.shuttingDown) throw new Error('WinCode is shutting down; tool call rejected.');
     if (signal?.aborted) throw new AbortError('The tool call was cancelled.');
-    while (this.switchingPromise) {
+    while (this.switchingPromise || this.releasing) {
+      const barrier = this.switchingPromise ?? this.releasing!;
       if (!signal) {
-        await this.switchingPromise;
+        await barrier;
       } else {
         await new Promise<void>((resolve, reject) => {
           const onAbort = () => reject(new AbortError('The tool call was cancelled.'));
           signal.addEventListener('abort', onAbort, { once: true });
-          this.switchingPromise!.then(
+          barrier.then(
             () => {
               signal.removeEventListener('abort', onAbort);
               resolve();
@@ -321,6 +371,7 @@ export class ToolRouter {
    */
   async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, signal?: AbortSignal) {
     signal = signal ? AbortSignal.any([signal, this.shutdownSignal]) : this.shutdownSignal;
+    this.pendingWorkspaceChanges++;
     return this.workspaceLock.runExclusive(async () => {
       if (this.shuttingDown) {
         throw new Error('WinCode is shutting down; workspace_open rejected.');
@@ -425,7 +476,7 @@ export class ToolRouter {
         this.resolveSwitching = null;
         resolve?.();
       }
-    }, signal);
+    }, signal).finally(() => { this.pendingWorkspaceChanges--; });
   }
 
   private bindCompositeTools(): void {
@@ -453,7 +504,8 @@ export class ToolRouter {
     const unknown = { available: null, source: 'unknown', details: 'Not probed; use wincode_diagnose_project for an active check.', lastError: undefined };
     const textHealth = snapshots.text.health;
     const repomixHealth = snapshots.repomix.health ?? unknown;
-    const flauiHealth = snapshots.flaui.health ?? unknown;
+    const flauiHealth = { ...(snapshots.flaui.health ?? unknown),
+      lastError: this.flaui.lastError ?? snapshots.flaui.health?.lastError };
     const cache = await this.cache.getStats();
     const lastAdapterError = this.pickLastError(
       { error: repomixHealth.lastError, provider: 'repomix' },
@@ -550,6 +602,7 @@ export class ToolRouter {
     await attempt('shutdown-drain', async () => {
       await this.initialization?.catch(() => {});
       await this.switchingPromise?.catch(() => {});
+      await this.releasing?.catch(() => {});
       const drained = await this.waitForIdle(Math.max(1, Math.min(3_000, softDeadline - Date.now())));
       if (!drained) throw new Error('Requests did not settle before shutdown.');
     }, Math.min(3_000, (softDeadline - Date.now()) / 3));

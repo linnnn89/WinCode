@@ -11,6 +11,7 @@ using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.UIA3;
+using WinCode.Native;
 
 using static WinCode.UIA.Host.NativeWindows;
 using static WinCode.UIA.Host.WindowResolver;
@@ -41,8 +42,10 @@ public static class Program
         Console.OutputEncoding = new UTF8Encoding(false);
 
         InspectRequest? request = null;
+        OwnerProcessGuard? owner = null;
         try
         {
+            owner = OwnerProcessGuard.Attach();
             desktopNotice = args.Contains("--desktop-notice");
             if (args.Contains("--audit-check"))
             {
@@ -105,7 +108,8 @@ public static class Program
             }
             var timeoutMs = request.TimeoutMs is > 0 ? request.TimeoutMs.Value : 10000;
             currentAudit = UiAudit.Start(request.Pid, request.Hwnd, request.Capture, "inspect");
-            using var cts = new CancellationTokenSource(timeoutMs);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(owner?.Token ?? CancellationToken.None);
+            cts.CancelAfter(timeoutMs);
             using var recordingNotice = RecordingIndicator.Show();
             indicatorDisplayed = true;
 
@@ -132,6 +136,7 @@ public static class Program
             // All recording indicators have left their scopes before a desktop cleanup prompt.
             if (desktopNotice && desktopMessage != null)
                 MessageBox(IntPtr.Zero, desktopMessage, "WinCode 日志清理提醒", 0x40);
+            owner?.Dispose();
         }
     }
 

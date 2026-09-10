@@ -804,3 +804,120 @@
 - 纠正前记录：无需一概重启整个 Codex，刷新对应 MCP 连接即可；当前工具未提供已验证可调用的重连入口，未强杀用户宿主。异常进程终止和空闲回收未在本阶段宣称完成。
 
 - 完整检查第一次因已有 40ms TTL 测试在并行负载下先过期而失败（保留 2026-09-09T14-29-49-098Z-core 报告）；改用受控 Date.now，保持过期前/后断言，不延长 TTL。重跑核心 322 项：321 通过、1 可选场景跳过；桌面 35/35。正式入口及生命周期最新针对性 27/27，通过交付清单校验。
+
+## 2026-09-10 08:19 — 本地同步 GitHub 昨晚最新版（北京时间）
+
+- 用户要求对齐本地落后版本。fetch origin 后确认远端 main 为 6e27e06（2026-09-09 22:39，0.13.2）。同步前工作区干净，本地 a2d76f6 与远端 #30 的 2235a42 为补丁等价提交，实际缺少 #31、#32、#33 三次更新。
+- 先创建 codex/backup-before-sync-20260910 保留旧 main，再通过 git reset --keep origin/main 对齐；HEAD 与 origin/main 完全一致。无依赖安装、全局配置修改或远端推送。
+- npm run typecheck、npm run build 通过；生产入口 EOF 针对性测试 2/2 通过。dist 从旧 0.13.0 刷新为 0.13.2。
+- 反证核对：源码同步不能证明旧构建或已运行 MCP 已更新，因此补做 Gateway 构建；本轮未重建 .NET Host、未验证完整交付清单、未执行完整回归或刷新现有客户端连接。上述边界不作为已完成的运行时部署报告。
+- 同步后仅本条工作记录为本地未提交变更，源代码保持与 GitHub 一致。
+
+## 2026-09-10 08:29 — 结合网页版讨论更新下一轮迭代计划（北京时间）
+
+- 用户要求读取昨晚本地迭代文件并结合“架构分析优化建议”形成更具体计划。通过 read_thread 取得 9 轮对话（无更多分页），区分早期建议、GPT 后续撤回与用户最终的客户端无关/托盘偏好；只更新既有计划书、路线图和本日志，没有实施生产代码或客户端配置变更。
+- 基于 main@6e27e06/0.13.2 核对 Router、RoslynAdapter/Host、UIA、Cache/UiAudit、Gateway、CI 和交付入口。确认可逆释放尚缺、Code Host 初始加载先于 EOF 循环、UIA EOF 是输入边界；已有 Job 不能直接当作 Gateway 死亡即全树退出的证明。
+- 纠正跨机器就绪状态：旧记录涉及 C:/Users/40218 与 I:/WinCode，本项目没有 test-tmp/client-roslyn-20260909 的 preparation.json/client-config-change.json；不沿用“本机只等重连”。状态统计会枚举磁盘缓存，现行审计为 1 MiB 提醒/2 MiB 阻断且不自动删除，分别纳入托盘开销与存储政策边界。
+- 新计划按 M0 本机基线、M1 异常所有权、M2 实测后局部延迟、M3 Roslyn 可逆释放、M4 托盘 MVP、M5 策略/暂停/存储细化模块、验收、停止与回退条件。版本号为建议，不当作已发布。GPT 已撤回的通用 Lease/FSM、全面工作区休眠不继续安排。
+- USER_DECISION_REQUIRED：独立 WinForms/Named Pipe 与启动方式、idle 默认策略、暂停范围、日志保留，以及本机配置/安装/外部操作仍在相应阶段确认；本次未修改真实设置、安装依赖、运行进程强杀或推送。
+- 官方只读核查：Microsoft Job Objects、WaitForSingleObject、NotifyIcon、PipeOptions 与 Node net/timers，链接置于计划相关段落；没有沿用网页聊天的隐藏引用标记。
+- 反证自审纳入：管道断开不等于进程退出、仅 inFlight 不覆盖切换等待、后台 idle 错误不能绕过 E1、托盘状态不能持续扫盘、配置保存不等于所有实例生效、缓存目录可能被多实例共用。属于作者自审，不是独立模型或运行验收。
+
+- 2026-09-10 08:31 用户补充明确平台范围：README 中英文新增 Windows 11 x64 本地开发/测试基准，说明其他操作系统、Windows 版本与依赖版本不保证一致效果，建议 macOS/Linux 用户 fork 后本地适配；同步平台徽标、计划书和路线图，不安排本轮跨系统移植。
+- 文档验证：四个变更文件 UTF-8 可读，README/计划书/路线图代码围栏闭合，51 个本地 Markdown 链接目标存在，中英文平台/依赖/fork 说明完整，git diff --check 通过。没有运行代码测试、跨平台验证或未来功能实验；保留前一轮同步日志，最终变更仅 README、既有计划书、路线图及本日志。
+
+## 2026-09-10 09:17 — 按计划实施 M0/M1，自有原生 Helper 的所属进程退出保护（北京时间）
+
+- 用户授权“开始按计划进行迭代和测试”。保留之前四份文档修改，在 codex/m1-parent-ownership 本地分支实施；使用已有 Node 24.19.0、项目内 .NET SDK 10.0.303 和锁定依赖，没有安装/升级或修改客户端配置。
+- M0 原始 0.13.2 完整 check 322/322、生产 stdio 和完整 delivery 校验通过，回执 [core baseline](../test-tmp/check/2026-09-10T00-42-56-585Z-core/report.json)。本机 App/Lib 和后续回执由 scripts/verify-roslyn-gateway.mjs 重建，不使用旧机器路径。
+- M0 当前真实 Codex 连接两次 hello 均仍为 0.13.0/local-text，instance fcff4dad-c746-48ed-ac78-c995ea47d54e，build f9860e16528a104cb939d8a53c4e64d9411561287197e531a89860c78bd1b23f。隔离 stdio 的新交付不等于该实例更新；实际消费者语义闭环、客户端重连及已安装 Skill 同步仍未完成。
+- M1 新增 tools/Shared/OwnerProcessGuard.cs，由两个 Host 链接共享源文件。Gateway 只向自有子进程传 WINCODE_OWNER_PID；Host 在项目求值/UI 访问前校验最多八层真实祖先、创建时间和存活状态，再持有 owner 进程对象句柄。没有客户端进程名称判断、周期全机监控、新依赖或新增 MCP 工具。
+- owner 死亡先 CancelAsync 广播；独立线程宽限两秒后仅 TerminateProcess 当前 Helper，避免原生调用/取消回调卡住兜底。Code Host 继续由既有 Job 覆盖其后代；UIA EOF 保留输入结束语义。Code Host 初始加载与请求取消接入 owner token，内部协议仍 v2。
+- 新增 owner-guard-check 原生夹具、13 项隔离测试，涵盖原生阻塞、取消回调阻塞、正常协作退出、父进程在 Attach 前退出、启动包装链、非法/无关 owner、自指 owner、重复释放句柄、两个实例隔离及生产 UIA EOF。夹具 Helper 使用 detached 以防 Windows 控制台连带退出掩盖测试；生产启动方式未改。
+- 真实 Code Host/MSBuild 初始加载和 UIA 读取分别通过目标写入握手进入故障阶段，再仅强杀测试 Gateway。按预先记录的每个 PID/创建时间查残留，不能依赖已断开的祖先链。失败清理持有实际 Process.SafeHandle 并核对创建时间；不按名称终止。0.13.4 最终 [MSBuild owner receipt](../test-tmp/owner-death/run-hnEJ0Y/report.json) 无观测残留；[UIA owner receipt](../test-tmp/owner-death/run-6OH4q7/report.json) 无 Helper 残留、目标进程仍在，随后才单独关闭测试目标。
+- Repomix 使用真实 RepomixAdapter + 生成 Node CLI 审查，在本机未观测残留，见 [controlled Repomix receipt](../test-tmp/owner-death/run-liokKo/report.json)。没有安装/运行真实 Repomix；这个结果不等于它继承了 .NET guard 或其全部第三方后代受到保障。CLI 路径未改。
+- 失败过程：首次强杀后 transport.pid 已清空导致脚本断言失败，已改为强杀前保存 PID；随后发现残留查询不能只从死亡的根递归，改为匹配全部预观测身份。旧 0.13.2 在本机初始加载样本中也未观测残留，因此没有把该样本记作已复现产品缺陷。早期清理脚本把预期的“PID 不存在”当错误退出，修正错误处理后重跑。句柄重复测试原有 CLR Thread 对象延迟回收和 JIT 最后引用滞留，采用测试侧预热、NoInlining 分组与终结器回收后原阈值通过；生产不调用 GC。
+- 0.13.3 阶段完整 core 335/335、desktop 35/35、[直接 Roslyn Host 58 场景](../test-tmp/roslyn-host/fixture-6JyqoD/report.json)、Gateway 19 场景及 E4 16 场景通过；CI 文件加入 owner-death 与受控 Repomix 场景/报告上传，但没有推送或运行远端 CI。
+- 作者反证自审：正常关闭通过不能证明原生阻塞也退出，因此加入独立阻塞夹具；Helper 退出不能证明全部后代退出，因此按身份逐类报告；目标窗口存活与测试收尾分开记录。真实 PID 复用/权限差异及其他 Windows 版本未实测；仍存活但卡死的 Gateway 不触发本机制。
+- 原生接口核对采用 Microsoft [Process32FirstW](https://learn.microsoft.com/en-us/windows/win32/api/tlhelp32/nf-tlhelp32-process32firstw)、[PROCESSENTRY32W](https://learn.microsoft.com/en-us/windows/win32/api/tlhelp32/ns-tlhelp32-processentry32w)、[GetProcessTimes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes) 与 [WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)；这些文档不是本机运行验收的替代。
+
+## 2026-09-10 09:19 — M2 按启动测量延后 UIA 探测，0.13.4 本地交付（北京时间）
+
+- 在 M1 后做三次 stdio 和源码 Router 分段样本，[改前报告](../test-tmp/runtime-baseline/run-msaLjT/report.json)：连接到 hello 426.7–434.8 ms；Router 初始化 165.7–168.1 ms，其中 FlaUI 158.9–161.2 ms、每次创建一个健康探测进程。缓存约 2–3 ms、指纹约 1–2 ms、watcher 小于 1 ms，没有证据支持把它们一并休眠/延迟。生成夹具规模不能代表大仓库。
+- M2 仅修改 FlaUiAdapter 初始化为平台/配置/发布文件校验，不运行原生 probe。尚无运行观察保持 available=null/source=unknown；首次 UI 请求直接执行且成功响应更新已知身份；主动 diagnose 保持探测，非强制并发 probe 在既有 mutex 内复查 memo。ToolRouter 单独保留首次 UI 失败，即使健康仍 unknown；未改 watcher/cache/Roslyn 的启动策略或 MCP Schema。
+- 新增 3 项测试，覆盖初始化不探测、并发首次非强制诊断共享观察、缺失文件报告/恢复后首用，以及 first-use timeout 的 unknown/lastAdapterError 边界。作者反证自审修正：失败响应不能自动把未探测 Host 标为已确认不可用，也不能因 health=null 丢掉错误。桌面 hello 测试按真实未探测状态断言 null/unknown，随后原有真实 UI 首用测试照常执行。
+- 最终 [core 338/338](../test-tmp/check/2026-09-10T01-13-24-684Z-core/report.json)、[desktop 35/35 + UIA owner-death](../test-tmp/check/2026-09-10T01-15-11-141Z-desktop/report.json)、[真实 Gateway 19 场景](../test-tmp/roslyn-gateway/run-orlRgW/report.json)、[E4 16 场景](../test-tmp/error-contracts/run-CRw4pt/report.json) 全部通过。直接 Host 的 58 场景在 M1/0.13.3 阶段运行，此后 Code Host 仅同步产品版本；没有把它记作再次运行。
+- 首组改后采样与其他测试竞争资源，单独保留 [并行负载样本](../test-tmp/runtime-baseline/run-CUJxNy/report.json)，不用于安静对照。待重测试结束后，[改后独立三样本](../test-tmp/runtime-baseline/run-6cXWUA/report.json)：连接到 hello 273.8–289.8 ms，Router 6.7–6.9 ms，FlaUI 静态校验约 0.32 ms，启动原生 probe 为 0。语义冷查询 3.58–4.29 s，热查询 102–108 ms，客户端关闭约 28–32 ms；全部观测进程在关闭后退出。样本共享 OS/SDK 缓存，不给 p95/跨机器性能承诺，未声称改善 Roslyn 语义查询耗时。
+- 改后进程 working-set 合计：未用语义约 84.6–85.2 MiB，语义操作后约 193.9–211.9 MiB；进程求和可能重复计算共享页，只是瞬时快照。启动统计只覆盖被包裹的 Node 异步文件方法/spawn，不含全部原生或内核 I/O。Roslyn 可逆释放仍未实现，不能把上述数据当作已节省驻留内存。
+- Node 24.19.0/Windows 11 本机最终源码、Gateway 和两个 Host 版本 0.13.4；buildId 07ee0681a89cdc8035d3038f8710a43e923f7e44385a2aaa3ce38eadab90ae19；delivery contentId 7131f0943f56b81aa5033458765c5cb320cb0b37723a1054c8fee1e8f83f14d2 再次校验 matched=true。工具数 15，Schema 哈希与基线相同。test inventory 45 个文件完整覆盖，git diff --check 通过。
+- README 保留用户的 Windows 11/其他平台 fork 说明，同步源码版本；CHANGELOG、受管 Skill 源文件、既有计划/路线图和 CONTRIBUTING 更新。未提交/推送、未安装全局 Skill、未改客户端/自启动、未删除用户审计记录。Node 22/远端 CI、跨权限/系统版本、真实 Codex 新版本语义消费尚未验证。
+- USER_DECISION_REQUIRED：已发出 D2（建议默认关闭 idle，显式开启后比较 120/300/600 秒）和 D1（建议独立 WinForms/Named Pipe、首版手动启动）的选择题，尚未收到答复。按计划第 9 节及用户协作契约的重大路线边界，M3 自动释放策略和 M4 托盘不据沉默启动；M5 暂停/存储仍按 D3/D4 决定。当前本地增量可评审，当前连接升级仍单独待验。
+
+## 2026-09-10 10:31 — M3 手动释放与 M4 最小设置，0.14.0 本地交付（北京时间）
+
+- 用户已确定“默认关闭自动释放、设置内手动释放；优先 Agent 工作流畅度，同时平衡后台内存；其他细节按最小方案”。D1/D2 已确认，M3 手动路径与 M4 合并为 0.14.0；本轮没有 idle timer/自动释放开关、开机自启动、全局配置写入、暂停、停止全部或存储清理。沿用现有 SDK/框架，没有新增 NuGet 包或安装依赖。
+- RoslynAdapter.releaseWarmState 复用现有 mutex/关闭链，覆盖操作排队与异步清理；释放只清 Host/snapshot，保留配置、诊断并保持可再次加载。ToolRouter 保护 MCP 在途、直接语义操作、待执行切换、shutdown/recovery；忙碌直接拒绝，不排队延后释放。被接纳释放之后的新请求等待其完成；关闭失败进入现有 restart_gateway 恢复门。缓存/watcher/Gateway 保留。
+- 新增可选 WinCode.Tray，独立 WinForms NotifyIcon 与设置窗口，手动启动；Gateway 仅显式 --tray 时接入。读取内存快照，不启动 Host 或扫描磁盘缓存，隐藏窗口不轮询。八个实例槽加一个唤出窗口槽，控制绑定活连接及 instanceId，管道受当前用户/会话、本机/实际客户端 PID 和额外 User SID 校验保护；限制帧、待决操作、连接退避，断开/超时保留未知，不重放控制。退出 Tray 后 MCP 独立运行。
+- 首批失败包括测试夹具相对 Host 路径、管道地址转义、时序断言、测试变量类型标注和文档脚本语法。明显路径/语法/类型问题直接修正；初始超时测试按本轮已记录 PID/创建时间关闭自有测试进程，随后确认无观测残留，没有按客户端名称清理。所有失败回执保留在 test-tmp，不改写为成功。
+- 用户新增要求：非简单语法/object 等错误，首次测试失败即主动查官方文档和真实 GitHub 实现/问题记录。已写入 CONTRIBUTING。时序断言依据 [Node net 回调契约](https://github.com/nodejs/node/blob/main/doc/api/net.md)改为等待真实 shutdown 回调，不以额外固定 sleep 粉饰通过。管道本机连接实际返回 229，核对 [Microsoft ERROR_PIPE_LOCAL](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-) 后只接纳这一明确本机结果；其他失败或远程查询成功均拒绝。
+- 另查 [dotnet/runtime #123903](https://github.com/dotnet/runtime/issues/123903)，CurrentUserOnly 的历史 Owner SID 行为不能替代实际 User SID，故在读取首帧后按 [RunAsClient 官方用法](https://learn.microsoft.com/en-us/dotnet/api/system.io.pipes.namedpipeserverstream.runasclient?view=net-10.0)同步核验客户端 User SID。重复唤出使用 Identification 身份级别并等确认后关闭短连接；不模拟客户端操作文件或执行程序。依据 [构造函数说明](https://learn.microsoft.com/en-us/dotnet/api/system.io.pipes.namedpipeclientstream.-ctor?view=net-10.0)核对默认 None 与显式 Identification 的差别。
+- [核心 check 356/356](../test-tmp/check/2026-09-10T02-26-26-551Z-core/report.json)通过：包含 8 项手动释放、9 项 TrayClient 和可选 Tray 交付校验；TypeScript、锁定还原/构建、生产 stdio 均通过。核心之后的 Tray 发送前失联复查和重复唤出细化已重新 Release 发布，并以最终 Tray 验收验证；没有把此前核心回执中的旧 delivery ID 称为最终交付 ID。
+- [桌面 check 35/35 + UIA owner + Tray](../test-tmp/check/2026-09-10T02-28-08-797Z-desktop/report.json)通过；最终 [Tray 7 个场景](../test-tmp/tray/run-z65Kr8/report.json)再验证真实 WinForms、同用户安全管道、两个独立 stdio MCP、忙碌拒绝/仅选中实例释放/重复释放/隐藏与退出、重复唤出和实际 dist/index.js --tray 的确认后退出。UI 使用模拟 Roslyn 生命周期，真实 Roslyn 由下述独立验收覆盖；不把截图或模拟后端说成真实项目 UI/Roslyn 全链路验证。
+- [真实 Roslyn 十轮报告](../test-tmp/manual-release/run-umaOsZ/report.json)通过：每轮查询及引用正确、新 snapshot、旧定位在无 Host 时明确拒绝、所有预观测 Code Host/BuildHost 按 PID/创建时间确认退出，资源登记始终为 3；缓存标记和 namespace、watcher 保持。另覆盖冷态新增源码、释放后 A→B→A。没有观测残留。未重跑未受修改的纯 Host 58 场景；本次 [真实 MCP/Roslyn 19 场景](../test-tmp/roslyn-gateway/run-F36HcB/report.json)和 [E4 16 场景](../test-tmp/error-contracts/run-USNVaz/report.json)已重跑通过。
+- 十轮生成小项目：冷查询 3.717–4.112 秒，热查询 109–148 毫秒，手动关闭 21.6–27.2 毫秒；进程工作集合计约 200.2–206.9 MiB → 67.7–69.6 MiB，被关闭的 Host/BuildHost 合计约 132.0–137.5 MiB。共享页可能重复计数，不等同精确回收的独占 RAM；样本共用系统缓存，非大型仓库/p95/跨机承诺。独立 Tray 打开时单次工作集约 51.5 MiB、private bytes 12.7 MiB；Tray 自身有成本，因此继续采用可选手动启动/退出，无自动高频监测。
+- 最终 Gateway buildId=458dc48f0d60f0d2cebf98e3b989efafddfcf74646da46c8c871ed475b1bb6bd；完整 delivery contentId=0f4bd8f371eb74d040b64fd7683ca033e6aaaa6d4c1fe0972b79aa058141cefa，0.14.0 matched=true。15 个 MCP 工具和 Schema 哈希保持原值。最终托盘截图已人工视检，无当前截图范围的裁切/重叠；默认系统 DPI 下的程序化渲染不代表全部 DPI 或人工鼠标操作验收。
+- 作者反证自审：Agent 两次调用之间可能仍在规划，界面空闲不等于整个任务结束，因此只提供用户手动释放且提示旧定位失效；状态陈旧时后端仍重新判断。畸形帧与随后合法帧同批到达必须停止处理，已有回归；断线重连前的旧待发控制重新检查连接状态。普通 Node 和 .NET 唤出客户端均已本机联调，同权限/跨用户拒绝矩阵、Explorer 重建、八实例上限压力及长期驻留仍未全面实测。
+- README 中英文、既有计划书/路线图、CHANGELOG、Skill 源文件及 CONTRIBUTING 同步；真实 Codex 连接、已安装 Skill、客户端 --tray 接入没有改动或升级。本轮没有提交/推送或运行远端 CI；Node 22 与其他 Windows/依赖版本仍未实测。M5/自动策略为延后范围，实际消费者接入保持待验。
+- 文档收尾：8 份相关 Markdown 为有效 UTF-8、代码围栏闭合；现行文档及本轮新增日志的 66 个本地链接目标存在，版本/锁文件一致，git diff --check 通过。全历史日志扫描另发现 15 个旧机器 test-tmp 回执未随源码来到本机；保留历史记录，不据此引用其结果作为本轮验证。首次链接脚本把 chatgpt-conversation URI 当成本地路径，已按 URI 类型修正校验器。
+
+
+## 2026-09-10 11:32 — 0.14.0 稳定性收尾：工作流连续性、状态可信度与原生交付（北京时间）
+
+- 用户确认按分析继续，再次强调优先工作流畅、避免反复启停。保持无自动释放/自动加载策略；仅用户手动释放，忙碌不排队。未增加依赖、全局配置、自启动或 M5 能力，未修改实际 Codex 启动参数、重启客户端或推送远端。
+- 设置改为“暂无在途请求”，明确不代表 Agent 整个任务结束。连接保留但刷新失败、观察超过 30 秒时标为未知，保留上次观察时间；释放前重新获取被动状态，超时不继续控制。可见窗口的一秒计时器只重绘时效，隐藏时停止，不向 Gateway 轮询或改变 Host 生命周期。操作结果绑定实例，切换选择不会显示另一实例的结果；调整说明文字换行及表格宽度，避免 PID 列/页脚裁切。
+- 本地管道新增注册接纳/拒绝反馈及可见原因；修复 InvalidDataException 未纳入 IOException 过滤导致监听任务退出的问题。连续 12 次不兼容注册后继续服务。拒绝和唤出回复均有界等待客户端读取/关闭，避免立即 Disconnect 丢掉未读回复，不使用不可取消的 WaitForPipeDrain。安全身份校验及正常 MCP 退出入口保持。
+- 原生发布改由 scripts/publish-native.mjs 在构建前采集输入、构建后复核并绑定完整产物，check 自动使用该入口。覆盖项目目录（排除 bin/obj）、仓内 Shared、仓内 props/targets/NuGet 配置和现有构建脚本；delivery:verify 复查原生输入/产物，不能通过重新生成交付清单接纳改过 .cs 的旧 DLL。范围是仓内已知输入，不是任意外部 MSBuild 导入/SDK 二进制的签名证明。加入源码/共享源码变化、继承配置变化、构建中变化和输出排除的回归。
+- [核心检查 360/360](../test-tmp/check/2026-09-10T03-20-58-314Z-core/report.json)通过，包含类型检查、锁定构建、生产 stdio 与交付验证；此前 [失败回执](../test-tmp/check/2026-09-10T03-19-06-872Z-core/report.json) 保留。旧 watch-invalidation 测试在整个仓库写探针并固定等 500ms，受并行写入/尾沿 debounce 影响；改成隔离 Git 工作区并等待真实 noteFilesystemChange 回调，原失效逻辑继续执行且仍断言指纹不同，未改生产 watcher/缓存或绕过 memo。针对性 5/5 通过后完整重跑通过。
+- [桌面 35/35、UIA owner、托盘与贯通验收](../test-tmp/check/2026-09-10T03-22-29-403Z-desktop/report.json)通过。[真实贯通回执](../test-tmp/tray-workflow/run-Ho43hD/report.json)使用正式 dist 的 Router/MCP/TrayClient、原生设置处理函数、同用户安全管道与两个实际 Roslyn 项目：实际并发语义请求拒绝释放且不延后执行；七次间隔查询保持 A/B snapshot 及 Code Host 身份；只释放 A、B 保持热态；旧定位失败不预热，重新搜索后精确引用正确；退出 Tray 后两个 MCP/语义快照继续可用，关闭后全部预观测进程无残留。测试只替换了隔离管道的启动接线，未模拟 Roslyn 生命周期；不是当前 Codex 连接验收。
+- 同一贯通运行含冷态、双热态、隐藏驻留、只释放 A、退出 Tray 的进程样本。七次隐藏热态样本的工作集合计约 484.2–491.0 MiB，句柄合计 1981–1988，进程数保持 9，无自动启停。所有工作集合计可能重复计算共享页；这是短时、小项目样本，不能外推大型项目、长期泄漏或唯一物理 RAM 回收。
+- 核心之后的托盘显示/回复等待修订已通过上述桌面检查。其后仅实例结果显示隔离及验收诊断修订重新 Release 发布，最终本机 Tray 九场景连续通过三次：[1](../test-tmp/tray/run-mKPJrp/report.json)、[2](../test-tmp/tray/run-rdZu4z/report.json)、[3](../test-tmp/tray/run-xohNR5/report.json)。没有将较早 core/desktop 的交付 ID 称为最终 ID，也未重复未受影响的纯 Host/E4/十轮测试。最终 Gateway buildId=5d8c46b2d68c4c0c490633b0bb4fb8ec56787e9105b756917c94652f7997763f；delivery contentId=132e047e7d81a73a26b3b1cc24623ee464fa653f718049f30af1d1873c54fa7d，matched=true。
+- 失败及外部参考：管道两次 EOF 失败回执为 [Apop33](../test-tmp/tray/run-Apop33/report.json)、[WMQdEX](../test-tmp/tray/run-WMQdEX/report.json)。先依据 [DisconnectNamedPipe](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-disconnectnamedpipe) 和 [dotnet/runtime Windows 管道实现](https://github.com/dotnet/runtime/blob/main/src/libraries/System.IO.Pipes/src/System/IO/Pipes/NamedPipeServerStream.Windows.cs)处理未读回复，再由 [InvalidDataException 类型定义](https://learn.microsoft.com/en-us/dotnet/api/system.io.invaliddataexception?view=net-10.0)定位异常过滤遗漏；修正后重复拒绝验收通过。贯通首次 [nHnQyk](../test-tmp/tray-workflow/run-nHnQyk/report.json) 错把至少两个长期 Host 进程作为条件；查询真实进程树、检索 Roslyn 案例后改为定位实际 Code Host 及预观测子树，不把 conhost 或已退出的临时求值进程误记为常驻 BuildHost。watch 测试参考 [Node fs.watch 契约](https://nodejs.org/api/fs.html)和 [Node 测试指南](https://github.com/nodejs/node/blob/main/doc/contributing/writing-tests.md)。布局参考 [WinForms 布局约束](https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/layout)。
+- 待观察失败：[VcfIp2](../test-tmp/tray/run-VcfIp2/report.json) 在原生验收时超时，未留下 UI 回执，根因尚未证实。参考 [WinForms 异常处理](https://learn.microsoft.com/en-us/dotnet/api/system.windows.forms.application.setunhandledexceptionmode) 和 [官方实现](https://github.com/dotnet/winforms/blob/main/src/System.Windows.Forms/System/Windows/Forms/Application.cs)，在仅验收模式启用异常直出、输出阶段和退出/超时原因，后续三次未复现；不能将诊断改进称为已修复该偶发超时。
+- 当前 Codex 被动 hello 实测为上一轮 0.14.0、buildId 458dc48f…、local-text；codex mcp get 的实际参数只有 dist/index.js，未启用 Roslyn 或 --tray。[实际客户端验收参数预览](../test-tmp/tray-workflow/run-Ho43hD/client-configuration-preview.json) 与 [Roslyn 配置](../test-tmp/tray-workflow/run-Ho43hD/client-roslyn.json) 已准备，仅指向隔离夹具，applied=false。实际消费者启用/重连、Node 22/远端 CI、跨权限/系统/DPI 和长期驻留仍未验证。当前已构建本地增量可评审，未提交/发布。
+- 作者反证自审覆盖：连通但观察失效、失效状态下直接进入释放处理函数、拒绝注册耗尽监听、切换选择混入别的实例结果、全部分层测试通过但真实设置/Roslyn未串联、C#改过而旧DLL仍被清单接纳，以及刷新/隐藏期间意外重启。README、CONTRIBUTING、CHANGELOG、既有计划/路线图同步；不把作者自审称作独立审核。
+- 收尾校验：最终 delivery 再次 matched=true；git diff --check 通过；本次六份 Markdown（日志只检查新增段落）的 70 个本地链接均存在，UTF-8 与代码围栏通过。最终 settings.png 已目视核对，PID 列和页脚完整、切换实例不显示其他实例的操作结果；仅覆盖本机默认 DPI。
+- VcfIp2 证据补充：旧验收脚本有 35 秒兜底终止，但当时未保存退出码/超时标志，回执只记录缺少原生 UI 报告。因此“超时”属于基于旧脚本行为的推测，不能据此认定具体根因；现已补齐这两个诊断字段，后续三次正常退出且未复现。
+
+## 2026-09-10 11:45 — 多项目、多 Agent 并发诊断（北京时间）
+
+- 用户要求测试多个项目或不同软件 Agent 同时调用 MCP 是否混淆、溢出。本轮只增加 [隔离诊断脚本](../scripts/verify-multi-agent.mjs) 和本日志，未修改生产代码、接口、依赖、实际消费者配置、自动释放策略或远端。使用当前 dist/index.js 真实 stdio、已发布 Code Host、项目内 SDK 和两个离线还原的生成项目；同一测试驱动内的三个 SDK Client 各自启动独立 Gateway，分别代表 A、B、另一软件的 A。不是三个实际第三方软件的接入认证。共享实例情景通过同一合法 stdio Client 交错发送两个逻辑 Agent 的调用，不声称 stdio 本身支持多个独立连接。
+- [第一轮八场景回执](../test-tmp/multi-agent/run-9uve7M/report.json)全部完成：三个进程并发冷加载、同名方法引用分别为 A=1/B=2；跨实例定位（包括同项目两个实例）返回 SNAPSHOT_STALE 且不改变健康快照；96 次交错精确引用；单进程 128 个并发搜索和其他实例查询；64 个请求中取消 16 个，余下 48 个正确；共享工作区复现；同路径重开复现；关闭一个客户端后另外两个继续工作。预观测进程最终均无残留。此处 success 指诊断场景完成，不代表没有发现缺陷。
+- **已复现：共享进程的多调用任务不具备项目隔离。** A 打开 A，另一个逻辑 Agent 打开 B 后，A 只按 Save 搜索成功返回 B.Api.Save(int)，相对目录查询也返回 only-B.txt；没有自动 WORKSPACE_MISMATCH。传旧精确 symbolLocation 则明确 SNAPSHOT_STALE，说明精确定位有保护，普通名称/相对路径没有任务级绑定。ToolRouter.config.workspaceRoot 是实例全局状态，切换锁只保护在途请求与切换，不覆盖完整 Agent 任务。不能把这个结果泛化为独立进程串项目；另一 A 实例保持原快照和查询结果。
+- **已复现：同路径 workspace_open 会主动关闭健康 Code Host。** 明确观察旧 Host PID/创建时间退出、hello 的 processAlive=false、下一次搜索获得新 snapshot，另一个实例仍热态。此行为来自 ToolRouter.ts 的同路径显式 resetConnection，原意是恢复入口，但多个 Agent 重复初始化会造成冷启动，与优先连续工作存在矛盾。第二轮该重新搜索约 3.915 秒；这是小项目单次观察，不是性能承诺。
+- **负载边界：有限突发成功，但准入队列缺少长度上限。** 第一轮单实例 128 请求时被动 hello 观察 inFlightRequests=129（包括 hello 本身）；请求结束回到只有 hello 的 1。代码中的 acquireRequestSlot 和 Mutex 计数/串行等待没有队列容量限制，仍有单次操作超时。第二轮集中搜索最长约 13.948 秒；不能把单帧上限、32 MiB 单实例缓存预算或超时等同于进程总内存/队列容量上限。本轮没有制造 OOM，也未证明持续洪峰下不会耗尽内存。Roslyn 精确查询不走语义磁盘缓存，本轮 cache entries=0，不能据此声称已验证跨进程共享缓存写入/清理安全。
+- 128 请求场景两轮出现 drain MaxListenersExceededWarning。按用户要求先查 [MCP SDK 真实问题 #842](https://github.com/modelcontextprotocol/typescript-sdk/issues/842)、[官方客户端 stdio 实现](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/packages/client/src/client/stdio.ts)和 [Node 流背压规则](https://nodejs.org/api/stream.html)，再增加测试诊断。第二轮 [完整警告堆栈与前八场景](../test-tmp/multi-agent/run-ffxcyO/report.json)确定警告来自本机 @modelcontextprotocol/client 2.0.0 的 StdioClientTransport.send，事件数超过默认 10，场景结束后监听器为 0；三个 Gateway stderr 没有同类警告。外部 issue 场景是服务端批量通知，只作为相似背压机制参考，不能视为本机相同根因的证据。不抬高监听器阈值、不隐藏警告、不声称已证实持续泄漏。
+- 第二轮新增 SDK 帧测试曾失败：测试错误地期待超限后同一连接还能读下一条合法消息，实际为 0 条。核对 [官方服务端 stdio.ts](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/packages/server/src/server/stdio.ts) 和本机包后确认超限应报错并关闭传输，是测试假设错误；生产代码未改。修正为明确断言错误、关闭、后续不执行，并只重跑受影响边界，未反复重跑已通过真实 Host 场景。[边界两场景回执](../test-tmp/multi-agent/run-PxHPQo/report.json)通过：按 64 KiB 分块发送 10 MiB + 64 KiB 后 SDK 发出 10485760 字节上限错误并关闭；该测试用已安装真实 transport 和内存流，未向实际 Codex 连接发大包。
+- 同一边界回执通过真实原生托盘安全管道的八注册接纳、第九注册明确拒绝、满员后 show 仍可用、断开一个连接后新注册成功。九条注册通道来自一个自有 Node 测试进程并使用各自 UUID，状态是夹具；这验证原生容量及恢复，不等同九个真实 Roslyn MCP 的资源压力，也不将托盘八槽称为 MCP 全局进程上限。测试托盘使用隔离命名空间，最终无预观测残留。
+- 补跑既有 [混合负载十轮 / 70 调用](../test-tmp/mixed-load/run-HT12AB/report.json)，5.754 秒通过，覆盖 Router 在途请求、交错切换、取消、命名空间和释放；该脚本有控制门且不启动外部适配器，作为 Router 层补充，不能冒充真实三客户端 Roslyn 测试。
+- 验证：新脚本 node --check、git diff --check、delivery:verify 通过；delivery contentId 仍为 132e047e7d81a73a26b3b1cc24623ee464fa653f718049f30af1d1873c54fa7d，matched=true。生产未变，未重复无关核心/桌面全量构建。可复现命令：node scripts/verify-multi-agent.mjs；仅帧/托盘容量为 node scripts/verify-multi-agent.mjs --boundaries-only。
+- 建议次序：目前让并发独立项目使用独立 Gateway，任务期间固定工作区，避免每次查询前重复 workspace_open；下一轮先解决同路径重开的幂等与显式恢复语义，再设计请求工作区绑定和有界排队/取消/可观察等待。**USER_DECISION_REQUIRED（后续实现）**：是否改变现有 workspace_open 恢复契约、增加每请求工作区身份或固定实例模式、采用什么超载拒绝/等待规则；本轮不擅自改变这些公共行为。不建议为了省内存直接合并成全局多项目 Host 或引入自动启停。
+- 作者反证自审：单次请求全部正确仍可能在两个调用之间串项目；实例隔离仍可能有共享磁盘缓存或共同源文件的竞争；64 个取消测试只保证指定取消与余下查询正确，不涵盖任意 Host 硬故障；10 MiB 帧防护不能限制大量小请求的总队列；警告消失与进程回收也不能证明长时无泄漏。并发源码写入/共享缓存清理、真实软件接入、UIA 多 Agent 操作同一窗口、长期大项目驻留尚未实测，不能给出“任意多 Agent 并发绝对安全”的结论。
+
+## 2026-09-10 11:57 — 回顾并精简下一轮规划，形成并发治理最终推荐（北京时间）
+
+- 用户要求结合 GitHub 优秀案例给出最终推荐，并写入原规划书、删除已经确定实现的部分。本轮仅修改 [详细计划](../WinCode-下一轮工程化迭代计划书.md)、[简版路线图](../WinCode-迭代路线图.md) 和本日志，没有修改生产代码、测试、依赖、实际客户端配置或远端。
+- 复核当前 0.14.0 未发布工作树及现有回执：核心 360/360、桌面 35/35、真实托盘/Roslyn 贯通、最近托盘专项、三实例诊断、第二轮失败、修正后边界和混合负载报告。delivery:verify 再次 matched=true，contentId=132e047e7d81a73a26b3b1cc24623ee464fa653f718049f30af1d1873c54fa7d；不是重跑这些代码测试，不把旧回执套到未经验证的新生产修改。
+- 从未来待办删除旧 M0–M4 已完成的本机重建、owner guard、UIA 延迟探测、手动释放、托盘/安全 IPC、状态可信度和原生交付绑定步骤；已验证托盘八注册/拒绝/空位恢复也移出开发队列。删除已过期版本建议、相互矛盾的“没有托盘/缺少可逆释放/仍主动启动探测”等基线，以及 M5 中 2/5/10 分钟自动释放设置的旧执行方案。只保留简短基线和历史链接，不删除既有日志与失败回执。
+- 最终推荐为独立 Gateway、连接固定项目、健康 Host 保持热态、有界排队。N1 固定根和错误目标零副作用；N2 同根确认与必要恢复分流；N3 有界受理/公平等待/取消收尾/明确过载；N4 真实共享缓存/源码变更和窗口边界验证；N5 实际消费者、原生未定位失败及交付验收。每项列关键模块和可反证验收。
+- GitHub 一手参考：[Playwright MCP](https://github.com/microsoft/playwright-mcp/blob/main/README.md#user-profile)明确同项目并发 profile 需额外隔离；[rust-analyzer reload.rs](https://github.com/rust-lang/rust-analyzer/blob/master/crates/rust-analyzer/src/reload.rs)区分相同工作区、构建数据变化和强制重载；[.NET ConcurrencyLimiter](https://github.com/dotnet/runtime/blob/main/src/libraries/System.Threading.RateLimiting/src/System/Threading/RateLimiting/ConcurrencyLimiter.cs)及 [测试](https://github.com/dotnet/runtime/blob/main/src/libraries/System.Threading.RateLimiting/tests/ConcurrencyLimiterTests.cs)提供队列容量/FIFO/取消归还竞态参考；[SDK #842](https://github.com/modelcontextprotocol/typescript-sdk/issues/842)与 [客户端 stdio](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/packages/client/src/client/stdio.ts)用于区分发送积压警告。仅借鉴机制，不声称这些仓库证明了 WinCode 的实现安全；链接为查阅当日 main/master，不宣称固定发布版本。
+- 32 个未完成业务请求、4 个状态槽、64 KiB 参数预算仅为明确的实测起点，需合法调用兼容性与资源验证；传输帧、队列、缓存和进程 RSS 分开。固定根不自动解决同项目共享磁盘或同窗口操作；N4 未预判需要新缓存架构，也不预先复制每个实例的持久缓存。默认自动释放关闭及手动释放保持既有用户选择。
+- 保留的真实未完成项：当前消费者最新构建/Roslyn 闭环、两种目标软件项目连接兼容性、共享缓存并发清理/编辑、VcfIp2 根因未定位、Node 22/远端 CI、长期/大项目及其他权限/DPI/Explorer 范围。特别修正旧“超时已定位”式措辞：VcfIp2 原始回执只证明缺少 UI 报告，旧超时归因仍为推测。
+- USER_DECISION_REQUIRED 为后续实现的固定根迁移、同根重开语义和过载错误/预算这组推荐契约；本次文档更新不代表已经实现或批准真实客户端操作。若目标软件只支持全局单连接但必须多项目切换，应先重新选择每请求工作区身份，不悄加不安全兼容模式。
+- 作者反证自审：固定根后选错工具连接仍需客户端尊重错误；同根快捷返回不得绕过恢复门或输入新鲜度；取消逻辑容量降低不等于等待节点释放；独立 PID 不等于共享存储或 UI 隔离；本地交付身份不等于活动客户端已升级。规划按用户要求删除已完成待办，历史只追加不改写。
+- 文档收尾：详细计划 148 行、简版路线图 42 行；两计划及本次新增日志的 UTF-8、代码围栏、27 个本地链接、1 个标题锚点通过，旧 M0–M4 实施段落已移除，N1–N5 两文档一致，git diff --check 通过。仅文档修改，未重复运行代码全套测试。
+
+## 2026-09-10 12:00 — 按用户要求快速推送 GitHub 检查点（北京时间）
+
+- 用户明确授权快速推送当前状态。提交范围为当前 0.14.0 的 owner guard、延迟 UIA 探测、手动释放、原生托盘、交付校验、并发诊断及精简后的 N1–N5 规划；发布到 origin/codex/m1-parent-ownership，不改 main，不创建 Release。
+- 推送前 git diff --check、delivery:verify matched=true 和测试 inventory（47 个测试文件）通过；复用此前核心 360/360、桌面 35/35 及专项回执，没有为快速检查点重复运行全套测试。源码与锁文件、原生工程和测试源码一并提交；忽略的 dist/bin/obj、.deps、test-tmp 回执、真实客户端配置和凭据不上传。
+- 已知限制随检查点保留：共享实例跨项目会影响后续普通查询，同根重开会重置健康 Host，等待队列缺少容量限制；N1–N5 仅为推荐计划，尚未实现。VcfIp2 原生验收失败未定位，实际消费者最新构建/Roslyn 接入、共享存储竞争及长期资源验证未完成。远端 CI 在推送后独立运行，提交本身不表示 CI 已通过。

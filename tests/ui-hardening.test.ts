@@ -7,6 +7,54 @@ import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/client';
 
+it('UIA initialization validates files without launching a probe; concurrent first diagnostics share the observation', async () => {
+  const adapter = new FlaUiAdapter(getDefaultConfig(process.cwd()));
+  let calls = 0;
+  (adapter as any).resolveHostCommand = () => ({ command: process.execPath, args: [] });
+  (adapter as any).executeHost = async () => {
+    calls++;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    return { success: true, status: 'healthy', hostIdentity: { version: 'fixture', configuration: 'Release' } };
+  };
+  try {
+    await Promise.all([adapter.initialize(), adapter.initialize()]);
+    assert.equal(calls, 0);
+    assert.deepEqual(adapter.getKnownHealth(), { observedAt: null, health: null });
+    const results = await Promise.all([adapter.checkHealth(), adapter.checkHealth()]);
+    assert.equal(calls, 1);
+    assert.ok(results.every(result => result.available));
+  } finally { await adapter.dispose(); }
+});
+
+it('missing UIA files are reported at initialization and the first use can recover after files return', async () => {
+  const adapter = new FlaUiAdapter(getDefaultConfig(process.cwd()));
+  let calls = 0;
+  (adapter as any).resolveHostCommand = () => null;
+  try {
+    await adapter.initialize();
+    assert.equal(adapter.getKnownHealth().health?.available, false);
+    assert.equal((await adapter.inspect({ pid: 1 })).errorCode, 'HOST_UNAVAILABLE');
+    (adapter as any).executeHost = async () => { calls++; return { success: true, hostIdentity: { version: 'fixture' } }; };
+    assert.equal((await adapter.inspect({ pid: 1 })).success, true);
+    assert.equal(calls, 1, 'First use must execute only the requested operation');
+    assert.equal(adapter.getKnownHealth().health?.available, true);
+    assert.ok(adapter.getKnownHealth().health?.lastError, 'Successful use must preserve the earlier failure observation');
+  } finally { await adapter.dispose(); }
+});
+
+it('a failed first UI operation preserves unknown health and remains visible in runtime errors', async () => {
+  const router = new ToolRouter(getDefaultConfig(process.cwd()));
+  (router.flaui as any).executeHost = async () => ({ success: false, errorCode: 'TIMEOUT', errorMessage: 'fixture timeout' });
+  try {
+    await router.flaui.inspect({ pid: 1 });
+    const health = await router.getRuntimeHealth();
+    assert.equal(health.healthObservation.flaui.state, 'unknown');
+    assert.equal(health.flaui.available, null);
+    assert.equal(health.lastAdapterError?.provider, 'flaui');
+    assert.equal(health.lastAdapterError?.reason, 'timeout');
+  } finally { await router.dispose(); }
+});
+
 it('helper pipe preserves Chinese characters split across UTF-8 chunks', async () => {
   const adapter = new FlaUiAdapter(getDefaultConfig(process.cwd()));
   const code = `process.stdin.resume(); process.stdin.on('end', () => {

@@ -147,7 +147,8 @@ describe('WinCode MCP UI Inspect Protocol & End-to-End Suite', () => {
     assert.ok(!res.isError);
     const data = JSON.parse(getContent(res)[0].text!);
     assert.ok(data.adapters.flaui, 'flaui adapter must be reported');
-    assert.strictEqual(data.adapters.flaui.available, true);
+    assert.strictEqual(data.adapters.flaui.available, null, 'Unused UIA must remain unprobed');
+    assert.strictEqual(data.adapters.flaui.source, 'unknown');
     assert.ok(data.capabilities.includes('wincode_ui_inspect'));
   });
 

@@ -12,6 +12,26 @@ namespace wpf_ui_review;
 /// </summary>
 public partial class MainWindow : Window
 {
+    protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer()
+    {
+        var marker = Environment.GetEnvironmentVariable("WINCODE_TEST_OWNER_UI_MARKER");
+        return marker == null ? base.OnCreateAutomationPeer() : new OwnerDeathPeer(this, marker);
+    }
+
+    // 仅此隔离夹具启用：实际 UIA 读取进入后提供握手，再模拟不返回的目标提供方。
+    private sealed class OwnerDeathPeer(MainWindow window, string marker) : System.Windows.Automation.Peers.WindowAutomationPeer(window)
+    {
+        protected override string GetNameCore()
+        {
+            if (System.IO.File.Exists(marker + ".armed"))
+            {
+                System.IO.File.WriteAllText(marker, Environment.ProcessId.ToString());
+                System.Threading.Thread.Sleep(60000);
+            }
+            return base.GetNameCore();
+        }
+    }
+
     public System.Windows.Input.ICommand ReviewActionCommand { get; private set; } = null!;
 
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();

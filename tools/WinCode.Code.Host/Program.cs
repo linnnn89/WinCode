@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Build.Locator;
+using WinCode.Native;
 
 /// <summary>
 /// 自有 C# Host：直接调用 Roslyn，内部协议 v2，由显式启用的 Gateway RoslynAdapter 管理。
@@ -32,6 +33,7 @@ internal static class Program
             }
             if (args.Length is not (5 or 6) || args[0] != "--allow-project-evaluation")
                 throw new ArgumentException("Explicit project evaluation permission required: --allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK");
+            using var owner = OwnerProcessGuard.Attach();
             var root = Path.GetFullPath(args[1]);
             var project = WorkspaceInputs.Inside(root, args[2]);
             var additionalInputs = WorkspaceInputs.ParseAdditionalInputs(root, args.Length == 6 ? args[5] : "[]");
@@ -42,7 +44,7 @@ internal static class Program
             Directory.SetCurrentDirectory(Path.GetDirectoryName(project)!);
             OwnedProcessJob.Attach();
             MSBuildLocator.RegisterDefaults();
-            return await RunAsync(root, project, args[3], args[4], additionalInputs);
+            return await RunAsync(root, project, args[3], args[4], additionalInputs, owner?.Token ?? CancellationToken.None);
         }
         catch (Exception error) { WriteFailure(null, error, "hostError"); return 1; }
     }
@@ -76,18 +78,21 @@ internal static class Program
     /// symbols/references 的 timeoutMs 默认 30000、上限 60000；reload 默认/上限 120000，均至少 1，包含排队时间。
     /// limit 为 1–1000、默认 100，只约束返回量。协作取消不等于进程级硬截止。
     /// </remarks>
-    private static async Task<int> RunAsync(string root, string project, string configuration, string framework, string[] additionalInputs)
+    private static async Task<int> RunAsync(string root, string project, string configuration, string framework, string[] additionalInputs, CancellationToken ownerStopped)
     {
         var session = new WorkspaceSession(root, project, configuration, framework, additionalInputs);
         var queue = Channel.CreateBounded<Pending>(new BoundedChannelOptions(8) { SingleReader = true, SingleWriter = true });
         var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
-        using var stopping = new CancellationTokenSource();
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(ownerStopped);
         string? shutdownId = null;
         Task worker = Task.CompletedTask;
         try
         {
-            using (var initialDeadline = new CancellationTokenSource(120000))
+            using (var initialDeadline = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token))
+            {
+                initialDeadline.CancelAfter(120000);
                 Write(await session.ReloadAsync(null, initialDeadline.Token));
+            }
             worker = Task.Run(async () => {
                 await foreach (var pending in queue.Reader.ReadAllAsync())
                 {

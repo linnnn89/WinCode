@@ -14,6 +14,30 @@ import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 const body = (result: any) => JSON.parse(result.content[0].text);
 const mismatch = (error: any) => error.errorCode === 'WORKSPACE_MISMATCH';
 
+it('TavernDesk acceptance binds the requested project without writing test data into it', { timeout: 30000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-acceptance-project-'));
+  const sourceDirectory = path.join(root, 'src/TavernDesk.App/ViewModels');
+  const file = path.join(sourceDirectory, 'MainWindowViewModel.cs');
+  const source = ['class MainWindowViewModel {', '    private async Task ShowCharactersAsync()',
+    '    {', '        await Task.CompletedTask;', '    }', '', '    private void Other() {}', '}',
+    ...Array.from({ length: 240 }, () => '// fixture padding')].join('\n');
+  try {
+    await fs.mkdir(sourceDirectory, { recursive: true });
+    await fs.writeFile(file, source);
+    const result = spawnSync(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'scripts/verify-tavern-context.ts', root],
+      { cwd: process.cwd(), encoding: 'utf8', windowsHide: true, timeout: 25000, maxBuffer: 1024 * 1024 });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.status, 'passed');
+    assert.equal(report.measurements.length, 8);
+    assert.equal(await fs.readFile(file, 'utf8'), source);
+    assert.deepEqual(await fs.readdir(root), ['src'], 'cache and trash must remain outside the source workspace');
+  } finally {
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 async function fixture(run: (a: string, b: string, connect: (root: string) => Promise<any>) => Promise<void>) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-fixed-'));
   const a = path.join(parent, '项目 A'), b = path.join(parent, '项目 B');

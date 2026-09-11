@@ -1,6 +1,6 @@
 # WinCode 架构与数据流
 
-**适用版本：0.15.0，main `d51f3e1`；更新：2026-09-11（北京时间）。该版本已合并，Node 22/24 和 CodeQL 检查通过，尚未发布 GitHub Release。实际客户端 Roslyn 流程和 UI 并发测试仍待完成，当前测试结果见 [README](README.md)。**
+**适用版本：0.15.0；更新：2026-09-11（北京时间）。已验证的 main 基线 `631f8ba` 包含 PR #40/#41，Node 22/24 和 CodeQL 检查通过，尚未发布 GitHub Release。实际客户端 Roslyn 流程和双连接 UI 测试仍待完成，当前测试结果见 [README](README.md)。**
 
 本说明描述当前源码中已实现的结构。GitHub 分支保护的历史只读核查日期为 2026-09-08；本轮核对 PR 检查状态，不把它等同重新审计全部保护设置。历史实测结果见[工作记录](docs/codex_worklog.md)。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
 
@@ -52,7 +52,7 @@ flowchart TB
 | 原生 Host | 按 PID/HWND 取证，执行有界 UIA 搜索及截图 | [Program.cs](tools/WinCode.UIA.Host/Program.cs)、[BoundedUiSearch](tools/WinCode.UIA.Host/BoundedUiSearch.cs)、[UiAudit](tools/WinCode.UIA.Host/UiAudit.cs) |
 | 构建交付层 | 锁定构建、回归、stdio 验证、产物身份、Skill 一致性 | [check.mjs](scripts/check.mjs)、[delivery-manifest](scripts/delivery-manifest.mjs)、[sync-skill](scripts/sync-skill.mjs) |
 
-`ExtensionManager` 目前保留兼容接口，没有内置注册项，不承担实际插件生态或工具发现职责。Gateway 当前列出 15 个工具名称，其中包含影响分析别名；工具名称数量不等于独立业务能力数量。
+`ExtensionManager` 目前保留兼容接口，没有内置注册项，不承担实际插件生态或工具发现职责。Gateway 当前列出 17 个工具名称，其中包含影响分析别名；工具名称数量不等于独立业务能力数量。
 
 ## 2. 一次请求怎样通过系统
 
@@ -179,6 +179,7 @@ flowchart TB
 - UI→XAML→C# 是候选证据链。动态绑定、模板、资源字典没有被完整求值；保持 `runtimeSourceVerified=false`。源码候选读取失败时保留已取得的 UI 快照。
 - Host 使用 UIA/Win32 读取目标窗口；取消与超时清理自有 Helper，不终止目标应用。该设计不提供点击、输入或聊天生成能力。
 - 审计保存开始/结束等简要记录；达到阈值时提醒或拒绝新 UI 访问。日志是本地可写文件，不提供防篡改保证。
+- 同一 Gateway 的 UI 请求在适配器内排队；不同 Gateway 共用审计目录时，由原生命名 Mutex 保护整个操作，发生重叠会返回 `AUDIT_BUSY`。双连接测试应检查这一返回及后续恢复，不能假定两个请求都能同时成功。
 
 ## 5. 状态、存储与生命周期
 
@@ -280,7 +281,7 @@ flowchart LR
 
 本说明的架构图、数据表与关口表共同描述当前实现；新增功能应说明接入哪条数据流、使用哪个现有契约、在哪个关口拒绝或降级，以及如何留下真实验收证据。
 
-工作区失败恢复、trash 部分完成、有界负载和基础错误迁移已落实；当前待办见[计划](WinCode-下一轮工程化迭代计划书.md)。实际客户端 Roslyn 验收由用户明确暂缓；条件性性能研究不表示已发现泄漏。
+工作区失败恢复、trash 部分完成、有界负载和基础错误迁移已落实；当前待办见[计划](WinCode-下一轮工程化迭代计划书.md)。实际客户端 Roslyn 流程仍需单独验收，新建 stdio 连接的测试不能替代它；条件性性能研究不表示已发现泄漏。
 
 ## 2026-09-09 职责拆分
 

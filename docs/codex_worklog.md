@@ -1341,3 +1341,12 @@
 - 本地第一次完整 check 失败于原有目录树断言：worktree 的 .git 是文件，现有目录过滤没有排除它。Git 官方说明此布局：https://git-scm.com/docs/git-worktree。新增一个临时文件回归先复现失败，再仅补充 .git 文件的默认排除；includeIgnored=true 仍能列出该文件。相关浏览测试 17/17 通过。
 - 最终一次本地完整 check 通过：Node 24.19.0，454/454、无跳过；生产 STDIO 的 Tray 端点 251.4701 ms、17 工具与导航/EOF 检查通过；三组件正式构建和交付清单验证通过。报告 test-tmp/check/2026-09-11T09-42-37-700Z-core/report.json。先前失败报告 test-tmp/check/2026-09-11T09-37-13-728Z-core/report.json 保留。未再次运行无关 desktop 集合。
 - 本次修改不增加依赖或架构层次。远端最终 PR-head 和合并后 main 检查仍待运行；当前 Codex 连接已验证 PR #40 的导航与 UI 行为，但最后这条目录过滤需要下一次正常连接加载新构建。
+
+## 2026-09-11 — 修正真实项目验收的启动工作区
+
+- 复核 main `631f8ba`：PR #41 已合并，[Node 22/24](https://github.com/linnnn89/WinCode/actions/runs/34586761303) 和 [CodeQL](https://github.com/linnnn89/WinCode/actions/runs/34586761201) 均通过。按用户批准的第一步，仅修正两个验收脚本、添加一个回归并更新现有文档；不修改生产源码、依赖或客户端配置。
+- `verify-tavern-context.ts` 和 `verify-product-tasks.ts` 原先把临时目录作为固定工作区，再打开目标仓库，必然返回 `WORKSPACE_MISMATCH`。现在启动时绑定目标仓库，缓存和回收站继续使用独立临时目录，并核对 hello 返回的根目录。新增回归调用真实脚本入口，先复现失败，修复后通过，同时验证源码不变、项目根下未创建测试数据。
+- 真实 New-tavern 的 8 个上下文场景通过，记录 `test-tmp/r3/acceptance-1789122972763.json`。专用 TavernDesk 测试应用 PID 10760 在显示窗口前退出，回执记录 `UnauthorizedAccessException`，因此本轮未执行 6 个 UI 产品任务。失败回执保留于 `test-tmp/r3/tavern-startup-failed-20260911.json`；确认进程已退出，未修改 New-tavern 源码或使用日常数据库，未扩展修复该应用。
+- 本地 Node 24 完整 `npm run check`：类型检查、Gateway 与原生组件构建通过；回归共 455 项，451 通过、4 失败、0 跳过。四项失败均为原有 `mcp-stdio.test.ts` 的 8000 ms 请求超时，新增回归通过。报告 `test-tmp/check/2026-09-11T10-38-39-578Z-core/report.json` 保留失败状态，后续 stdio 阶段未执行。为检查并行负载是否相关，单独运行该文件，12/12 通过，记录 `test-tmp/r3/mcp-stdio-standalone-20260911.log`；这不证明根因已确定，也不替代完整集合通过。未修改超时、生产代码或重复全量测试。
+- 交付清单核验 matched=true，contentId 保持 `290a6d2ca90407260d246b749699d515897461c770bef1ad8057483937bc656c`，本次不改变客户端运行时交付内容。README 更新已验证基线；架构说明修正为 17 个工具并说明 `AUDIT_BUSY`；待办保留双连接 UI、实际客户端 Roslyn 和未定位问题，不把 SDK 突发警告当作已证实的泄漏。
+- 本次 PR 的远端检查尚待运行；当前版本不能报告为全部验收完成或可直接合并。

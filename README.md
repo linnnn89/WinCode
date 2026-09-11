@@ -61,7 +61,9 @@ Each Roslyn Host writes design-time intermediate files to its own directory whil
 
 Each instance accepts up to **32 unfinished tool requests**, including queued requests. Passive hello and `tools/list` share a separate limit of **4 requests**. Raw arguments are limited to **64 KiB of UTF-8 JSON**. Queueing counts toward the request timeout; overload returns `SERVER_BUSY`. A cancelled request still counts toward the limit until its operation finishes cleanup. Shared-cache reads check the selected source content and cached attachments, and rebuild missing or corrupted entries.
 
-**Test results on 2026-09-11:** [PR #37](https://github.com/linnnn89/WinCode/pull/37) and its cache-test correction [PR #38](https://github.com/linnnn89/WinCode/pull/38) are merged. The resulting `main` commit `d51f3e1` passed [Node 22/24 CI](https://github.com/linnnn89/WinCode/actions/runs/34571066627) and all three [CodeQL checks](https://github.com/linnnn89/WinCode/actions/runs/34571066444). The Node 22 report records 451 core tests passed, zero failed and one optional TavernDesk test skipped. Shared-cache tests passed 8/8, SDK concurrency tests 10/10 and design-time isolation tests 21/21; these three reports list no cleanup failures or leftover processes.
+**Verified baseline on 2026-09-11:** Navigation and compact UI results ([PR #40](https://github.com/linnnn89/WinCode/pull/40)), followed by the worktree `.git` filter and Tray test scheduling correction ([PR #41](https://github.com/linnnn89/WinCode/pull/41)), are merged. The resulting `main` commit `631f8ba` passed [Node 22/24 CI](https://github.com/linnnn89/WinCode/actions/runs/34586761303) and all three [CodeQL checks](https://github.com/linnnn89/WinCode/actions/runs/34586761201). Node 22 recorded 453 core tests passed, zero failed and one optional TavernDesk test skipped; Roslyn Host 59/59, Gateway 22/22, shared-cache 8/8, SDK concurrency 10/10 and design-time isolation 21/21 passed. Node 22 runs additional acceptance stages, so its total job duration is not a Node 22/24 performance comparison.
+
+The opt-in TavernDesk scripts now bind the requested repository at startup and keep cache/trash in a separate temporary directory. The eight real-project context scenarios passed locally. The six UI product tasks remain unverified in this run: the dedicated TavernDesk application exited with `UnauthorizedAccessException` before showing its window. These scripts use fresh stdio connections; they do not verify the active Codex connection or its Roslyn workflow.
 
 Concurrent UI inspection, the full Roslyn workflow in actual agent clients, and resource use during extended runs still need testing. Pending work is listed in the [remaining test plan](WinCode-下一轮工程化迭代计划书.md); previous results and failures are in the [work log](docs/codex_worklog.md).
 
@@ -320,7 +322,9 @@ npm run delivery:verify
 
 每个实例最多接受 **32 个尚未完成的工具请求**，包含排队中的请求。被动 hello 和 `tools/list` 另行共享 **4 个请求名额**。原始参数上限为 **64 KiB UTF-8 JSON**。排队时间计入请求超时；超过容量时返回 `SERVER_BUSY`。取消的请求需完成清理后才不再占用名额。共享缓存会核对所选源码的内容和缓存附件，缺失或损坏时重建。
 
-**2026-09-11 测试结果：**[PR #37](https://github.com/linnnn89/WinCode/pull/37) 及共享缓存测试修正 [PR #38](https://github.com/linnnn89/WinCode/pull/38) 均已合并。合并后的 `main` 提交 `d51f3e1` 通过 [Node 22/24 CI](https://github.com/linnnn89/WinCode/actions/runs/34571066627) 和三项 [CodeQL 检查](https://github.com/linnnn89/WinCode/actions/runs/34571066444)。Node 22 报告中，核心测试 451 项通过、0 项失败、1 项可选 TavernDesk 测试跳过；共享缓存测试通过 8/8，SDK 并发测试 10/10，设计时隔离测试 21/21。这三组测试均未报告清理失败或遗留进程。
+**2026-09-11 已验证基线：**代码导航和 UI 精简输出（[PR #40](https://github.com/linnnn89/WinCode/pull/40)），以及 worktree 的 `.git` 文件过滤与托盘测试调度修正（[PR #41](https://github.com/linnnn89/WinCode/pull/41)）均已合并。合并后的 `main` 提交 `631f8ba` 通过 [Node 22/24 CI](https://github.com/linnnn89/WinCode/actions/runs/34586761303) 和三项 [CodeQL 检查](https://github.com/linnnn89/WinCode/actions/runs/34586761201)。Node 22 记录核心测试 453 项通过、0 项失败、1 项可选 TavernDesk 测试跳过；Roslyn Host 59/59、Gateway 22/22、共享缓存 8/8、SDK 并发 10/10、设计时隔离 21/21 均通过。Node 22 还执行额外验收，不能用两个任务的总耗时比较 Node 22/24 的性能。
+
+可选 TavernDesk 验收脚本已改为启动时绑定目标仓库，缓存和回收站使用独立临时目录。真实项目的 8 个上下文场景已在本机通过；本轮 6 个 UI 产品任务尚未验证，因为专用测试应用在显示窗口前以 `UnauthorizedAccessException` 退出。这些脚本使用新建的 stdio 连接，不代表当前 Codex 连接或其中的 Roslyn 流程已经验证。
 
 UI 并发检查、实际 Agent 客户端中的完整 Roslyn 操作流程，以及长期运行的资源占用仍需测试。未完成事项见[后续测试计划](WinCode-下一轮工程化迭代计划书.md)，历史测试结果和失败记录见[工作日志](docs/codex_worklog.md)。
 

@@ -1,19 +1,22 @@
 import { jsonResult } from './ToolDefinition.js';
 import { UI_INSPECT_DEFAULTS } from '../Core/UiContracts.js';
 import type { UiReviewResult } from '../CompositeTools/UiReview.js';
+import { compactUi } from './UiCompact.js';
 
 /** Preserve snapshot, source-evidence and image budgets at the MCP serialization boundary. */
-export function uiResponse(result: UiReviewResult) {
+export function uiResponse(result: UiReviewResult, responseFormat: 'full' | 'compact' = 'full') {
   // Extract image data for MCP image block; omit base64 payload from text JSON
   const imageBase64 = result.annotatedPngBase64 || result.screenshotPngBase64;
   const {
     annotatedPngBase64: _omittedAnnotated,
     screenshotPngBase64: _omittedScreenshot,
-    ...cleanResult
+    ...body
   } = result;
 
+  const cleanResult = structuredClone(body);
+
   const textPayload = {
-    ...cleanResult,
+    ...(responseFormat === 'compact' ? compactUi(cleanResult) : cleanResult),
     hasScreenshot: Boolean(imageBase64),
   };
   let text = JSON.stringify(textPayload);

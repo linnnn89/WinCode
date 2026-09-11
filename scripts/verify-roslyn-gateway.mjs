@@ -129,7 +129,7 @@ try {
   assert.equal(initial.health.text.semanticConfigured, false);
   report.scenarios.push('explicit production CLI selects Roslyn; hello does not load a project');
   const listed = await client.listTools();
-  assert.equal(listed.tools.length, 15);
+  assert.equal(listed.tools.length, 17);
   assert.ok(listed.tools.find(tool => tool.name === 'wincode_find_references').inputSchema.properties.symbolLocation);
   report.scenarios.push('existing tools expose the validated optional symbolLocation contract');
   const target = await integerTarget();

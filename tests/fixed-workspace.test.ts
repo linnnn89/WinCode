@@ -158,7 +158,7 @@ it('a startup junction is rejected even when the cache is configured on a separa
   } finally { await router.dispose(); }
 }));
 
-it('the production CLI reports cwd fallback and binds it without requiring workspace_open', async () => fixture(async (a, b) => {
+it('a production mismatch supplies a usable second connection without rebinding the first', async () => fixture(async (a, b) => {
   const client = new Client({ name: 'fixed-cwd-acceptance', version: '1' });
   const transport = new StdioClientTransport({ command: process.execPath,
     args: [path.resolve('dist/index.js')], cwd: a, stderr: 'pipe' });
@@ -169,6 +169,29 @@ it('the production CLI reports cwd fallback and binds it without requiring works
     assert.equal(hello.workspace, a);
     const rejected = await client.callTool({ name: 'workspace_open', arguments: { path: b } });
     assert.equal(body(rejected).errorCode, 'WORKSPACE_MISMATCH');
+    const guide = body(rejected).connectionGuide;
+    assert.equal(guide.workspace, b);
+    assert.equal(guide.configuration.command, process.execPath);
+    assert.deepEqual(guide.configuration.args, [path.resolve('dist/index.js'), '--workspace', b]);
+    const printed = spawnSync(process.execPath, [path.resolve('dist/index.js'), '--print-connection', '--workspace', b],
+      { cwd: a, input: '', encoding: 'utf8', windowsHide: true, timeout: 5000, maxBuffer: 262144 });
+    assert.equal(printed.status, 0, printed.stderr);
+    assert.deepEqual(JSON.parse(printed.stdout), guide);
+    await assert.rejects(fs.stat(path.join(b, '.cache')), { code: 'ENOENT' });
+    const second = new Client({ name: 'guided-second-connection', version: '1' });
+    try {
+      await second.connect(new StdioClientTransport({ ...guide.configuration, cwd: a, stderr: 'pipe' }));
+      const secondHello = body(await second.callTool({ name: guide.verification.tool, arguments: guide.verification.arguments }));
+      assert.equal(secondHello.workspace, guide.verification.expectedWorkspace);
+      assert.notEqual(secondHello.runtime.instanceId, hello.runtime.instanceId);
+      for (const [connection, expected, excluded] of [[client, 'ONLY_A', 'ONLY_B'], [second, 'ONLY_B', 'ONLY_A']] as const) {
+        const result = body(await connection.callTool({ name: 'wincode_prepare_context', arguments: {
+          task: 'Read the connected project', lineRanges: [{ file: 'Api.cs', startLine: 1, endLine: 1 }],
+        } }));
+        assert.ok(result.evidence[0].snippet.includes(expected));
+        assert.ok(!result.evidence[0].snippet.includes(excluded));
+      }
+    } finally { await second.close(); }
   } finally { await client.close(); }
 }));
 

@@ -11,6 +11,7 @@ import { getDefaultConfig } from '../src/Core/Config.js';
 
 import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 
 const execAsync = promisify(exec);
 
@@ -112,22 +113,39 @@ describe('resource-cleanup', () => {
       }
     });
 
-    it('McpServer: workspace_open does not increment in-flight and completes promptly without self-wait', async t => {
-      const config = getDefaultConfig(root);
+    it('McpServer: workspace_open recovers through MCP without waiting on its own request', async t => {
+      const workspaceRoot = path.join(testCacheDir, 'server_ws_root');
+      await fs.mkdir(workspaceRoot);
+      await fs.writeFile(path.join(workspaceRoot, 'package.json'), '{"name":"workspace-recovery-fixture"}');
+      const config = getDefaultConfig(workspaceRoot);
       config.cacheDir = path.join(testCacheDir, 'server_ws_open');
+      config.adapters.flaui.enabled = false;
+      config.adapters.repomix.useCli = false;
       const router = new ToolRouter(config);
       const server = new WinCodeMcpServer(router);
-      t.after(() => server.stop());
+      const client = new Client({ name: 'workspace-recovery-mcp', version: '1' });
+      t.after(async () => { try { await client.close(); } finally { await server.stop(); } });
       await router.initialize();
+      const [left, right] = InMemoryTransport.createLinkedPair();
+      await Promise.all([client.connect(left), (server as any).server.connect(right)]);
       await (router as any).watch.stop();
-
-      const t0 = Date.now();
-      await router.openWorkspace(root);
-      const elapsed = Date.now() - t0;
+      const observed: number[] = [];
+      const waitForIdle = router.waitForIdle.bind(router);
+      t.mock.method(router, 'waitForIdle', async (...args: Parameters<ToolRouter['waitForIdle']>) => {
+        observed.push(router.inFlightRequests);
+        assert.equal(router.inFlightRequests, 0, 'the recovery request must not count itself as business to drain');
+        return waitForIdle(...args);
+      });
+      const result = await client.callTool({ name: 'workspace_open', arguments: { path: workspaceRoot } });
+      assert.notEqual(result.isError, true, JSON.stringify(result));
+      assert.deepEqual(observed, [0], 'exercise the actual recovery drain path');
       assert.strictEqual(router.inFlightRequests, 0, 'Recovery must not leave in-flight request dangling');
-      assert.ok(elapsed < 4000, `Recovery must not wait out drain timeout, took ${elapsed}ms`);
-
-      await router.openWorkspace(root);
+      const health = await router.getRuntimeHealth();
+      assert.equal(health.workspaceWatch.active, true);
+      assert.equal(health.workspaceRecovery, null);
+      const confirmation = await client.callTool({ name: 'workspace_open', arguments: { path: workspaceRoot } });
+      assert.notEqual(confirmation.isError, true);
+      assert.deepEqual(observed, [0], 'healthy confirmation must not re-enter recovery or drain');
     });
 
     it('CacheManager: pruneDiskCache counts overflow size, enforces maxDiskBytes, respects grace period & memory protection', async () => {

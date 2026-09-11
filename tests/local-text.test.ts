@@ -207,6 +207,11 @@ it('does not report a complete empty scan or cache results when lexical boundari
   assert.deepEqual(result.symbols, []);
   assert.equal(result.queryComplete, false);
   assert.match(result.queryError!, /lexical-uncertainty/);
+  assert.deepEqual(result.fileIssues, [{ path: 'Broken.ts', reason: 'lexical-uncertainty' }]);
+  await fs.writeFile(path.join(root, 'Valid.ts'), 'export class Target {}');
+  const narrowed = await adapter.findSymbolsDetailed('Target', undefined, 'Valid.ts');
+  assert.equal(narrowed.queryComplete, true);
+  assert.deepEqual(narrowed.fileIssues, []);
   assert.equal(cached.size, 0);
 }));
 

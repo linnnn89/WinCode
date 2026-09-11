@@ -4,6 +4,7 @@ import { CacheManager, KnownCacheStats } from './Cache.js';
 import { RequestAdmission } from './RequestAdmission.js';
 import { WorkspaceManager, WorkspaceOpenOptions, WorkspaceDirectoryOptions } from './Workspace.js';
 import { ContextManager, PreparedContextOptions } from './Context.js';
+import { searchText, fileOutline, type TextSearchOptions, type FileOutlineOptions } from './CodeNavigation.js';
 import { RepomixAdapter } from '../Adapters/RepomixAdapter.js';
 import { LocalTextAdapter } from '../Adapters/LocalTextAdapter.js';
 import { RoslynAdapter } from '../Adapters/RoslynAdapter.js';
@@ -246,6 +247,14 @@ export class ToolRouter {
 
   prepareContext(options: PreparedContextOptions, signal?: AbortSignal) {
     return this.runCode(signal, operation => this.context.prepareContext(options, operation));
+  }
+
+  searchText(options: TextSearchOptions, signal?: AbortSignal) {
+    return this.runCode(signal, operation => searchText(this.config, options, operation));
+  }
+
+  fileOutline(options: FileOutlineOptions, signal?: AbortSignal) {
+    return this.runCode(signal, operation => fileOutline(this.config, options, operation));
   }
 
   analyzeWorkspace(maxDepth?: number, signal?: AbortSignal) {

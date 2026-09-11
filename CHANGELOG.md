@@ -2,6 +2,10 @@
 
 ## 0.15.0 (unreleased)
 
+- Add bounded literal text search and file outlines with executable source follow-ups, exclusive/deduplicated scopes and file-level lexical/scan diagnostics. Retain local-text evidence boundaries and existing filesystem/cancellation/byte limits.
+- Add final-output context summaries and observed EOF correction requests without claiming the original range was covered. File-head excerpts now support bounded continuation as well as symbol excerpts.
+- Return an independent STDIO launch recipe on WORKSPACE_MISMATCH and via `--print-connection --workspace <absolute-path>`, without registration, project startup or rebinding. Add opt-in compact UI responses with unchanged snapshot IDs/images, shared C# candidates and live-control expansion requests; default full output remains compatible.
+
 - Add per-Host design-time intermediate outputs, original project exclusion/import preservation, conservative generated-input filtering, and owned output cleanup. Internal Host input policy is now 2; missing/old policy handshakes are rejected and their processes reaped. PR #37 and the cache-test correction in PR #38 are merged; main `d51f3e1` passed Node 22/24 and all three CodeQL checks on 2026-09-11. No GitHub Release has been published. The full Roslyn workflow still needs testing in actual agent clients.
 - Preserve `PROJECT_LOAD_FAILED` when original project evaluation rejects malformed project XML. Validate Configuration and TargetFramework as literal directory segments before Host admission, and verify normalized design-time output containment inside the owning UUID namespace.
 - Replace the prototype comparison acceptance entry with verification of the current published Host and production client. Use the actual Host UUID for blockers and ownership checks; fail on selected-case errors, empty selection, changed delivery, cleanup failures or surviving observed processes. CI now includes simultaneous A/B/A startup and the production semantic/concurrency/input matrix, including prebuilt custom outputs and two target frameworks.

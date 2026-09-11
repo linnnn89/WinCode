@@ -14,6 +14,7 @@ UI 工具同样占用每实例 32 个业务受理槽；既有 UI/健康探测互
 | `wincode_ui_inspect.pid` | 可选正整数；与 `hwnd` 至少提供一个 |
 | `hwnd` | 可选非空字符串，十六进制如 `"0x123ABC"` 或十进制字符串；不能传 JSON 数字 |
 | `capture` | 可选字符串 `none/original/annotated`，默认 `none` |
+| `responseFormat` | inspect/review 可选 `full/compact`，默认 full；只影响 Gateway 输出，不改变原生取证或执行 UI 操作 |
 | `maxDepth` / `maxNodes` | 可选整数，分别为 1–50（默认 6）、1–5000（默认 300） |
 | `backgroundOnly` | 可选布尔值，默认 `false`；为 `true` 时必须同时提供 `pid` 和 `hwnd` |
 | `readStates` | 可选布尔值，默认 `false`；只读状态，不执行动作或读取输入值 |
@@ -23,6 +24,10 @@ UI 工具同样占用每实例 32 个业务受理槽；既有 UI/健康探测互
 候选路径必须在工作区内，不得包含通配符或父目录逃逸；参数合法不保证文件存在或运行窗口与源码对应，仍检查结果中的缺口。`query:{automationId:"SaveButton",maxSearchNodes:1000}` 是规范示例；`query:{automationID:"SaveButton"}` 缺少规范定位条件，仍会报错。没有未列出的 UI 工具别名。
 
 ## 选择目标与取证
+
+首轮可以显式传 `responseFormat:"compact"`；默认 `full` 保持兼容。精简格式保留全部已返回控件的 ID、层级、名称、AutomationId、状态和同一截图，省略节点 bounds/relativeBounds/className；`summary` 仅统计已返回快照中的无名称按钮、禁用控件和树缺口，不把这些观察自动判为缺陷。需要坐标或更完整信息时使用 `expansionRequests` 中的 tool/arguments；它们重新观察实时 UI，ID 可能变化，查询仍须检查唯一性和完整性。
+
+精简 `codeEvidence.candidates` 是去重后的候选表，`clues[].candidateIds` 引用其 id，候选自身的 `nextRequest` 只保存一份；full 格式仍是 `clues[].candidates`。两种格式都保留运行时/源码身份未验证、歧义、截断与扫描边界。不要把 candidate id 当成源码的持久身份。
 
 已知准确 PID/HWND 就直接使用；未知时调用 wincode_ui_list_windows，以 processName（不带 .exe）、pid 或 titleContains 缩小范围，maxWindows 建议 10。筛选同时满足。候选歧义时先确认目标，标题不证明源码归属；失效句柄才重新发现。
 

@@ -152,6 +152,10 @@ it('budget-dropped file bodies remain missing in the original multi-file coverag
   assert.equal(data.coverage.requestedItems, 8);
   assert.equal(data.coverage.completeItems + data.coverage.partialItems + data.coverage.missingItems, 8);
   assert.equal(data.coverage.allRequestedCovered, false);
+  assert.equal(data.summary.scope, 'requested-lines');
+  assert.equal(data.summary.status, 'partial');
+  assert.equal(data.summary.selectedFiles, 8);
+  assert.equal(data.summary.missingFiles, data.coverage.missingItems);
 }));
 
 it('a long-line retry raises its budget and stops suggesting the same request at the maximum', async () => fixture(async (root, manager) => {
@@ -166,7 +170,7 @@ it('a long-line retry raises its budget and stops suggesting the same request at
   assert.equal(maximum.coverage.details[0].retryBlockedReason, 'maximum-budget-without-progress');
 }));
 
-it('EOF and missing-file requests retain their original gap reasons and do not propose blind retries', async () => fixture(async (root, manager) => {
+it('EOF recovery reads the valid remainder while missing files never propose blind retries', async () => fixture(async (root, manager) => {
   await fs.writeFile(path.join(root, 'Short.ts'), 'one\ntwo\nthree');
   const context = await manager.prepareContext({ task: 'Read source', lineRanges: [
     { file: 'Short.ts', startLine: 2, endLine: 5 },
@@ -179,7 +183,21 @@ it('EOF and missing-file requests retain their original gap reasons and do not p
   assert.equal(data.coverage.allRequestedCovered, false);
   assert.equal(data.coverage.details[0].missingRanges[0].reason, 'line-range-out-of-bounds');
   assert.equal(data.coverage.details[1].missingRanges[0].reason, 'not-found');
-  assert.ok(data.coverage.details.every((detail: any) => detail.nextRequest === undefined));
+  assert.equal(data.fileIssues[0].fileLineCount, 3);
+  assert.equal(data.summary.status, 'empty');
+  assert.equal(data.summary.nextAction, 'follow_next_request');
+  const correction = data.coverage.details[0].nextRequest;
+  assert.deepEqual(correction.lineRanges, [{ file: 'Short.ts', startLine: 2, endLine: 3 }]);
+  const continued = response(await manager.prepareContext(correction));
+  assert.equal(continued.evidence[0].snippet, 'two\nthree');
+  assert.equal(continued.coverage.allRequestedCovered, true);
+  assert.equal(continued.summary.status, 'complete');
+  assert.equal(data.coverage.details[1].nextRequest, undefined);
+  const pastEof = response(await manager.prepareContext({ task: 'Read source', lineRanges: [
+    { file: 'Short.ts', startLine: 8, endLine: 10 },
+  ] }));
+  assert.equal(pastEof.fileIssues[0].fileLineCount, 3);
+  assert.equal(pastEof.coverage.details[0].nextRequest, undefined, 'an entirely invalid range must not jump to unrelated source');
 }));
 
 it('coverage totals survive pruning of multi-file request details and error metadata', async () => fixture(async (_root, manager) => {

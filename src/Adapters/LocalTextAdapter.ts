@@ -57,6 +57,7 @@ export class LocalTextAdapter {
       analysisCompleteness: scan.complete ? 'degraded' : 'incomplete',
       limitations: [...(scan.error ? [`查询不完整: ${scan.error}`] : []), ...LOCAL_TEXT_LIMITATIONS],
       queryComplete: scan.complete, queryError: scan.error, truncated: scan.truncated,
+      fileIssues: scan.fileIssues, fileIssuesOmitted: scan.fileIssuesOmitted,
       uniqueTypeMatch: scan.complete && !scan.truncated && stats.uniqueTypeMatch, typeMatchCount: stats.typeMatchCount,
     };
     checkOperation(operation);
@@ -89,6 +90,7 @@ export class LocalTextAdapter {
       analysisCompleteness: scan.complete ? 'degraded' : 'incomplete',
       limitations: [...(scan.error ? [`查询不完整: ${scan.error}`] : []), ...LOCAL_TEXT_LIMITATIONS],
       queryComplete: scan.complete, queryError: scan.error, truncated: scan.truncated,
+      fileIssues: scan.fileIssues, fileIssuesOmitted: scan.fileIssuesOmitted,
     };
     checkOperation(operation);
     return result;

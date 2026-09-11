@@ -21,16 +21,16 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
     // A symbol window has no parsed end boundary. Continue from the final serialized
     // tail, including a partial last line, without calling the whole method complete.
     const evidence = data.evidence.map(item => {
-      if (item.locationKind !== 'symbol') return item;
+      if (!['symbol', 'file-start'].includes(item.locationKind)) return item;
       const startLine = item.endLine + (item.endLineComplete === true ? 1 : 0);
       const endLine = Math.min(startLine + 79, item.fileLineCount ?? 0);
       const needsMoreBudget = item.endLineComplete !== true;
       const maxTokens = needsMoreBudget ? Math.min(65536, data.metrics.budgetTokens * 2) : data.metrics.budgetTokens;
       const blocked = needsMoreBudget && maxTokens <= data.metrics.budgetTokens && startLine <= item.startLine;
-      return { ...item, symbolCoverage: 'unknown',
+      return { ...item, ...(item.locationKind === 'symbol' ? { symbolCoverage: 'unknown' } : {}),
         ...(blocked ? { nextAction: 'Use a file reader for the remaining long line; maximum response budget reached.' } :
           endLine >= startLine ? { nextRequest: {
-            task: 'Read following source lines; the symbol end boundary remains unknown.',
+            task: 'Read following source lines; this continuation does not establish whole-task coverage.',
             lineRanges: [{ file: item.file, startLine, endLine }], maxTokens,
           } } : {}),
       };
@@ -54,13 +54,27 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
     data.evidenceInsufficient = data.metrics.returnedFiles === 0 || (data.metrics.includeFullText && !data.packedContent);
     data.omittedFiles = [...omitted].slice(0, omittedListLimit);
     if (omitted.size > omittedListLimit) metadataTruncated = true;
+    const coverage = rangeCoverage(data, originalEvidence, originalIssues, requestedRanges, coverageDetailLimit);
+    const counts = { complete: 0, partial: 0, omitted: 0, unknown: 0 };
+    for (const file of selectedFiles) counts[bodyStatus(file)]++;
+    const hasNextRequest = coverage?.details.some(item => 'nextRequest' in item) || evidence.some(item => 'nextRequest' in item);
+    const summary = {
+      scope: coverage ? 'requested-lines' : data.metrics.includeFullText ? 'packed-files' : 'displayed-snippets',
+      status: returned.length === 0 && !counts.unknown ? 'empty' : counts.unknown ? 'unknown' :
+        counts.partial || counts.omitted || !data.queryComplete ? 'partial' : 'complete',
+      selectedFiles: selectedFiles.length, completeFiles: counts.complete, partialFiles: counts.partial,
+      missingFiles: counts.omitted, unknownFiles: counts.unknown,
+      nextAction: hasNextRequest ? 'follow_next_request' : data.fileIssues.length ? 'inspect_file_issues' :
+        !data.queryComplete ? 'narrow_scope' : counts.unknown ? 'inspect_packer_limitations' :
+          counts.partial || counts.omitted ? 'read_missing_files' : 'inspect_evidence',
+    };
     const { formattedContent, executiveSummary, packedContent, packedFileSpans, requestedLineRanges, ...base } = data;
-    const common = { ...base,
+    const common = { summary, ...base,
       evidence,
       bodyStatusScope: data.metrics.includeFullText ? 'packed-file' : 'displayed-snippet',
       relatedFiles: data.relatedFiles.map(item => ({...item, included: returned.includes(item.path), bodyStatus: bodyStatus(item.path)})),
       responseFormat, metadataTruncated, limitationsOmitted, omittedFileCount: omitted.size,
-      coverage: rangeCoverage(data, originalEvidence, originalIssues, requestedRanges, coverageDetailLimit), taskCoverage: null };
+      coverage, taskCoverage: null };
     if (responseFormat === 'compact') {
       return [{ type: 'text', text: JSON.stringify({ ...common,
         // A packed body has its own file delimiters. Snippet ranges must not describe that body.
@@ -68,14 +82,14 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
         ...(data.metrics.includeFullText ? { packedContent: packedContent || '' } : {}),
       }) }];
     }
-    const summary = `# AI Agent Context Snapshot\nTask: ${data.task}`;
-    const markdown = [summary, ...data.guidance,
+    const markdownSummary = `# AI Agent Context Snapshot\nTask: ${data.task}`;
+    const markdown = [markdownSummary, ...data.guidance,
       ...data.evidence.map(item => `### ${item.file}:${item.startLine}-${item.endLine}\nReason: ${item.reason}\n\n\`\`\`\n${item.snippet}\n\`\`\``),
       ...(packedContent ? ['## Packed snapshot', packedContent] : []),
       ...data.limitations,
       ...(data.truncated ? ['Output is partial; inspect truncation and omission metadata.'] : []),
     ].join('\n\n');
-    return [{ type: 'text', text: JSON.stringify({ ...common, executiveSummary: summary }) }, { type: 'text', text: markdown }];
+    return [{ type: 'text', text: JSON.stringify({ ...common, executiveSummary: markdownSummary }) }, { type: 'text', text: markdown }];
   }
 
   function measured() {

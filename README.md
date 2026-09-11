@@ -94,6 +94,20 @@ Add each argument as a separate entry, without extra surrounding quotes even whe
 
 For Skill installation and client configuration, see the [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md).
 
+### Navigation and connection guidance
+
+To obtain a separate project's STDIO configuration without starting its Gateway or changing client settings:
+
+```powershell
+node C:/path/to/WinCode/dist/index.js --print-connection --workspace C:/path/to/project
+```
+
+`WORKSPACE_MISMATCH` returns the same `connectionGuide`: absolute command/argument entries and a workspace verification call. It describes a default local-text connection; existing Roslyn, development and Tray options are not copied. Directory existence is checked on actual startup. Refresh the corresponding client connection after rebuilding to load the new tools/schema.
+
+For ordinary code navigation, call `wincode_search_text` with a literal `query` and exclusive `scopePaths`, or `wincode_file_outline` with a literal `file`. Search returns one match per line; outlines return observed line/byte counts and text declarations. Both include `nextRequest` arguments for `wincode_prepare_context` and bounded file-level diagnostics. They use local text regardless of the semantic provider. Paths, scan/output budgets and cancellation remain enforced; zero matches do not prove absence outside the scanned scope.
+
+Context `summary` gives the displayed scope, complete/partial/missing counts and next action. An EOF error now reports actual line count and, where an intersection exists, a corrected read request while preserving the original coverage gap. UI inspect/review optionally accept `responseFormat: "compact"`: retain node IDs/hierarchy/states and the image, omit per-node geometry/class names, share repeated C# candidates through `candidateIds`, and provide live-UI `expansionRequests` for full detail. Default UI output remains `full`; compact counts do not establish defects or binding causality.
+
 ### Optional tray and manual memory release
 
 Automatic Roslyn release is **off**. This version provides no idle timer or automatic-release switch. A loaded semantic workspace stays warm for successive Agent calls. To release it when you decide it is no longer needed:
@@ -158,6 +172,8 @@ The 2026-09-08 check of the current Codex connection against TavernDesk source p
 
 | Tool | Purpose |
 | --- | --- |
+| `wincode_search_text` | Search literal text within exclusive files/directories; return locations, bounded previews and follow-up reads. |
+| `wincode_file_outline` | Read one file's observed line/byte counts and bounded local declarations with follow-up reads. |
 | `workspace_open` | Confirm or recover the fixed workspace and return a bounded summary; reject other roots. |
 | `wincode_list_directory` | Browse a specific workspace directory with entry, depth and output limits. |
 | `wincode_analyze_workspace` | Parse solution structure and declared `.sln`/`.csproj` project references. |
@@ -337,6 +353,14 @@ UI 并发检查、实际 Agent 客户端中的完整 Roslyn 操作流程，以�
 
 Skill 安装和客户端配置方法见 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。
 
+### 代码导航与连接引导
+
+使用 `node C:/path/to/WinCode/dist/index.js --print-connection --workspace C:/path/to/project` 可以输出目标项目的独立 STDIO 配置，不启动其 Gateway、不修改客户端设置。`WORKSPACE_MISMATCH` 也返回同一 `connectionGuide`，包含绝对命令、独立参数和工作区核对调用。配置默认 local-text，不复制已有 Roslyn、开发或托盘选项，目录存在性在实际启动时检查。构建后刷新对应客户端连接，才能使用新工具及 Schema。
+
+日常定位用 `wincode_search_text` 的字面量 `query` 和排他的 `scopePaths`；查看文件行数、字节数和声明，用 `wincode_file_outline({file: ...})`。两者都返回可交给 `wincode_prepare_context` 的 `nextRequest`，并指出具体失败文件。它们始终提供本地文本线索；路径、扫描和最终输出预算、取消机制继续生效，零匹配不证明范围外没有相关代码。
+
+上下文 `summary` 汇总展示范围、完整/部分/缺失文件数和下一步。EOF 越界报告实际行数，有有效交集时给出修正读取请求，原始覆盖缺口仍保留。UI inspect/review 可显式传 `responseFormat: "compact"`：保留控件 ID、层级、状态及图片，省略节点几何和类名，以 `candidateIds` 共享重复 C# 候选，并通过 `expansionRequests` 重新查询完整控件信息。UI 默认格式仍为 full，统计不自动判定缺陷或绑定原因。
+
 ### 可选托盘与手动释放内存
 
 **自动释放保持关闭**，本版没有 idle 定时器或自动释放开关。Roslyn 加载后会保留，优先保障 Agent 连续工作；确实不再需要时，由你在设置里主动释放。
@@ -401,6 +425,8 @@ Skill 安装和客户端配置方法见 [Skill 与 MCP 配置指南](WinCode-Ski
 
 | 工具名称 | 功能描述 |
 | --- | --- |
+| `wincode_search_text` | 在排他文件/目录范围内查字面量，返回位置、有界预览和续读请求。 |
+| `wincode_file_outline` | 返回单文件实际行数/字节数、有界声明概览和续读请求。 |
 | `workspace_open` | 确认或恢复本连接的固定工作区，返回有长度限制的摘要；拒绝其他根目录。 |
 | `wincode_list_directory` | 按指定目录浏览，限制条目、深度与整份输出。 |
 | `wincode_analyze_workspace` | 解析解决方案结构及 `.sln`/`.csproj` 中声明的项目引用。 |

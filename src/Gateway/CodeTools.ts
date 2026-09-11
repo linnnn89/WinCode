@@ -2,6 +2,7 @@ import { defineTool, jsonResult } from './ToolDefinition.js';
 import { contextResponse } from './ContextResponse.js';
 import { validateContextScope, type PreparedContextOptions } from '../Core/Context.js';
 import type { SymbolLocation } from '../Core/CodeQueries.js';
+import { validateTextSearch, validateFileOutline, type TextSearchOptions, type FileOutlineOptions } from '../Core/CodeNavigation.js';
 
 /** 引用、影响与重构共用同一位置校验契约。 */
 const symbolLocationSchema = {
@@ -16,6 +17,35 @@ const symbolLocationSchema = {
         };
 
 export const CODE_TOOLS = [
+  defineTool<TextSearchOptions>({
+    name: 'wincode_search_text',
+    description: 'Searches a literal single-line string in bounded workspace files/directories without a semantic Host. Returns one match per line, UTF-16 columns, clipped previews and executable prepare_context nextRequest arguments. Inspect queryComplete, fileIssues and omitted counts; zero matches do not prove absence outside the scanned scope.',
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: 'object', additionalProperties: true, required: ['query'], properties: {
+      query: { type: 'string', minLength: 1, maxLength: 256, description: 'Literal text, not a regular expression; no newlines.' },
+      scopePaths: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1024 },
+        description: 'Exclusive literal files or directories; defaults to the workspace. Prefer a narrow scope. In-workspace absolute paths are accepted; no globs or parent traversal.' },
+      caseSensitive: { type: 'boolean', default: false },
+      maxResults: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+      maxOutputChars: { type: 'integer', minimum: 2048, maximum: 32768, default: 8000, description: 'Budget for the entire serialized JSON text, not model tokens.' },
+    } },
+  }, {
+    validate: (args, { router }) => { validateTextSearch(args, router.config.workspaceRoot); },
+    execute: async (args, { router, signal }) => jsonResult(await router.searchText(args, signal)),
+  }),
+  defineTool<FileOutlineOptions>({
+    name: 'wincode_file_outline',
+    description: 'Reads one bounded UTF-8 source/text file, reports its observed line count/byte size and local declaration outline with prepare_context nextRequest arguments. No method-end or semantic identity claim. Other supported text formats return metadata with declarationsSupported=false. Lexical failures identify the affected file.',
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: 'object', additionalProperties: true, required: ['file'], properties: {
+      file: { type: 'string', minLength: 1, maxLength: 1024, description: 'Literal file inside the workspace; absolute paths accepted. No globs or parent traversal.' },
+      maxSymbols: { type: 'integer', minimum: 1, maximum: 200, default: 100 },
+      maxOutputChars: { type: 'integer', minimum: 2048, maximum: 32768, default: 8000 },
+    } },
+  }, {
+    validate: (args, { router }) => { validateFileOutline(args, router.config.workspaceRoot); },
+    execute: async (args, { router, signal }) => jsonResult(await router.fileOutline(args, signal)),
+  }),
   defineTool<PreparedContextOptions>({
     name: 'wincode_prepare_context',
     description: 'Returns compact file evidence with actual source ranges and omission metadata. Explicit lineRanges report final complete-line coverage and recoverable missing ranges after serialization; a partial last line is not covered. Other requests do not establish full method/task coverage. maxTokens budgets ALL response text using characters/4 (not a model tokenizer). Set includeFullText for packed bodies; legacy opts into JSON plus Markdown.',

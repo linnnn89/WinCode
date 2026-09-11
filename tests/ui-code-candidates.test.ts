@@ -7,6 +7,7 @@ import { mapUiCodeCandidates, validateCandidateCodeFiles } from '../src/Core/UiC
 import { mapUiSources } from '../src/Core/UiSourceMapper.js';
 import { reviewUi } from '../src/CompositeTools/UiReview.js';
 import { UiNode, UiInspectResult } from '../src/Core/UiContracts.js';
+import { uiResponse } from '../src/Gateway/UiResponse.js';
 
 const tree: UiNode = { id: 1, parentId: null, automationId: 'NavCharacters', isEnabled: false, children: [] };
 async function fixture(run: (root: string) => Promise<void>) {
@@ -46,6 +47,48 @@ it('a disabled button yields bounded XAML to command-assignment navigation witho
   assert.deepEqual(assignment.nextRequest.lineRanges, [{ file: 'ViewModel.cs', startLine: 4, endLine: 4 }]);
   assert.ok(evidence.limitations.some(value => value.includes('CanExecute')));
   assert.ok(!JSON.stringify(evidence).includes(root));
+}));
+
+it('compact UI evidence preserves snapshot IDs and image while sharing command candidates and usable expansion requests', async t => fixture(async root => {
+  const children: UiNode[] = Array.from({ length: 6 }, (_, i) => ({ id: i + 2, parentId: 1, automationId: `Button${i}`,
+    controlType: 'Button', name: i === 0 ? '' : `Action ${i}`, isEnabled: i !== 0, children: [],
+    className: 'Button', bounds: { x: i * 90, y: 30, width: 80, height: 30 }, relativeBounds: { x: i * 90, y: 30, width: 80, height: 30 } }));
+  await fs.writeFile(path.join(root, 'View.xaml'), '<StackPanel>\n' + children.map(n =>
+    `<Button AutomationProperties.AutomationId="${n.automationId}" Command="{Binding ShowCharactersCommand}"/>`).join('\n') + '\n</StackPanel>');
+  await fs.writeFile(path.join(root, 'ViewModel.cs'), 'class ViewModel {\npublic ICommand ShowCharactersCommand { get; }\npublic ViewModel() {\nShowCharactersCommand = new AsyncRelayCommand(ShowCharactersAsync);\n}\nprivate Task ShowCharactersAsync() { return Task.CompletedTask; }\n}');
+  const snapshot: UiInspectResult = { schemaVersion: '1.0', protocolVersion: '1.0', requestId: 'same-snapshot', success: true,
+    pid: 123, hwnd: '0x123', treeComplete: false, truncated: true, truncateReason: 'maxDepth', annotatedPngBase64: 'AA==',
+    tree: { id: 1, parentId: null, controlType: 'Window', children } };
+  const reviewed = await reviewUi(async () => snapshot, root, { pid: 123 }, ['View.xaml'], undefined, undefined, ['ViewModel.cs']);
+  const original = structuredClone(reviewed);
+  const full = uiResponse(reviewed), compact = uiResponse(reviewed, 'compact');
+  assert.deepEqual(reviewed, original, 'formatting must not mutate the captured evidence');
+  assert.deepEqual(compact.content[1], full.content[1], 'screenshot badges still refer to the original snapshot');
+  const text = (result: ReturnType<typeof uiResponse>) => (result.content[0] as { text: string }).text;
+  const data = JSON.parse(text(compact));
+  assert.deepEqual(data.tree.children.map((n: any) => n.id), children.map(n => n.id));
+  assert.equal(data.tree.children[0].parentId, 1);
+  assert.equal(data.tree.children[0].isEnabled, false);
+  assert.equal(data.tree.children[0].bounds, undefined);
+  assert.equal(data.summary.observedNodes, 7);
+  assert.equal(data.summary.unnamedButtons, 1);
+  assert.equal(data.summary.treeComplete, false);
+  assert.equal(data.summary.truncateReason, 'maxDepth');
+  assert.equal(data.codeEvidence.runtimeSourceVerified, false);
+  const first = data.codeEvidence.clues[0];
+  assert.equal(first.candidates, undefined);
+  assert.ok(first.candidateIds.length > 0);
+  for (const clue of data.codeEvidence.clues) for (const id of clue.candidateIds)
+    assert.ok(data.codeEvidence.candidates.some((candidate: any) => candidate.id === id));
+  const unique = new Set(data.codeEvidence.candidates.map((c: any) => JSON.stringify([c.file, c.line, c.kind, c.identifier])));
+  assert.equal(unique.size, data.codeEvidence.candidates.length);
+  const targeted = data.expansionRequests.find((r: any) => r.arguments.query?.automationId === 'Button0');
+  assert.equal(targeted.tool, 'wincode_ui_inspect');
+  assert.equal(targeted.arguments.responseFormat, 'full');
+  assert.equal(targeted.arguments.backgroundOnly, true);
+  assert.equal(targeted.arguments.pid, 123);
+  assert.ok(text(compact).length < text(full).length, `compact=${text(compact).length}, full=${text(full).length}`);
+  t.diagnostic(`Same snapshot: compact=${text(compact).length} characters; full=${text(full).length} characters. Image bytes and node IDs unchanged.`);
 }));
 
 it('same-name command declarations across classes or files remain ambiguous', async () => fixture(async root => {

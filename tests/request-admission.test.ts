@@ -204,7 +204,7 @@ it('cancelled startup waiters are removed and passive requests stay available du
       const controllers = Array.from({ length: 8 }, () => new AbortController());
       const pending = controllers.map(c => call('wincode_find_code_symbol', { query: 'Api' }, c.signal).catch(e => e));
       await until(() => router.admission.snapshot().sharedWaiters === 8, 'startup waiters must be observable');
-      assert.notEqual((await call('wincode_hello_world')).isError, true); assert.equal((await client.listTools()).tools.length, 15);
+      assert.notEqual((await call('wincode_hello_world')).isError, true); assert.equal((await client.listTools()).tools.length, 17);
       controllers.forEach(c => c.abort()); await Promise.all(pending);
       await until(() => router.admission.pendingCount === 0, 'cancelled startup calls must release capacity');
       assert.equal(router.admission.snapshot().sharedWaiters, 0);
@@ -305,7 +305,7 @@ it('128-call burst admits 32, rejects overflow before execution, and preserves F
     const health = body(await call('wincode_hello_world')).health;
     assert.equal(health.admission.business.active, 32); assert.equal(health.admission.business.waiting, 31);
     assert.equal(health.admission.business.executing, 1);
-    assert.equal((await client.listTools()).tools.length, 15);
+    assert.equal((await client.listTools()).tools.length, 17);
     assert.equal(body(await call('workspace_open', { path: path.join(root, 'other') })).errorCode, 'WORKSPACE_MISMATCH');
     assert.equal(body(await call('workspace_open', { path: root })).errorCode, 'SERVER_BUSY');
     assert.equal((await router.releaseRoslynMemory()).status, 'busy');

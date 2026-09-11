@@ -41,7 +41,7 @@ allowProjectEvaluation 表示允许 MSBuild 设计时求值执行项目 targets�
 
 `additionalInputs` 是可选启动配置，默认空数组。例如构建读取 schema.yaml 和 build-inputs/custom.rules，可填 ["schema.yaml","build-inputs/custom.rules"]。最多 32 个固定工作区相对文件路径，数组 JSON 最长 4096 个 UTF-16 字符；不接受根外/绝对路径、重复项、目录、通配符或链接。缺失项报 INPUT_UNAVAILABLE，不静默删除；创建或恢复文件后再显式搜索。其他项目连接分别配置自己的列表。修改列表需更新启动配置并重启 Gateway，普通 MCP 参数不能添加输入或获取项目执行许可。
 
-Host 通过独立进程的 JSON 行协议 v2 工作，非 MCP tools/call：启动参数为 `--allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK [ADDITIONAL_INPUTS_JSON]`；加载后 ready 帧给出 protocolVersion=2、snapshot 及 inputPolicy={version:1,additionalInputs:[...]}。Gateway 必须核对实际列表；旧 Host 缺少输入策略确认或列表不一致时拒绝接入，即使同为协议 v2 也不能假定兼容。项目求值可能执行 targets，不自动 restore；本维护验收只使用获准的生成夹具。协议及启动方式以源码 `tools/WinCode.Code.Host/Program.cs` 注释为准，尚非稳定公共接口。
+Host 通过独立进程的 JSON 行协议 v2 工作，非 MCP tools/call：启动参数为 `--allow-project-evaluation ROOT PROJECT CONFIGURATION FRAMEWORK [ADDITIONAL_INPUTS_JSON]`；加载后 ready 帧给出 protocolVersion=2、snapshot 及 inputPolicy={version:2,additionalInputs:[...]}。Gateway 必须核对实际列表；旧 Host 缺少输入策略确认或列表不一致时拒绝接入，即使同为协议 v2 也不能假定兼容。项目求值可能执行 targets，不自动 restore；本维护验收只使用获准的生成夹具。协议及启动方式以源码 `tools/WinCode.Code.Host/Program.cs` 注释为准，尚非稳定公共接口。
 
 | 内部 operation | 请求与结果 |
 | --- | --- |
@@ -60,6 +60,15 @@ Host 监听变化并在查询前后比较内容指纹，变化时丢弃结果并
 自定义 targets 的任意外部输入和整个磁盘原子快照尚未验证，所以仍保留 diskFreshnessVerified=false、externalCustomInputsVerified=false。queryComplete 当前为 false；排除的分析器/生成器、加载及编译诊断须保留，零引用不证明安全删除。普通 MCP 请求使用下方规范字段；snapshotId 仅出现在 symbolLocation/semanticContext 内，不单独作为顶层参数发送。未知字段可能被忽略，成功响应不证明新参数生效。TS/JS/Python 的限定文件文本取证仍走 prepare_context，不把 Roslyn 声明搜索当成多语言语义服务。
 
 ## 规范字段
+
+先定位再阅读：`wincode_search_text({query:"Save(",scopePaths:["src"]})` 返回每个匹配行的文件、行号、1 起始 UTF-16 列号和预览。`nextRequest` 是下一次 `wincode_prepare_context` 的完整参数，不是自动执行指令。`wincode_file_outline({file:"src/Service.cs"})` 给出同次读取的 `fileLineCount`、`sizeBytes`、声明及续读请求。声明边界仍是文本模式，不代表整个方法或语义身份。
+
+| 导航工具 | 必填字段 | 可选字段及范围 |
+| --- | --- | --- |
+| `wincode_search_text` | `query`：非空白单行字面量，最长 256；不接受正则表达式 | `scopePaths`：1–20 个字面文件或目录，默认工作区；`caseSensitive`：布尔值，默认 false；`maxResults`：整数 1–200，默认 50；`maxOutputChars`：整数 2048–32768，默认 8000 |
+| `wincode_file_outline` | `file`：工作区内字面文件 | `maxSymbols`：整数 1–200，默认 100；`maxOutputChars`：整数 2048–32768，默认 8000 |
+
+导航路径最长 1024，允许工作区内绝对路径，拒绝通配符、父目录逃逸和范围外链接。搜索范围排他、重叠文件去重；单文件 256 KiB、合计 8 MiB、最多 5000 枚举项，并遵守操作取消和扫描时限。默认跳过生成目录及 test-tmp。支持 C#/TS/TSX/JS/JSX/Python 源码，以及 XAML/XML、项目/解决方案、JSON/Markdown/文本、YAML/config/PowerShell/mjs/cjs 文件；声明概览仅解析前六种源码，其余返回 `declarationsSupported:false`。扫描限制和最终 JSON 输出限制都可能使结果不完整。`foundItems` 是有界扫描发现数，`returnedItems` 是实际展示数；`fileIssues` 最多 20 条，`fileIssuesOmitted` 表示省略数。词法失败的文件在 `fileIssues` 中具名；零结果不能证明未扫描范围没有匹配。
 
 兼容容忍模式允许额外字段，但会忽略它们，不能据“调用成功”判断参数已经生效。例如 `scopeFile`、`scope_files` 均不是 `scopeFiles`，`symbolName` 不能代替查符号工具的 `query`。未知字段不能补足缺失必填项；已知字段填错类型、空白必填值或违反范围规则仍会报错。下面列出的名称区分大小写，未列出的参数不应发送。
 
@@ -106,6 +115,8 @@ local-text 的 queryComplete=true 仅表示该次有界文本扫描完成，仍�
 不要用 `"2000"` 代替 `2000`、`"false"` 代替 `false`，也不要把 `{name:"Save"}` 当作搜索字符串。额外字段容忍并不会放宽这些类型规则。返回结果中的 `coverage`、`queryComplete`、`runtime` 等是证据字段，不能作为未声明的请求参数获得相应能力。
 
 ## 按任务取证
+
+上下文先看 `summary`：`scope` 区分 requested-lines、packed-files 和 displayed-snippets，`status` 只描述这个范围的 complete/partial/empty/unknown；`nextAction` 指向续读、文件问题或缩小范围，不承诺整个审查已完成。`line-range-out-of-bounds` 保留原始请求的未覆盖状态，并报告实际 `fileLineCount`；若请求与文件仍有交集，`coverage.details[].nextRequest` 返回有效交集。起点已超过 EOF 或文件不存在时不生成盲目重试。普通文件开头片段也带有界续读请求。
 
 怀疑源码与连接不同步时，先调用 wincode_hello_world({toolName:"wincode_prepare_context"})，对照本连接 tools/list 的参数及 schemaHash，并记录 runtime.instanceId/build.buildId。旧实例没有这些字段时明确为旧契约，不再反复尝试新参数。构建后需要客户端重连；build.status=unknown 不能当成当前源码已运行。test:e2e 只证明它自己启动的隔离 stdio 进程。
 

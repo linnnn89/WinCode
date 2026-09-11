@@ -1,105 +1,57 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
-import { getDefaultConfig } from '../src/Core/Config.js';
-
-import { killProcessTree } from '../src/Core/ResourceManager.js';
-
-// 每个功能套件拥有独立缓存；并行文件不能删除彼此正在使用的缓存。
+// Protocol checks use fixed input; the developer checkout is not a performance fixture.
 describe('mcp-stdio', () => {
-  const root = process.cwd();
-  const testCacheDir = path.join(root, '.cache', `test_mcp-stdio_${process.pid}`);
-  const config = getDefaultConfig(root);
-  config.cacheDir = testCacheDir;
-  const FIXTURE_DOTNET = path.resolve(root, 'tests/fixtures/dotnet-mini');
+  const repository = process.cwd();
+  let root: string;
+  const FIXTURE_DOTNET = path.resolve(repository, 'tests/fixtures/dotnet-mini');
 
   before(async () => {
-    await fs.mkdir(testCacheDir, { recursive: true });
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-stdio-'));
+    await fs.mkdir(path.join(root, 'src/Core'), { recursive: true });
+    await fs.mkdir(path.join(root, 'src/Gateway'), { recursive: true });
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'stdio-fixture', version: '1.0.0' }));
+    await fs.writeFile(path.join(root, 'src/Core/ToolRouter.ts'),
+      'export class ToolRouter { run(): string { return "fixture"; } }\n');
+    await fs.writeFile(path.join(root, 'src/Gateway/McpServer.ts'),
+      'import { ToolRouter } from "../Core/ToolRouter.js";\nexport class McpServer { router = new ToolRouter(); }\n');
   });
   after(async () => {
-    await fs.rm(testCacheDir, { recursive: true, force: true }).catch(() => { });
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(root).startsWith('wincode-stdio-'));
+    await fs.rm(root, { recursive: true, force: true });
   });
-  describe('6. End-to-End MCP Stdio Protocol & All 9 Tools Execution', () => {
-    let proc: any;
-    let pendingRequests = new Map<number | string, (res: any) => void>();
-    let buffer = '';
+  describe('production stdio tool workflow', () => {
+    const client = new Client({ name: 'stdio-regression', version: '1.0.0' });
+    let transport: StdioClientTransport;
+    let stderr = '';
 
     before(async () => {
-      const serverPath = path.resolve('dist/index.js');
-      proc = spawn('node', [serverPath, '--workspace', root], {
-        cwd: root,
-        stdio: ['pipe', 'pipe', 'pipe'],
+      transport = new StdioClientTransport({ command: process.execPath,
+        args: [path.join(repository, 'dist/index.js'), '--workspace', root], cwd: root, stderr: 'pipe' });
+      transport.stderr?.on('data', (chunk: Buffer) => {
+        stderr = (stderr + chunk.toString()).slice(-8192);
       });
-
-      proc.stdout.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          try {
-            const msg = JSON.parse(trimmed);
-            if (msg.id !== undefined && pendingRequests.has(msg.id)) {
-              const resolve = pendingRequests.get(msg.id)!;
-              pendingRequests.delete(msg.id);
-              resolve(msg);
-            }
-          } catch { }
-        }
-      });
-
-      // Handshake
-      const initPayload = JSON.stringify({
-        jsonrpc: '2.0',
-        id: 100,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: { name: 'TDD-Runner', version: '1.0.0' },
-        },
-      }) + '\n';
-      proc.stdin.write(initPayload);
-      await new Promise((r) => setTimeout(r, 600));
-
-      const initializedPayload = JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'notifications/initialized',
-      }) + '\n';
-      proc.stdin.write(initializedPayload);
-      await new Promise((r) => setTimeout(r, 200));
+      await client.connect(transport, { timeout: 8000 });
     });
+    after(async () => { await client.close(); await transport?.close(); });
 
-    after(async () => {
-      if (proc) {
-        proc.stdin.end();
-        await new Promise((r) => setTimeout(r, 200));
-        await killProcessTree(proc).catch(() => { });
+    const callMcp = async (method: string, params?: any): Promise<any> => {
+      try {
+        const result = method === 'tools/list'
+          ? await client.listTools({}, { timeout: 8000 })
+          : await client.callTool(params, { timeout: 8000 });
+        return { result };
+      } catch (error: any) {
+        if (error.code === -32602) return { error: { code: error.code, message: error.message } };
+        throw new Error(`MCP call ${params?.name ?? method} failed; stderr: ${stderr}`, { cause: error });
       }
-    });
-
-    const callMcp = (method: string, params?: any): Promise<any> => {
-      const id = Math.floor(Math.random() * 10000000);
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          pendingRequests.delete(id);
-          reject(new Error(`MCP call ${method} timed out`));
-        }, 8000);
-
-        pendingRequests.set(id, (res) => {
-          clearTimeout(timeout);
-          resolve(res);
-        });
-
-        const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
-        proc.stdin.write(payload);
-      });
     };
 
     it('MCP tools/list should list all registered high-level tools', async () => {

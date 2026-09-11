@@ -67,25 +67,30 @@ describe('process-failures', () => {
     });
 
     it('git-less workspace is reported, not thrown', async () => {
-      // A directory inside this repository is still Git-controlled even without its own .git.
+      // TEMP may be inside this repository; stop discovery at its parent to model a non-Git workspace.
       const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-nongit-'));
+      const previousCeiling = process.env.GIT_CEILING_DIRECTORIES;
       try {
+        process.env.GIT_CEILING_DIRECTORIES = path.dirname(tmp);
         await fs.writeFile(path.join(tmp, 'readme.txt'), 'x');
         const ws = new WorkspaceManager(getDefaultConfig(tmp));
         const git = await ws.getGitStatus();
         assert.strictEqual(git.isGit, false);
       } finally {
+        if (previousCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+        else process.env.GIT_CEILING_DIRECTORIES = previousCeiling;
         assert.strictEqual(path.dirname(await fs.realpath(tmp)), await fs.realpath(os.tmpdir()));
         await fs.rm(tmp, { recursive: true, force: true });
       }
     });
 
     it('malformed workspace path fails with a structured error', async () => {
-      const ws = new WorkspaceManager(getDefaultConfig(root));
       const filePath = path.join(testCacheDir, 'not_a_dir.txt');
       await fs.writeFile(filePath, 'nope');
+      const ws = new WorkspaceManager(getDefaultConfig(filePath));
       await assert.rejects(() => ws.openWorkspace(filePath), /Invalid workspace path/);
-      await assert.rejects(() => ws.openWorkspace(path.join(testCacheDir, 'missing_dir_zzz')), /Invalid workspace path/);
+      const missing = path.join(testCacheDir, 'missing_dir_zzz');
+      await assert.rejects(() => new WorkspaceManager(getDefaultConfig(missing)).openWorkspace(missing), /Invalid workspace path/);
     });
 
     it('withTimeout converts hangs into TimeoutError without rejecting later', async () => {

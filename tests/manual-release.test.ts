@@ -94,7 +94,7 @@ it('an arriving MCP request waits for an accepted manual release and then procee
   await router.dispose();
 });
 
-it('a queued workspace switch wins over a settings release', async () => {
+it('a queued workspace confirmation wins over a settings release', async () => {
   const router = new ToolRouter(getDefaultConfig(process.cwd()));
   const gate = deferred(), controller = new AbortController();
   const lock = (router as any).workspaceLock.runExclusive(() => gate.promise);

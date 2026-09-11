@@ -33,8 +33,9 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
     private readonly textDeclarations: (content: string, file: string) => CodeSymbol[]) {
     const options = config.adapters.roslyn;
     if (options?.enabled !== true || options.allowProjectEvaluation !== true) throw new CodeQueryError('PROJECT_EVALUATION_NOT_ALLOWED', 'Explicit Roslyn project evaluation permission is required.');
-    if (![options.configuration, options.targetFramework].every(value => typeof value === 'string' && value.trim().length > 0 && value.length <= 128))
-      throw new CodeQueryError('INVALID_ARGUMENT', 'Explicit Configuration and TargetFramework are required.');
+    if (![options.configuration, options.targetFramework].every(value => typeof value === 'string' && value.trim().length > 0 && value.length <= 128 &&
+      !/[\\/:*?"<>|;$%@\u0000-\u001f]/.test(value) && !/[.\s]$/.test(value)))
+      throw new CodeQueryError('INVALID_ARGUMENT', 'Configuration and TargetFramework must be literal directory names.');
     for (const value of [options.dotnetPath, options.hostPath])
       if (typeof value !== 'string' || !path.isAbsolute(value)) throw new CodeQueryError('INVALID_ARGUMENT', 'Roslyn executable and Host paths must be absolute.');
     for (const [value, maximum] of [[options.loadTimeoutMs, 120000], [options.queryTimeoutMs, 60000]] as const)
@@ -130,7 +131,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
     }
     // 必须确认 Host 实际采用了补充输入；旧 Host 或漏传配置不能被当成成功加载。
     const policy = reply.inputPolicy as { version?: unknown; additionalInputs?: unknown } | undefined;
-    if (policy?.version !== 1 || !Array.isArray(policy.additionalInputs) ||
+    if (policy?.version !== 2 || !Array.isArray(policy.additionalInputs) ||
         policy.additionalInputs.length !== this.options.additionalInputs!.length ||
         policy.additionalInputs.some((file, index) => typeof file !== 'string' ||
           path.relative(this.localPath(file), this.localPath(this.options.additionalInputs![index])) !== ''))
@@ -227,7 +228,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
           await this.stopClient(true);
         throw error;
       }
-    }, operation?.signal).finally(() => { this.operations--; });
+    }, operation?.signal, operation?.queue).finally(() => { this.operations--; });
   }
 
   /** 名称搜索不读语义缓存；过期时要求下一次显式搜索重载，不重放本次失败请求。 */

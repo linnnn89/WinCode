@@ -18,6 +18,8 @@ export interface CacheEntry<T> {
   fingerprint?: string;
   data: T;
   byteSize?: number;
+  integrity?: string;
+  backingFile?: { size: number; sha256: string };
 }
 
 export interface CacheStats {
@@ -26,6 +28,13 @@ export interface CacheStats {
   estimatedMemoryBytes: number;
   diskEntries: number;
   estimatedDiskBytes: number;
+}
+
+export interface KnownCacheStats extends Omit<CacheStats, 'diskEntries' | 'estimatedDiskBytes'> {
+  diskEntries: number | null;
+  estimatedDiskBytes: number | null;
+  diskObservation: 'not-observed' | 'known' | 'incomplete';
+  diskObservedAt: string | null;
 }
 
 /**
@@ -46,7 +55,11 @@ export class CacheManager {
   private memoryBytes = 0;
   private namespace = '';
   private writeChain: Promise<void> = Promise.resolve();
+  // Invalidates in-flight disk reads without retaining per-key tombstones.
+  private mutationVersion = 0;
   private diskIdentity: string | null = null;
+  private diskStats: Pick<KnownCacheStats, 'diskEntries' | 'estimatedDiskBytes' | 'diskObservation' | 'diskObservedAt'> =
+    { diskEntries: null, estimatedDiskBytes: null, diskObservation: 'not-observed', diskObservedAt: null };
 
   constructor(
     cacheDir: string,
@@ -92,6 +105,7 @@ export class CacheManager {
   setNamespace(workspaceRoot: string): void {
     const resolved = path.resolve(workspaceRoot);
     this.namespace = crypto.createHash('sha1').update(resolved).digest('hex').slice(0, 12);
+    this.mutationVersion++;
     this.memoryCache.clear();
     this.memoryBytes = 0;
     this.workspaceFingerprint.reset();
@@ -164,6 +178,7 @@ export class CacheManager {
   async rebind(newCacheDir: string): Promise<void> {
     await assertLinkFreePath(newCacheDir);
     await this.flush();
+    this.mutationVersion++;
     this.memoryCache.clear();
     this.memoryBytes = 0;
     this.workspaceFingerprint.reset();
@@ -202,6 +217,7 @@ export class CacheManager {
       this.memoryCache.set(memKey, entry);
       return entry.data as T;
     }
+    this.mutationVersion++;
     const data = create();
     const byteSize = this.estimateBytes(data);
     if (byteSize <= this.maxEntryBytes) this.setMemoryEntry(memKey, { data, fingerprint, byteSize, timestamp: Date.now() });
@@ -223,6 +239,73 @@ export class CacheManager {
     } catch { return false; }
   }
 
+  private entryIntegrity(key: string, entry: CacheEntry<unknown>): string {
+    return crypto.createHash('sha256').update(JSON.stringify([
+      key, entry.timestamp, entry.ttlMs, entry.fingerprint, entry.data, entry.backingFile,
+    ])).digest('hex');
+  }
+
+  private hasValidIntegrity(key: string, entry: CacheEntry<unknown>): boolean {
+    try { return typeof entry.integrity === 'string' && entry.integrity === this.entryIntegrity(key, entry); }
+    catch { return false; }
+  }
+
+  /** Hash a bounded ordinary file through one handle; existence, size and mtime alone cannot prove content. */
+  private async readBackingIdentity(data: unknown, expected?: CacheEntry<unknown>['backingFile']): Promise<CacheEntry<unknown>['backingFile'] | null> {
+    const file = (data as { overflowPath?: unknown } | null)?.overflowPath;
+    if (typeof file !== 'string' || path.dirname(file) !== path.join(this.cacheDir, 'overflow') || !OVERFLOW_FILE.test(path.basename(file))) return null;
+    if (expected && (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256))) return null;
+    try {
+      await this.assertDiskBoundary('overflow');
+      await assertLinkFreePath(file);
+      const before = await fs.lstat(file);
+      const limit = expected?.size ?? before.size;
+      if (!before.isFile() || before.isSymbolicLink() || before.size !== limit || limit > this.maxDiskBytes) return null;
+      const handle = await fs.open(file, 'r');
+      try {
+        const opened = await handle.stat();
+        if (opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) return null;
+        const digest = crypto.createHash('sha256'), buffer = Buffer.alloc(64 * 1024);
+        let size = 0;
+        while (true) {
+          const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, limit - size + 1), null);
+          if (!bytesRead) break;
+          size += bytesRead;
+          if (size > limit) return null;
+          digest.update(buffer.subarray(0, bytesRead));
+        }
+        const after = await handle.stat();
+        if (size !== limit || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) return null;
+        const sha256 = digest.digest('hex');
+        if (expected && expected.sha256 !== sha256) return null;
+        return { size, sha256 };
+      } finally { await handle.close(); }
+    } catch { return null; }
+  }
+
+  private async backingFileMatches(entry: CacheEntry<unknown>): Promise<boolean> {
+    if ((entry.data as { overflowPath?: unknown } | null)?.overflowPath === undefined) return entry.backingFile === undefined;
+    return !!entry.backingFile && !!await this.readBackingIdentity(entry.data, entry.backingFile);
+  }
+
+  private async readCacheJson(file: string): Promise<string> {
+    await assertLinkFreePath(file);
+    const handle = await fs.open(file, 'r');
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size > this.maxEntryBytes) throw new Error('Cache JSON exceeds its read budget.');
+      const buffer = Buffer.alloc(stat.size + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+        if (!bytesRead) break;
+        length += bytesRead;
+      }
+      if (length !== stat.size) throw new Error('Cache JSON changed size during reading.');
+      return buffer.subarray(0, length).toString('utf8');
+    } finally { await handle.close(); }
+  }
+
   /**
    * Retrieves data from memory or disk cache with LRU access refresh.
    * Disk files larger than maxEntryBytes are deleted instead of being loaded.
@@ -236,7 +319,10 @@ export class CacheManager {
       if (memEntry.ttlMs && now - memEntry.timestamp > memEntry.ttlMs) {
         this.deleteMemory(memKey);
       } else if (!currentFingerprint || memEntry.fingerprint === currentFingerprint) {
-        if (!await this.backingFileExists(memEntry.data)) {
+        const valid = this.hasValidIntegrity(memKey, memEntry) && await this.backingFileMatches(memEntry);
+        // Validation yields: replacement, eviction or reset may have invalidated this exact entry.
+        if (this.memoryCache.get(memKey) !== memEntry) return null;
+        if (!valid) {
           this.deleteMemory(memKey);
           return null;
         }
@@ -247,25 +333,26 @@ export class CacheManager {
     }
 
     const filePath = this.getCacheFilePath(key);
+    const version = this.mutationVersion;
     try {
+      // A read started during an accepted write/clear must observe its disk result.
+      await this.writeChain;
+      if (version !== this.mutationVersion) return null;
       await this.assertDiskBoundary();
       const stat = await fs.lstat(filePath);
       if (!stat.isFile() || stat.isSymbolicLink()) return null;
       if (stat.size > this.maxEntryBytes) {
-        await this.unlinkOwned(filePath);
+        await this.discardDiskEntry(filePath, version);
         return null;
       }
 
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await this.readCacheJson(filePath);
       const entry: CacheEntry<T> = JSON.parse(content);
       if (entry.format !== 'wincode-cache-v1' || !Number.isFinite(entry.timestamp) || !Object.hasOwn(entry, 'data')) return null;
+      if (!this.hasValidIntegrity(memKey, entry)) return null;
 
       if (entry.ttlMs && now - entry.timestamp > entry.ttlMs) {
-        await this.unlinkOwned(filePath);
-        const p = (entry.data as any)?.overflowPath;
-        if (typeof p === 'string') {
-          await this.removeOverflow(p);
-        }
+        await this.discardDiskEntry(filePath, version, (entry.data as { overflowPath?: unknown } | null)?.overflowPath);
         return null;
       }
 
@@ -273,7 +360,7 @@ export class CacheManager {
         return null;
       }
 
-      if (!await this.backingFileExists(entry.data)) return null;
+      if (version !== this.mutationVersion || !await this.backingFileMatches(entry) || version !== this.mutationVersion) return null;
 
       this.setMemoryEntry(memKey, {
         ...entry,
@@ -291,6 +378,7 @@ export class CacheManager {
    * Oversized values are not retained in the heap and are not written to disk.
    */
   async set<T>(key: string, data: T, options?: { ttlMs?: number; fingerprint?: string }): Promise<void> {
+    this.mutationVersion++;
     const byteSize = this.estimateBytes(data);
     const entry: CacheEntry<T> = {
       format: 'wincode-cache-v1',
@@ -319,6 +407,13 @@ export class CacheManager {
       const filePath = targetFilePath;
       const tmpPath = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
       try {
+        if ((entry.data as { overflowPath?: unknown } | null)?.overflowPath !== undefined) {
+          const backingFile = await this.readBackingIdentity(entry.data);
+          if (backingFile) entry.backingFile = backingFile;
+          // Keep bounded metadata for cleanup, but do not invalidate a later accepted value.
+          else if (this.memoryCache.get(memKey) === entry) this.deleteMemory(memKey);
+        }
+        entry.integrity = this.entryIntegrity(memKey, entry);
         await this.assertDiskBoundary('', true);
         await this.assertReplaceable(filePath);
         await fs.writeFile(tmpPath, JSON.stringify(entry), { encoding: 'utf8', flag: 'wx' });
@@ -344,6 +439,15 @@ export class CacheManager {
       () => undefined
     );
     return run;
+  }
+
+  private async discardDiskEntry(filePath: string, version: number, overflowPath?: unknown): Promise<void> {
+    // Check in the writer queue: no newer local file can be published between this check and unlink.
+    await this.enqueueWrite(async () => {
+      if (version !== this.mutationVersion) return;
+      await this.unlinkOwned(filePath);
+      if (typeof overflowPath === 'string') await this.removeOverflow(overflowPath);
+    });
   }
 
   /** Drain accepted writes before the gateway releases its remaining resources. */
@@ -429,6 +533,7 @@ export class CacheManager {
   }
 
   private async pruneDiskCacheOnce(options?: { orphanGraceMs?: number }): Promise<void> {
+    this.mutationVersion++;
     await this.assertDiskBoundary();
     try {
       const files = await fs.readdir(this.cacheDir);
@@ -469,7 +574,7 @@ export class CacheManager {
             await this.unlinkOwned(jsonPath);
             continue;
           }
-          const content = await fs.readFile(jsonPath, 'utf-8');
+          const content = await this.readCacheJson(jsonPath);
           const entry: CacheEntry<any> = JSON.parse(content);
           if (entry.format !== 'wincode-cache-v1' || !Number.isFinite(entry.timestamp) || !Object.hasOwn(entry, 'data')) continue;
 
@@ -586,6 +691,7 @@ export class CacheManager {
   async getStats(): Promise<CacheStats> {
     let diskEntries = 0;
     let estimatedDiskBytes = 0;
+    let complete = true;
     try {
       await this.assertDiskBoundary();
       const files = await fs.readdir(this.cacheDir);
@@ -596,23 +702,28 @@ export class CacheManager {
           const s = await fs.stat(path.join(this.cacheDir, f));
           estimatedDiskBytes += s.size;
         } catch {
-          // skip
+          complete = false;
         }
       }
       const overflowDir = path.join(this.cacheDir, 'overflow');
       await this.assertDiskBoundary('overflow');
-      const overflowFiles = await fs.readdir(overflowDir).catch(() => []);
+      const overflowFiles = await fs.readdir(overflowDir).catch(error => {
+        if (error.code !== 'ENOENT') complete = false;
+        return [];
+      });
       for (const of of overflowFiles) {
         if (!OVERFLOW_FILE.test(of)) continue;
         diskEntries++;
         try {
           const s = await fs.stat(path.join(overflowDir, of));
           estimatedDiskBytes += s.size;
-        } catch {}
+        } catch { complete = false; }
       }
     } catch {
-      // unreadable cache dir
+      complete = false;
     }
+    this.diskStats = { diskEntries: complete ? diskEntries : null, estimatedDiskBytes: complete ? estimatedDiskBytes : null,
+      diskObservation: complete ? 'known' : 'incomplete', diskObservedAt: new Date().toISOString() };
     return {
       namespace: this.namespace,
       memoryEntries: this.memoryCache.size,
@@ -620,6 +731,11 @@ export class CacheManager {
       diskEntries,
       estimatedDiskBytes,
     };
+  }
+
+  /** Passive status reads memory and the last explicit disk observation, never the filesystem. */
+  getKnownStats(): KnownCacheStats {
+    return { namespace: this.namespace, memoryEntries: this.memoryCache.size, estimatedMemoryBytes: this.memoryBytes, ...this.diskStats };
   }
 
   /** 保留 CacheManager 的既有入口，由独立组件管理指纹观察。 */
@@ -630,6 +746,7 @@ export class CacheManager {
   invalidateFingerprint(root?: string): void { this.workspaceFingerprint.invalidateFingerprint(root); }
 
   async clear(): Promise<void> {
+    this.mutationVersion++;
     this.memoryCache.clear();
     this.memoryBytes = 0;
     this.workspaceFingerprint.reset();

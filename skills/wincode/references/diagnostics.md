@@ -1,6 +1,16 @@
 # 诊断与审计
 
-0.13.0 彻底退役外部 Serena。默认本地文本模式可用，但不提供编译器语义；需要 C# 语义时按代码手册显式配置直接 Roslyn。维护入口为 test:roslyn-host 与 test:roslyn-gateway，不再有 test:serena-real。
+0.15.0 的 WORKSPACE_MISMATCH 是固定工作区拒绝：检查 activeWorkspace/requestedWorkspace，选择对应项目连接。错误发生在工作区资源变更之前，不表示旧根已切换或需要清空缓存。hello.health.workspaceBinding 给出固定根及启动来源；argument 是显式 CLI 参数，cwd 是启动目录回退，configuration 是嵌入式配置。显式 --workspace 必须有绝对目录值；已有连接不会因磁盘重建或配置保存自行更新。
+
+0.15.0 的 health.admission 返回 business/status 的 active、executing、waiting、accepted、completed、rejected、cancelled、timedOut、peakActive，以及累计 waitMs/executionMs 和 maxWaitMs。每实例最多 32 个未完成业务请求、4 个共享轻量状态请求；内层互斥保持 FIFO，运行中取消须在实际清理后归还容量。workspace_open 占用业务容量，但不计入它自己等待排空的 inFlight。状态不等待慢查询或同根恢复；tools/list 满额以协议错误 data.errorCode=SERVER_BUSY 表达。
+
+计时口径：waitMs/maxWaitMs 按已结束请求累计其显式队列等待；executionMs 是队列以外的墙钟耗时，包含 I/O 和取消清理，不是 CPU 用时。active/executing/waiting 为当前请求数；取消/超时计数是 completed 的子集。
+
+SERVER_BUSY 附 workStarted=false、retryable=true 和容量快照，仅说明该次请求尚未开始。按需稍后重试，不自动重放或重启 Host。REQUEST_TIMEOUT 包括启动、排队和执行预算，retryable=false；核对实际结果和恢复状态。原始参数（含未知字段）按 UTF-8 JSON 限制为 64 KiB，超限为 INVALID_ARGUMENT；该限制不消除 SDK 已解析帧的瞬时分配，也不保证总 RSS 或挂起 OS I/O 的强制终止。
+
+hello.health.cache 仅读取内存及最近显式磁盘观察：diskObservation=not-observed 时 diskEntries/estimatedDiskBytes/diskObservedAt 为 null；incomplete 表示读取不完整。known 及其 diskObservedAt 可能已过时。主动 diagnose_project 才刷新磁盘统计。
+
+0.13.0 已退役外部 Serena。默认 local-text 不提供编译器语义，C# 语义需显式配置直接 Roslyn；维护入口为 test:roslyn-host 与 test:roslyn-gateway。
 
 从 0.12.4 起 Repomix 健康探测和打包都由当前 Node 可执行文件直接启动已安装的 JavaScript CLI；不经过 cmd、npx 或 PATH 包装脚本，也不下载包。默认按目标工作区和 WinCode 安装目录的 Node 模块路径读取 repomix/package.json 的 bin 入口；不搜索 npx 缓存或 npm 自定义全局前缀。非标准安装需在宿主 WinCodeConfig.adapters.repomix.customCliPath 提供绝对 .js/.cjs/.mjs 路径；该字段不是 MCP 工具参数，不能传给 hello/prepare_context。显式路径无效时返回 builtin fallback，不执行另一份安装；useCli=false 仍完全禁止探测和启动。执行已安装脚本不提供沙盒或脚本可信性保证。
 
@@ -8,7 +18,7 @@
 
 `wincode_diagnose_project` 会检查 SDK 并主动探测 Repomix/UIA；对 Roslyn 只读取已有加载状态，不会启动 Code Host 或执行项目加载。已授权配置 Roslyn 后，首次明确的符号搜索才触发加载。`health.healthObservation` 当前包含 text/repomix/flaui；Roslyn 的观察时间与快照状态在 `health.roslyn`，不要按旧 Serena 字段判断。
 
-代码查询、引用、上下文、影响分析和重构建议接收 MCP 客户端取消信号；停止后续扫描/打包，等待当前读操作或自有上游进程清理后释放请求占用。Roslyn 取消会传播到自有 Host；若合作取消未及时完成，则按既有超时策略清理自有进程树，不宣称其他请求已成功。磁盘单次 OS I/O 不能保证瞬时中断。工作区切换在等待和提交前可取消；已开始提交切换时完成一致性收尾，不声称已回滚。
+代码查询、引用、上下文、影响分析和重构建议接收 MCP 取消信号；停止后续扫描/打包，等待当前读操作或自有上游清理后释放请求占用。Roslyn 取消传播到自有 Host；合作取消未及时完成时按既有超时策略清理自有进程树。磁盘单次 OS I/O 不保证瞬时中断。同根资源恢复在等待和提交前可取消；已开始恢复时保留实际一致性状态，不声称已回滚。
 
 `health.resourceCleanup` 是最多 100 条资源关闭记录（owner、kind、closed/failed 与最多 1024 字符错误），`omitted` 表示更早记录被省略。进程数量为零不能替代这些结果或真实 PID 退出证据。关闭失败会向调用方抛出，重复关闭保留失败；初始化失败会尝试释放已取得资源。记录只保存在当前进程内，不是持久审计或防篡改证明。
 
@@ -38,7 +48,7 @@ pwsh -NoProfile -File "<WinCode安装目录>/scripts/check-ui-audit.ps1"
 
 仓内 `npm run check` 执行锁定构建、核心回归和生产 stdio，生成并校验 `dist/delivery-manifest.json`；`npm run check:desktop` 单独运行隔离桌面闭环。`npm run delivery:verify` 检查 Gateway、发布 Host 全部文件及四份受管手册的一致性，不启动 Host，也不验证另一个客户端实例或签名真实性。构建要求 Node 24（22 兼容）和 `global.json` 中锁定的 SDK；缺少环境时按授权安装，不自动修改环境。
 
-WORKSPACE_RECOVERY_REQUIRED 表示切换中途失败后工作区一致性尚未确认。此时业务工具被拒绝；被动 hello 仍可读取 health.workspaceRecovery，status=recovery_required。先检查 recoveryAction：workspace_open 表示可按原任务指定路径重新打开，只有完整重置/初始化及 watcher 绑定成功才恢复请求；同一路径也执行完整恢复。restart_gateway 表示清理失败被当前实例保留，重新打开无法恢复；先检查 Gateway 自有资源的清理情况，再按客户端正常流程重启 Gateway，不自动重启或终止目标应用。永久失败后的 workspace_open 不再反复改变根或会话。不要只修改路径字段、反复重试业务请求或把旧适配器状态当成已切换成功。CANCELLED 若附带 workspaceRecovery，同样按其 recoveryAction 处理；切换变更前失败且状态未改变时仍保留旧工作区。
+WORKSPACE_RECOVERY_REQUIRED 表示固定根内资源恢复尚未完成或自有资源清理失败。业务工具被拒绝；被动 hello 可读取 health.workspaceRecovery，status=recovery_required。recoveryAction=workspace_open 表示对同一绑定路径重试恢复，只有完整重置/初始化及 watcher 绑定成功才恢复请求；不能传另一根绕过恢复门。restart_gateway 表示当前实例保留清理失败，重新打开无法恢复；先检查 Gateway 自有资源清理，再按客户端正常流程重建连接，不自动重启或终止目标应用。永久失败后的同根确认不会反复重建会话。CANCELLED 若附带 workspaceRecovery，按其 recoveryAction 处理；健康概览取消仍保持原状态。
 
 0.13.1 中，已知工具执行失败的 JSON 文本与 structuredContent 同源；Gateway 异常含 success=false、errorCode、errorMessage、provider 和 recoveryAction。UI/trash 保留领域字段及实际位置，不要求所有领域错误具有 Gateway 字段；图片保持独立 image 块。未知工具在正常受理状态下返回 JSON-RPC -32602 协议错误，不返回 isError 结果；关闭/取消的入口拒绝优先于工具查找。旧连接不能套用此契约，先核对实际版本。恢复动作不表示已经回滚或允许原样重试。
 
@@ -79,6 +89,6 @@ Gateway 通过子进程私有环境传递所属 PID；两个 .NET Host 在项目
 
 自动释放关闭，本版不创建 idle timer。用户可按 README 手动启动独立 Tray，并给希望管理的 Gateway 启动参数添加 --tray 后刷新连接。托盘只管理已注册的实例，不扫描/终止外部客户端或目标应用；MCP 仍为原有 15 个工具，没有让 Agent 自动代替用户释放的管理工具。默认不启用托盘连接、不设置自启动。
 
-手动释放遇到业务在途、语义排队/收尾、工作区切换或恢复门时拒绝，不自动延后执行。被接纳的释放完成后，新 MCP 请求继续；旧 symbolLocation 返回 SNAPSHOT_STALE，显式重新搜索再取得当前定位。保留 Gateway、watcher、缓存与最后诊断。清理失败进入 restart_gateway 恢复门，不能靠反复点击清除错误。local-text 没有可释放的 Roslyn。
+手动释放遇到业务在途、语义排队/收尾、工作区确认或恢复门时拒绝，不自动延后执行。释放完成后新请求继续；旧 symbolLocation 返回 SNAPSHOT_STALE，显式重新搜索取得当前定位。保留 Gateway、watcher、缓存与最后诊断。清理失败进入 restart_gateway 恢复门，不能靠反复点击清除错误。local-text 没有可释放的 Roslyn。
 
 概览只读内存快照，不为状态启动 Host 或枚举缓存目录。状态是注册/打开/刷新时的观察，不代表 Agent 在两次请求之间已结束整个任务。失联/超时表示未知，控制命令不自动重放；退出 Tray 不停止 Gateway。首版最多八个同用户/会话实例，按同权限级别使用；版本必须匹配。需要停止时由用户确认“停止此实例”，走该 Gateway 既有关闭路径，客户端可能重新建立新实例。

@@ -156,7 +156,7 @@ describe('workspace-files', () => {
     });
 
     it('Phase 2: openWorkspace parses the portable .NET fixture sln, projects, metadata and tree', async () => {
-      const result = await ws.openWorkspace(FIXTURE_DOTNET);
+      const result = await new WorkspaceManager(getDefaultConfig(FIXTURE_DOTNET)).openWorkspace(FIXTURE_DOTNET);
       assert.strictEqual(result.type, 'dotnet');
       assert.strictEqual(result.solution, 'MiniDesk.sln');
       assert.strictEqual(result.language, 'C#');
@@ -169,34 +169,38 @@ describe('workspace-files', () => {
       ws.setRoot(root);
     });
 
-    it('Workspace switching: openWorkspace and setRoot must synchronize trashDir and isolate cross-project deletions', async () => {
+    it('fixed workspace managers reject rebinding and isolate cross-project trash operations', async () => {
       const initialTrash = path.resolve(ws.trashDir);
       assert.strictEqual(initialTrash, path.join(root, 'trash'));
 
-      await ws.openWorkspace(FIXTURE_DOTNET);
-      assert.strictEqual(path.resolve(ws.root), FIXTURE_DOTNET);
-      const switchedTrash = path.resolve(ws.trashDir);
-      assert.strictEqual(switchedTrash, path.join(FIXTURE_DOTNET, 'trash'), 'trashDir must update to fixture workspace');
+      const peerRoot = await fs.mkdtemp(path.join(testCacheDir, 'project-b-'));
+      const peer = new WorkspaceManager(getDefaultConfig(peerRoot));
+      try {
+        await assert.rejects(ws.openWorkspace(peerRoot), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
+        assert.throws(() => ws.setRoot(peerRoot), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
+        assert.strictEqual(ws.root, root);
+        await peer.openWorkspace(peerRoot);
+        assert.strictEqual(peer.trashDir, path.join(peerRoot, 'trash'));
 
-      const rejectCrossProject = await ws.moveToTrash('../../../package.json', 'Try deleting host file from fixture');
-      assert.strictEqual(rejectCrossProject.success, false);
-      assert.ok(rejectCrossProject.message.includes('outside the workspace boundary'));
+        const rejectCrossProject = await peer.moveToTrash('../../../package.json', 'Try deleting host file from fixture');
+        assert.strictEqual(rejectCrossProject.success, false);
+        assert.ok(rejectCrossProject.message.includes('outside the workspace boundary'));
 
-      const tempBFile = path.join(FIXTURE_DOTNET, 'temp_test_b_file.txt');
-      await fs.writeFile(tempBFile, 'File in fixture project', 'utf-8');
+        const tempBFile = path.join(peerRoot, 'temp_test_b_file.txt');
+        await fs.writeFile(tempBFile, 'File in fixture project', 'utf-8');
 
-      const trashBResult = await ws.moveToTrash('temp_test_b_file.txt', 'Safe deletion in fixture');
-      assert.strictEqual(trashBResult.success, true);
-      assert.ok(trashBResult.trashPath.startsWith(path.join(FIXTURE_DOTNET, 'trash')), 'Must move to fixture trash');
-      assert.ok(!trashBResult.trashPath.startsWith(path.join(root, 'trash')), 'Must NOT move to host trash');
+        const trashBResult = await peer.moveToTrash('temp_test_b_file.txt', 'Safe deletion in fixture');
+        assert.strictEqual(trashBResult.success, true);
+        assert.ok(trashBResult.trashPath.startsWith(path.join(peerRoot, 'trash')), 'Must move to fixture trash');
+        assert.ok(!trashBResult.trashPath.startsWith(path.join(root, 'trash')), 'Must NOT move to host trash');
 
-      await fs.rm(trashBResult.trashPath, { force: true }).catch(() => { });
-      await fs.rm(`${trashBResult.trashPath}.meta.json`, { force: true }).catch(() => { });
-      await fs.rm(path.join(FIXTURE_DOTNET, 'trash'), { recursive: true, force: true }).catch(() => { });
-
-      ws.setRoot(root);
-      assert.strictEqual(path.resolve(ws.root), root);
-      assert.strictEqual(path.resolve(ws.trashDir), path.join(root, 'trash'), 'trashDir must restore to host workspace');
+        ws.setRoot(root);
+        assert.strictEqual(path.resolve(ws.root), root);
+        assert.strictEqual(path.resolve(ws.trashDir), path.join(root, 'trash'), 'trashDir stays bound to the original workspace');
+      } finally {
+        assert.strictEqual(path.dirname(peerRoot), testCacheDir);
+        await fs.rm(peerRoot, { recursive: true, force: true });
+      }
     });
   });
 });

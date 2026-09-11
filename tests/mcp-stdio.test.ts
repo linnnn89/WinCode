@@ -123,21 +123,21 @@ describe('mcp-stdio', () => {
     it('Tool 0: workspace_open works end-to-end via MCP', async () => {
       const res = await callMcp('tools/call', {
         name: 'workspace_open',
-        arguments: { path: FIXTURE_DOTNET },
+        arguments: { path: root },
       });
       const data = JSON.parse(res.result?.content?.[0]?.text);
-      assert.strictEqual(data.type, 'dotnet');
-      assert.strictEqual(data.solution, 'MiniDesk.sln');
-      assert.strictEqual(data.projects, 3);
-      assert.strictEqual(data.language, 'C#');
+      assert.strictEqual(data.workspace, root);
+      assert.equal(typeof data.type, 'string');
       assert.equal(data.metadata.totalFiles, null);
       assert.equal(data.fileTree, undefined);
       assert.ok(data.entryPoints.length <= 8);
 
-      await callMcp('tools/call', {
+      const rejected = await callMcp('tools/call', {
         name: 'workspace_open',
-        arguments: { path: root },
+        arguments: { path: FIXTURE_DOTNET },
       });
+      assert.strictEqual(rejected.result.isError, true);
+      assert.strictEqual(JSON.parse(rejected.result.content[0].text).errorCode, 'WORKSPACE_MISMATCH');
     });
 
     it('Tool 1: wincode_hello_world works', async () => {
@@ -149,6 +149,7 @@ describe('mcp-stdio', () => {
       assert.strictEqual(data.status, 'online');
       assert.strictEqual(data.message, 'TDD Test Greeting');
       assert.strictEqual(data.gateway, 'WinCode Agent Gateway');
+      assert.deepEqual(data.health.workspaceBinding, { mode: 'fixed', root, source: 'argument' });
       assert.equal(data.codeProvider, 'local-text');
       assert.equal(data.adapters.text.source, 'local-text');
       assert.equal(data.health.text.semanticConfigured, false);

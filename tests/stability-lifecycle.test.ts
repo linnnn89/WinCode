@@ -60,7 +60,7 @@ describe('stability-lifecycle', () => {
       assert.strictEqual(router.resources.isDisposed, true);
     });
 
-    it('workspace A → workspace B switches session namespace and does not leak symbols', async () => {
+    it('independent fixed workspaces retain separate namespaces without leaking symbols', async () => {
       const config = getDefaultConfig(root);
       config.cacheDir = path.join(testCacheDir, 'ws_switch');
       const router = new ToolRouter(config);
@@ -70,20 +70,27 @@ describe('stability-lifecycle', () => {
       await router.cache.set('leak_probe', { workspace: 'A' });
       assert.ok(await router.cache.get('leak_probe'));
 
-      const opened = await router.openWorkspace(FIXTURE_DOTNET);
-      assert.strictEqual(opened.type, 'dotnet');
-      const nsB = router.cache.currentNamespace;
-      assert.notStrictEqual(nsB, nsA);
-      assert.strictEqual(router.session.current?.workspaceRoot, FIXTURE_DOTNET);
-      assert.strictEqual(await router.cache.get('leak_probe'), null, 'memory/namespace must not leak project A keys');
+      await assert.rejects(router.openWorkspace(FIXTURE_DOTNET), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
+      const peerConfig = getDefaultConfig(FIXTURE_DOTNET);
+      peerConfig.cacheDir = config.cacheDir;
+      const peer = new ToolRouter(peerConfig);
+      await peer.initialize();
+      try {
+        const opened = await peer.openWorkspace(FIXTURE_DOTNET);
+        assert.strictEqual(opened.type, 'dotnet');
+        const nsB = peer.cache.currentNamespace;
+        assert.notStrictEqual(nsB, nsA);
+        assert.strictEqual(peer.session.current?.workspaceRoot, FIXTURE_DOTNET);
+        assert.strictEqual(await peer.cache.get('leak_probe'), null, 'memory/namespace must not leak project A keys');
+        assert.deepStrictEqual(await router.cache.get('leak_probe'), { workspace: 'A' });
 
-      const symbols = await router.text.findSymbols('MemoryService', 'class');
-      assert.ok(symbols.some((s) => s.name === 'MemoryService'));
-      assert.ok(symbols.every((s) => s.file.replace(/\\/g, '/').includes('MiniDesk') || s.file.endsWith('MemoryService.cs') || s.file.includes('Core')));
+        const symbols = await peer.text.findSymbols('MemoryService', 'class');
+        assert.ok(symbols.some((s) => s.name === 'MemoryService'));
+        assert.ok(symbols.every((s) => s.file.replace(/\\/g, '/').includes('MiniDesk') || s.file.endsWith('MemoryService.cs') || s.file.includes('Core')));
 
-      await router.openWorkspace(root);
-      assert.strictEqual(path.resolve(router.config.workspaceRoot), path.resolve(root));
-      await router.dispose();
+        await router.openWorkspace(root);
+        assert.strictEqual(path.resolve(router.config.workspaceRoot), path.resolve(root));
+      } finally { await peer.dispose(); await router.dispose(); }
     });
   });
 });

@@ -98,7 +98,7 @@ internal sealed record WorkspaceInputs(string Fingerprint, IReadOnlyDictionary<s
                 if ((attributes & FileAttributes.Directory) != 0 && IgnoredDirectories.Contains(Path.GetFileName(entry))) continue;
                 if ((attributes & FileAttributes.ReparsePoint) != 0) throw new HostFailure("UNSUPPORTED_LINK", "Linked workspace input.");
                 if ((attributes & FileAttributes.Directory) != 0) pending.Push(entry);
-                else if (IsAutomaticInput(entry)) paths.Add(entry);
+                else if (IsAutomaticInput(entry) && DesignTimeBuild.IsCandidate(entry)) paths.Add(entry);
             }
         }
         foreach (var extra in extraFiles) paths.Add(Path.GetFullPath(extra));

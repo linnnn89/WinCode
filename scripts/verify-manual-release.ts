@@ -80,13 +80,21 @@ try {
   const changed = await router.findCodeSymbols('AddedWhileCold', 'class'); assert.equal(changed.symbols.length, 1);
   await router.releaseRoslynMemory();
   report.scenarios.push('Ten cycles: re-created snapshots, correct references, actual Host/BuildHost exit, stale locations rejected without warming, stable resource count, preserved cache and watcher');
-  await router.openWorkspace(path.join(root, 'B'));
-  assert.equal((await router.findCodeSymbols('Save', 'method')).symbols[0].signature, 'B.Api.Save()');
-  await router.releaseRoslynMemory();
+  await assert.rejects(router.openWorkspace(path.join(root, 'B')), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
+  const peerConfig = getDefaultConfig(path.join(root, 'B'));
+  peerConfig.adapters.roslyn = config.adapters.roslyn;
+  peerConfig.adapters.flaui.enabled = false; peerConfig.adapters.repomix.useCli = false;
+  const peer = new ToolRouter(peerConfig);
+  try {
+    await peer.initialize();
+    assert.equal((await peer.findCodeSymbols('Save', 'method')).symbols[0].signature, 'B.Api.Save()');
+    report.observedProcesses.push(...ownedProcesses((peer.roslyn as any).client.child.pid));
+    assert.equal((await peer.releaseRoslynMemory()).status, 'released');
+  } finally { await peer.dispose(); }
   await router.openWorkspace(path.join(root, 'A'));
   assert.equal((await router.findCodeSymbols('Save', 'method')).symbols[0].signature, 'A.Api.Save()');
   await router.releaseRoslynMemory();
-  report.scenarios.push('Editing while cold is seen on the next search; release and A to B to A workspace switching remain reusable');
+  report.scenarios.push('Editing while cold is seen on the next search; wrong-root open is rejected and independent A/B connections remain releasable and reusable');
   report.success = true;
 } catch (error) { report.error = error instanceof Error ? error.stack : String(error); process.exitCode = 1; }
 finally {

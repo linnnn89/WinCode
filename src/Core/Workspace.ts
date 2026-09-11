@@ -1,4 +1,4 @@
-import { boundedInteger, invalidTrashResult, type WorkspaceGitStatus, type WorkspaceOpenResult } from './WorkspaceContracts.js';
+import { boundedInteger, invalidTrashResult, WorkspaceMismatchError, type WorkspaceBinding, type WorkspaceGitStatus, type WorkspaceOpenResult } from './WorkspaceContracts.js';
 import { identifyProject, discoverProject, getMetadata } from './ProjectDiscovery.js';
 import { getDirectoryTree, listDirectory } from './WorkspaceBrowser.js';
 import { isWorkspacePathInside, validateTrashPath, type TrashMoveResult, type ProjectIdentity, type WorkspaceMetadata, type WorkspaceTreeItem, type WorkspaceOpenOptions, type WorkspaceDirectoryOptions, type WorkspaceDirectoryResult } from './WorkspaceContracts.js';
@@ -13,16 +13,20 @@ import { randomUUID } from 'node:crypto';
 
 export class WorkspaceManager {
   private config: WinCodeConfig;
+  readonly binding: WorkspaceBinding;
 
   constructor(config: WinCodeConfig) {
     this.config = config;
+    this.binding = Object.freeze({ mode: 'fixed', root: path.resolve(config.workspaceRoot), source: config.workspaceRootSource ?? 'configuration' });
+    // Adapters share this configuration. Prevent internal callers from bypassing the fixed binding.
+    Object.defineProperty(config, 'workspaceRoot', { value: this.binding.root, enumerable: true, writable: false, configurable: false });
     if (this.config.workspaceRoot && !this.config.trashDir) {
       this.config.trashDir = path.join(this.config.workspaceRoot, 'trash');
     }
   }
 
   get root(): string {
-    return this.config.workspaceRoot;
+    return this.binding.root;
   }
 
   get trashDir(): string {
@@ -64,23 +68,26 @@ export class WorkspaceManager {
     }
   }
 
-  /**
-   * Sets the workspace root path and synchronizes the trash directory
-   */
+  /** Retained internal entry point: confirming the same root never changes configuration or trash. */
   setRoot(newRoot: string): void {
-    const oldRoot = this.config.workspaceRoot ? path.resolve(this.config.workspaceRoot) : '';
-    const resolvedRoot = path.resolve(newRoot);
-    this.config.workspaceRoot = resolvedRoot;
+    this.assertWorkspace(newRoot);
+  }
 
-    // Synchronize trashDir to the new workspace root
-    if (!oldRoot || !this.config.trashDir || this.isPathInside(oldRoot, this.config.trashDir) || path.resolve(this.config.trashDir) === path.join(oldRoot, 'trash')) {
-      const relTrash = (oldRoot && this.config.trashDir && this.isPathInside(oldRoot, this.config.trashDir))
-        ? path.relative(oldRoot, this.config.trashDir)
-        : 'trash';
-      this.config.trashDir = path.resolve(resolvedRoot, relTrash);
-    } else {
-      this.config.trashDir = path.resolve(resolvedRoot, 'trash');
-    }
+  /** Compare normalized spellings before any filesystem access or request/resource state change. */
+  assertWorkspace(targetPath: string): string {
+    if (typeof targetPath !== 'string' || !targetPath.trim()) throw new Error('Workspace path must be a non-empty string.');
+    const requested = path.resolve(targetPath);
+    if (path.relative(this.root, requested) !== '') throw new WorkspaceMismatchError(this.root, requested);
+    return this.root;
+  }
+
+  async validateRoot(): Promise<void> {
+    await assertLinkFreePath(this.root);
+    const stat = await fs.stat(this.root).catch(error => {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+      throw error;
+    });
+    if (!stat?.isDirectory()) throw new Error(`Invalid workspace path: "${this.root}". Directory does not exist.`);
   }
 
   /**
@@ -145,101 +152,84 @@ export class WorkspaceManager {
   }
 
   /**
-   * Phase 2: Opens and analyzes any target workspace directory.
+   * Describes the bound workspace; opening another root is never a mutation path.
    */
   async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}): Promise<WorkspaceOpenResult> {
+    this.assertWorkspace(targetPath);
     const maxOutputChars = boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
     if (options.includeTree !== undefined && typeof options.includeTree !== 'boolean') throw new Error('includeTree must be a boolean.');
-    const resolvedPath = path.resolve(targetPath);
-
-    const stat = await fs.stat(resolvedPath).catch(() => null);
-    if (!stat || !stat.isDirectory()) {
-      throw new Error(`Invalid workspace path: "${targetPath}". Directory does not exist.`);
+    await this.validateRoot();
+    const { identity, complete, discovery, entryPoints } = await this.discoverProject();
+    const git = await this.getGitStatus();
+    const metadata: WorkspaceMetadata = {
+      totalFiles: null, totalDirectories: null, totalSizeBytes: null,
+      scanScope: 'project-discovery-only', maxScanDepth: discovery.maxDepth,
+      omittedDirectories: discovery.omissions.filter(item => ['default-ignore', 'local-dotnet-sdk', 'generated-or-work-directory'].includes(item.reason)),
+      omittedDirectoryCount: discovery.ignoredDirectoryCount,
+      targetFramework: identity.targetFramework, frameworks: identity.frameworks,
+      packageManagers: identity.packageManagers, solutions: identity.solutionFiles, projectList: identity.projectFiles,
+      projectDiscovery: discovery,
+    };
+    const result: WorkspaceOpenResult = {
+      workspace: this.root,
+      type: identity.type,
+      solution: identity.primarySolution,
+      projects: identity.projectFiles.length,
+      language: identity.language,
+      git,
+      metadata,
+      entryPoints, projectScanComplete: complete, truncated: !complete,
+      limits: { maxOutputChars, includeTree: options.includeTree ?? false }, outputOmissions: [],
+    };
+    if (discovery.omittedCount > discovery.omissions.length) {
+      result.outputOmissions.push('omission-details-limit'); result.truncated = true;
     }
-
-    const previousRoot = this.config.workspaceRoot;
-    const previousTrash = this.config.trashDir;
-    // Metadata collection can fail after validation (e.g. the directory disappears).
-    // Restore both mutable paths on failure so callers never observe a rejected root.
-    // Same-root overview must not mutate trash/config while business requests are running.
-    if (path.relative(previousRoot, resolvedPath) !== '') this.setRoot(resolvedPath);
-    try {
-      const { identity, complete, discovery, entryPoints } = await this.discoverProject();
-      const git = await this.getGitStatus();
-      const metadata: WorkspaceMetadata = {
-        totalFiles: null, totalDirectories: null, totalSizeBytes: null,
-        scanScope: 'project-discovery-only', maxScanDepth: discovery.maxDepth,
-        omittedDirectories: discovery.omissions.filter(item => ['default-ignore', 'local-dotnet-sdk', 'generated-or-work-directory'].includes(item.reason)),
-        omittedDirectoryCount: discovery.ignoredDirectoryCount,
-        targetFramework: identity.targetFramework, frameworks: identity.frameworks,
-        packageManagers: identity.packageManagers, solutions: identity.solutionFiles, projectList: identity.projectFiles,
-        projectDiscovery: discovery,
+    if (options.includeTree) {
+      const listing = await this.listDirectory({ maxDepth: 2, maxEntries: 100, maxOutputChars });
+      const fileTree: WorkspaceTreeItem = {
+        name: path.basename(this.root), path: this.root, relativePath: '.', type: 'directory', children: [],
       };
-      const result: WorkspaceOpenResult = {
-        workspace: this.root,
-        type: identity.type,
-        solution: identity.primarySolution,
-        projects: identity.projectFiles.length,
-        language: identity.language,
-        git,
-        metadata,
-        entryPoints, projectScanComplete: complete, truncated: !complete,
-        limits: { maxOutputChars, includeTree: options.includeTree ?? false }, outputOmissions: [],
-      };
-      if (discovery.omittedCount > discovery.omissions.length) {
-        result.outputOmissions.push('omission-details-limit'); result.truncated = true;
-      }
-      if (options.includeTree) {
-        const listing = await this.listDirectory({ maxDepth: 2, maxEntries: 100, maxOutputChars });
-        const fileTree: WorkspaceTreeItem = {
-          name: path.basename(this.root), path: this.root, relativePath: '.', type: 'directory', children: [],
+      const nodes = new Map<string, WorkspaceTreeItem>([['.', fileTree]]);
+      for (const entry of listing.entries) {
+        const node: WorkspaceTreeItem = {
+          name: path.posix.basename(entry.path), path: path.join(this.root, entry.path), relativePath: entry.path,
+          type: entry.type, ...(entry.type === 'directory' ? { children: [] } : {}),
         };
-        const nodes = new Map<string, WorkspaceTreeItem>([['.', fileTree]]);
-        for (const entry of listing.entries) {
-          const node: WorkspaceTreeItem = {
-            name: path.posix.basename(entry.path), path: path.join(this.root, entry.path), relativePath: entry.path,
-            type: entry.type, ...(entry.type === 'directory' ? { children: [] } : {}),
-          };
-          nodes.get(path.posix.dirname(entry.path))?.children?.push(node);
-          nodes.set(entry.path, node);
-        }
-        fileTree.omittedDirectories = listing.omissions;
-        result.fileTree = fileTree;
-        if (listing.truncated) { result.truncated = true; result.outputOmissions.push('fileTree-bounded'); }
+        nodes.get(path.posix.dirname(entry.path))?.children?.push(node);
+        nodes.set(entry.path, node);
       }
-      const fits = () => JSON.stringify(result).length <= maxOutputChars;
-      if (!fits()) {
-        result.truncated = true;
-        result.outputOmissions.push('response-budget');
-        const trim = (items: unknown[], field: string) => {
-          if (!fits() && items.length) {
-            result.outputOmissions.push(field);
-            while (!fits() && items.length) items.pop();
-          }
-        };
-        trim(result.fileTree?.omittedDirectories ?? [], 'fileTree.omittedDirectories');
-        trim(result.fileTree?.children ?? [], 'fileTree.children');
-        trim(discovery.omissions, 'metadata.projectDiscovery.omissions');
-        trim(metadata.omittedDirectories, 'metadata.omittedDirectories');
-        trim(metadata.projectList, 'metadata.projectList');
-        trim(metadata.solutions, 'metadata.solutions');
-        trim(metadata.frameworks, 'metadata.frameworks');
-        trim(metadata.packageManagers, 'metadata.packageManagers');
-        if (!fits() && metadata.targetFramework !== undefined) {
-          delete metadata.targetFramework; result.outputOmissions.push('metadata.targetFramework');
-        }
-        for (const key of ['remoteUrl', 'branch', 'headCommit'] as const) {
-          if (!fits() && git[key] !== undefined) { delete git[key]; result.outputOmissions.push(`git.${key}`); }
-        }
-        trim(result.entryPoints, 'entryPoints');
-      }
-      if (!fits()) throw new Error('maxOutputChars cannot contain the workspace identity and required summary.');
-      return result;
-    } catch (error) {
-      this.config.workspaceRoot = previousRoot;
-      this.config.trashDir = previousTrash;
-      throw error;
+      fileTree.omittedDirectories = listing.omissions;
+      result.fileTree = fileTree;
+      if (listing.truncated) { result.truncated = true; result.outputOmissions.push('fileTree-bounded'); }
     }
+    const fits = () => JSON.stringify(result).length <= maxOutputChars;
+    if (!fits()) {
+      result.truncated = true;
+      result.outputOmissions.push('response-budget');
+      const trim = (items: unknown[], field: string) => {
+        if (!fits() && items.length) {
+          result.outputOmissions.push(field);
+          while (!fits() && items.length) items.pop();
+        }
+      };
+      trim(result.fileTree?.omittedDirectories ?? [], 'fileTree.omittedDirectories');
+      trim(result.fileTree?.children ?? [], 'fileTree.children');
+      trim(discovery.omissions, 'metadata.projectDiscovery.omissions');
+      trim(metadata.omittedDirectories, 'metadata.omittedDirectories');
+      trim(metadata.projectList, 'metadata.projectList');
+      trim(metadata.solutions, 'metadata.solutions');
+      trim(metadata.frameworks, 'metadata.frameworks');
+      trim(metadata.packageManagers, 'metadata.packageManagers');
+      if (!fits() && metadata.targetFramework !== undefined) {
+        delete metadata.targetFramework; result.outputOmissions.push('metadata.targetFramework');
+      }
+      for (const key of ['remoteUrl', 'branch', 'headCommit'] as const) {
+        if (!fits() && git[key] !== undefined) { delete git[key]; result.outputOmissions.push(`git.${key}`); }
+      }
+      trim(result.entryPoints, 'entryPoints');
+    }
+    if (!fits()) throw new Error('maxOutputChars cannot contain the workspace identity and required summary.');
+    return result;
   }
 
   /**

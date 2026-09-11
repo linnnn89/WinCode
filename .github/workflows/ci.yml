@@ -17,7 +17,8 @@ jobs:
   regression:
     name: Windows regression (Node ${{ matrix.node }})
     runs-on: windows-2025
-    timeout-minutes: 15
+    # Cold setup plus the full Node 22 native matrix can exceed 15 minutes.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +44,9 @@ jobs:
         run: npm ci
       - name: Build and verify delivery
         run: npm run check
+      - name: Verify shared cache contracts
+        if: matrix.node == '22'
+        run: node scripts/verify-shared-cache.mjs
       - name: Verify tool errors and recovery contracts
         if: matrix.node == '22'
         run: npm run test:error-contracts
@@ -59,17 +63,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:manual-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Preserve bounded check report
+      - name: Verify concurrent SDK clients
+        if: matrix.node == '22'
+        run: node scripts/verify-multi-agent.mjs --roslyn-only
+      - name: Verify design-time output ownership
+        if: matrix.node == '22'
+        run: node scripts/verify-design-time-concurrency.mjs
+      - name: Preserve check reports and stage logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: check-node-${{ matrix.node }}
           path: |
             test-tmp/check/**/report.json
+            test-tmp/check/**/*.log
+            test-tmp/check/**/*.xml
             test-tmp/error-contracts/**/report.json
             test-tmp/roslyn-host/**/report.json
             test-tmp/roslyn-gateway/**/report.json
             test-tmp/owner-death/**/report.json
             test-tmp/manual-release/**/report.json
+            test-tmp/multi-agent/**/report.json
+            test-tmp/design-time-production/**/report.json
+            test-tmp/shared-cache/**/report.json
           if-no-files-found: warn
           retention-days: 7

@@ -11,8 +11,10 @@ export interface ToolExecutionContext {
 export interface ToolDefinition {
   tool: Tool;
   aliases?: Array<{ name: string; listed: boolean; description?: string }>;
-  switchesWorkspace?: boolean;
+  workspaceControl?: boolean;
   allowDuringWorkspaceRecovery?: boolean;
+  requestLane?: 'status';
+  requestBudget?: 'ui' | 'diagnostics' | 'workspace';
   invalidArguments?: (message: string) => CallToolResult;
   validate?: (args: Record<string, unknown>, context: ToolExecutionContext) => void;
   execute: (args: Record<string, unknown>, context: ToolExecutionContext) => Promise<CallToolResult>;

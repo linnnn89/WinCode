@@ -4,6 +4,7 @@ import path from 'node:path';
 import { CodeQueryError } from '../Core/CodeQueries.js';
 import { checkOperation, type OperationContext } from '../Core/OperationContext.js';
 import { AbortError, ResourceManager, TimeoutError, killProcessTree, withTimeout } from '../Core/ResourceManager.js';
+import { cleanupDesignTimeArtifacts } from './DesignTimeArtifacts.js';
 
 /** 已通过帧边界和基础信封校验的内部响应；业务字段仍须由适配器逐项校验。 */
 export type HostReply = Record<string, unknown> & { success: boolean; id?: string | null; errorCode?: string; error?: string };
@@ -14,6 +15,8 @@ interface Pending { resolve: (value: HostReply) => void; reject: (error: unknown
  * 取消先等待目标请求收尾，超过宽限才终止自有进程树；调用方在清理完成前不得释放请求占用。
  */
 export class RoslynHostClient {
+  readonly buildInstance = randomUUID().replaceAll('-', '');
+  private readonly artifactRoot?: string;
   readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<string, Pending>();
   private readonly cancelIds = new Set<string>();
@@ -28,12 +31,14 @@ export class RoslynHostClient {
 
   /** 调用方先验证路径/许可；参数始终通过 argv 传递，禁用 shell 和可见窗口。 */
   constructor(command: string, args: string[], cwd: string, resources: ResourceManager) {
+    if (args[1] === '--allow-project-evaluation' && path.isAbsolute(args[2] ?? '')) this.artifactRoot = args[2];
     this.ready = new Promise((resolve, reject) => this.pending.set('@ready', { resolve, reject }));
     // 即使进程在调用 waitReady 前失败，也不会产生未处理的 Promise 拒绝。
     void this.ready.catch(() => {});
     this.child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: false,
       // 只固定本子进程的 SDK 安装根；避免继承的 DOTNET_HOST_PATH 将 MSBuild 引向另一套 dotnet。
-      env: { ...process.env, DOTNET_HOST_PATH: command, DOTNET_ROOT: path.dirname(command), WINCODE_OWNER_PID: String(process.pid) },
+      env: { ...process.env, DOTNET_HOST_PATH: command, DOTNET_ROOT: path.dirname(command), WINCODE_OWNER_PID: String(process.pid),
+        WINCODE_BUILD_INSTANCE: this.buildInstance },
       detached: process.platform !== 'win32' });
     resources.registerProcess('roslyn', this.child);
     this.child.stdout.setEncoding('utf8');
@@ -137,8 +142,19 @@ export class RoslynHostClient {
   close(force = false): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
-    this.closePromise = this.closeOnce(force);
+    this.closePromise = this.closeWithArtifacts(force);
     return this.closePromise;
+  }
+
+  /** Recover this namespace only after actual process shutdown; preserve failures for the adapter. */
+  private async closeWithArtifacts(force: boolean): Promise<void> {
+    const failures: unknown[] = [];
+    try { await this.closeOnce(force); } catch (error) { failures.push(error); }
+    if (this.ended && this.artifactRoot) {
+      try { await cleanupDesignTimeArtifacts(this.artifactRoot, this.buildInstance); } catch (error) { failures.push(error); }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError(failures, 'Code Host or build output cleanup failed.');
   }
 
   /** 即使优雅关闭没有回复，也尝试终止；最终必须等到实际进程退出。 */

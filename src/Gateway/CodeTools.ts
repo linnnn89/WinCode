@@ -7,7 +7,7 @@ import type { SymbolLocation } from '../Core/CodeQueries.js';
 const symbolLocationSchema = {
           type: 'object', additionalProperties: true, required: ['snapshotId', 'project', 'file', 'position'],
           properties: {
-            snapshotId: { type: 'string', pattern: '^[a-f0-9]{32}$' },
+            snapshotId: { type: 'string', minLength: 32, maxLength: 32, pattern: '^[a-f0-9]{32}$' },
             project: { type: 'string', minLength: 1, maxLength: 4096 },
             file: { type: 'string', minLength: 1, maxLength: 4096 },
             position: { type: 'integer', minimum: 0 },
@@ -92,16 +92,16 @@ export const CODE_TOOLS = [
   }),
   defineTool<{ query: string; kind?: string }>({
     name: 'wincode_find_code_symbol',
-    description: 'Locates code declarations with signatures and positions using the configured provider. Direct Roslyn returns snapshot-bound location objects for exact reference selection; old locations expire after edits/reloads/switches. Inspect source, queryComplete, truncation and limitations.',
+    description: 'Locates code declarations with signatures and positions using the configured provider. Direct Roslyn returns snapshot-bound location objects for exact reference selection; old locations expire after edits/reloads or changing connections. Inspect source, queryComplete, truncation and limitations.',
     inputSchema: {
       type: 'object', additionalProperties: true,
       properties: {
         query: {
-          type: 'string', minLength: 1, pattern: '\\S',
+          type: 'string', minLength: 1, maxLength: 256, pattern: '\\S',
           description: 'Symbol name or search query.',
         },
         kind: {
-          type: 'string',
+          type: 'string', maxLength: 128,
           description: 'Optional filter: class, interface, method, function, type, enum.',
         },
       },
@@ -117,11 +117,11 @@ export const CODE_TOOLS = [
       type: 'object', additionalProperties: true,
       properties: {
         symbolName: {
-          type: 'string', minLength: 1, pattern: '\\S',
+          type: 'string', minLength: 1, maxLength: 256, pattern: '\\S',
           description: 'Plain symbol name. With Roslyn, select a returned symbolLocation to identify an overload. Old Serena namePath identities are retired.',
         },
         relativePath: {
-          type: 'string',
+          type: 'string', maxLength: 4096,
           description: 'Defining file relative to the workspace. Roslyn uses it to scope candidates; local text references remain a workspace-wide textual scan.',
         },
         symbolLocation: symbolLocationSchema,
@@ -141,7 +141,7 @@ export const CODE_TOOLS = [
       properties: {
         symbolLocation: symbolLocationSchema,
         target: {
-          type: 'string', minLength: 1, pattern: '\\S',
+          type: 'string', minLength: 1, maxLength: 4096, pattern: '\\S',
           description: 'Name of the class, component, or file to evaluate (e.g. "MemoryService" or "MemoryService.cs").',
         },
       },
@@ -164,11 +164,11 @@ export const CODE_TOOLS = [
       properties: {
         symbolLocation: symbolLocationSchema,
         target: {
-          type: 'string', minLength: 1, pattern: '\\S',
+          type: 'string', minLength: 1, maxLength: 4096, pattern: '\\S',
           description: 'Component or symbol name to refactor.',
         },
         goal: {
-          type: 'string', minLength: 1, pattern: '\\S',
+          type: 'string', minLength: 1, maxLength: 8192, pattern: '\\S',
           description: 'Goal or rationale for the refactoring.',
         },
       },

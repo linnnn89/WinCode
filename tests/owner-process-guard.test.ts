@@ -42,6 +42,9 @@ async function scenario(mode: string, run: (owner: ChildProcessWithoutNullStream
     if (owner.exitCode === null && owner.signalCode === null) await killProcessTree(owner);
     for (const record of records.filter((value, index, all) => all.findIndex(item => item.pid === value.pid) === index)) {
       assert.ok(Number.isSafeInteger(record.pid) && record.pid > 0 && /^\d+$/.test(record.created));
+      // Avoid a PowerShell startup for an already exited fixture. Live/unknown PIDs still require identity validation.
+      try { process.kill(record.pid, 0); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') continue; }
       // 捕获的创建时间必须匹配；先持有实际对象句柄，避免在核验与清理之间复用 PID。
       const script = `$ErrorActionPreference = 'Stop'; $p = Get-Process -Id ${record.pid} -ErrorAction SilentlyContinue; if ($p) { try { $h = $p.SafeHandle; if ($p.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() -eq '${record.created}') { $p.Kill(); $p.WaitForExit(3000) | Out-Null } } finally { $p.Dispose() } }; exit 0`;
       await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true, timeout: 5000 });
@@ -61,6 +64,7 @@ for (const mode of ['normal', 'repeat']) it(`owner guard supports ${mode} dispos
   await scenario(mode, async (_owner, closed, records, logs) => {
     assert.equal(await withTimeout(closed, 10000, 'normal guard exit'), 0, logs());
     assert.ok(records.some(record => record.stage === (mode === 'repeat' ? 'repeat-complete' : 'attached')));
+    for (const record of records) assert.throws(() => process.kill(record.pid, 0), { code: 'ESRCH' }, 'Disposed Helper survived');
   });
 });
 for (const mode of ['native-block', 'blocked-callback', 'cooperative', 'early-owner-death'])
@@ -130,4 +134,3 @@ it('production UIA still treats stdin EOF as the request boundary', options, asy
     await withTimeout(closed, 5000, 'UIA cleanup');
   }
 });
-

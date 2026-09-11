@@ -120,7 +120,7 @@ it('invalid workspace and directory options fail without switching workspace', a
   const next = path.join(root, 'next');
   await fs.mkdir(next);
   for (const args of [{ maxOutputChars: 1 }, { maxOutputChars: 8000.5 }, { includeTree: 'yes' }]) {
-    assert.equal((await call('workspace_open', { path: next, ...args })).isError, true, JSON.stringify(args));
+    assert.equal((await call('workspace_open', { path: root, ...args })).isError, true, JSON.stringify(args));
     assert.equal(router.workspace.root, root);
   }
   for (const args of [{ path: '..' }, { path: 'src/../src' }, { path: 'C:relative' }, { path: 'a'.repeat(4097) }, { maxDepth: 0 }, { maxDepth: 6 }, { maxEntries: 501 }, { includeIgnored: 'yes' }, { maxOutputChars: 200 }]) {
@@ -129,8 +129,11 @@ it('invalid workspace and directory options fail without switching workspace', a
   const baseline = payload(await call('wincode_list_directory', { path: '.', maxDepth: 1 }));
   const extended = payload(await call('wincode_list_directory', { path: '.', maxDepth: 1, unsupported: true }));
   assert.deepEqual(extended.entries, baseline.entries, 'unknown fields cannot alter the directory scope');
-  assert.notEqual((await call('workspace_open', { path: next, unsupported: true })).isError, true);
-  assert.equal(router.workspace.root, next, 'the declared workspace path still applies');
+  assert.notEqual((await call('workspace_open', { path: root, unsupported: true })).isError, true);
+  const mismatch = await call('workspace_open', { path: next, unsupported: true });
+  assert.equal(mismatch.isError, true);
+  assert.equal(JSON.parse(mismatch.content[0].text).errorCode, 'WORKSPACE_MISMATCH');
+  assert.equal(router.workspace.root, root, 'extra fields cannot enable switching');
 }));
 
 it('the opt-in tree is bounded and does not change the default summary contract', async () => fixture(async (root, _router, call) => {

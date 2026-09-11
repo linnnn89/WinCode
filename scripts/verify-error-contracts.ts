@@ -98,9 +98,16 @@ try {
   } finally { uiFault.mock.restore(); }
   const nextRoot = path.join(root, 'next');
   await fs.mkdir(nextRoot);
+  await observe('wrong workspace rejected without recovery or mutation', 'workspace_open', { path: nextRoot }, (result, body) => {
+    assert.equal(result.isError, true); assert.equal(body.errorCode, 'WORKSPACE_MISMATCH');
+    assert.equal(body.activeWorkspace, root); assert.equal(body.requestedWorkspace, nextRoot);
+    assert.equal(body.recoveryAction, 'select_workspace_connection');
+    assert.equal(router.workspaceRecoveryState, null);
+  });
+  await (router as any).watch.stop();
   const switchFault = mock.method(router.text, 'initialize', async () => { throw new Error('isolated rebind failure'); });
   try {
-    await observe('workspace commit failure', 'workspace_open', { path: nextRoot }, (result, body) => {
+    await observe('same-root resource recovery failure', 'workspace_open', { path: root }, (result, body) => {
       assert.equal(result.isError, true); assert.equal(body.errorCode, 'WORKSPACE_RECOVERY_REQUIRED');
       assert.equal(body.recoveryAction, 'workspace_open'); assert.equal(body.workspaceRecovery.recoveryAction, 'workspace_open');
     });

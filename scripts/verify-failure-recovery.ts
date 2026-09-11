@@ -36,10 +36,12 @@ async function fixture(name: string, work: (router: ToolRouter, a: string, b: st
 }
 
 const stages = ['root-before', 'root-after', 'namespace', 'session', 'watch',
-  'repomix-dispose', 'text-reset', 'repomix-initialize', 'text-initialize', 'composites', 'cancel-after-root'];
+  'repomix-dispose', 'repomix-initialize', 'text-initialize', 'composites', 'cancel-after-root'];
 
 for (const stage of stages) {
   await fixture(stage, async (router, a, b) => {
+    await assert.rejects(router.openWorkspace(b), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
+    await (router as any).watch.stop();
     const controller = new AbortController();
     const targets: Record<string, [any, string]> = {
       'root-before': [router.workspace, 'openWorkspace'],
@@ -48,7 +50,6 @@ for (const stage of stages) {
       namespace: [router.cache, 'setNamespace'], session: [router.session, 'open'],
       watch: [router as any, 'bindWatch'],
       'repomix-dispose': [router.repomix, 'dispose'],
-      'text-reset': [router.text, 'resetConnection'],
       'repomix-initialize': [router.repomix, 'initialize'],
       'text-initialize': [router.text, 'initialize'],
       composites: [router as any, 'bindCompositeTools'],
@@ -63,7 +64,7 @@ for (const stage of stages) {
       }
       : function () { throw new Error(`injected:${stage}`); };
     let switchOutcome = 'resolved';
-    try { await router.openWorkspace(b, {}, controller.signal); }
+    try { await router.openWorkspace(a, {}, controller.signal); }
     catch (error) { switchOutcome = String(error); }
     finally { target[method] = original; }
 
@@ -78,12 +79,13 @@ for (const stage of stages) {
       root: router.config.workspaceRoot, sessionRoot: health.session?.workspaceRoot,
       watchRoot: health.workspaceWatch.root, cacheNamespace: router.cache.currentNamespace,
       rootsAgree, switching: router.isSwitchingWorkspace });
-    if (switchOutcome !== 'resolved' && router.config.workspaceRoot !== a && accepted)
-      failures.push(`${stage}: switch failed after root changed but next request was admitted`);
+    if (switchOutcome === 'resolved') failures.push(`${stage}: injected recovery failure was not observed`);
+    if (router.config.workspaceRoot !== a) failures.push(`${stage}: fixed root changed`);
+    if (switchOutcome !== 'resolved' && accepted) failures.push(`${stage}: failed recovery admitted a business request`);
     if (accepted && !rootsAgree) failures.push(`${stage}: admitted request with inconsistent roots`);
     if (controller.signal.aborted && switchOutcome === 'resolved')
       failures.push(`${stage}: cancellation after root change was not observed`);
-    // A subsequent normal switch must at least release admission and clean up.
+    // A subsequent same-root recovery must restore admission and consistent resources.
     await router.openWorkspace(a);
     assert.equal(router.config.workspaceRoot, a);
     assert.equal(router.isSwitchingWorkspace, false);
@@ -117,6 +119,7 @@ for (const stage of ['rename', 'metadata']) {
 
 const report = { node: process.version, generatedAt: new Date().toISOString(),
   externalAdapters: 'disabled; local fallback only', observations, failures,
+  retiredStages: [{ name: 'text-reset', reason: 'LocalTextAdapter has no resetConnection; real text-initialize remains covered.' }],
   scope: 'Injected local failure semantics; does not validate real upstream binding or endurance.' };
 const reportFile = path.join(runRoot, 'report.json');
 await fs.writeFile(reportFile, JSON.stringify(report, null, 2) + '\n');

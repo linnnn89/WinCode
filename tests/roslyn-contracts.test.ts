@@ -204,7 +204,7 @@ it('rejects a Host that fails to confirm the configured additional inputs and re
     const host = path.join(root, 'host.cjs');
     await fs.writeFile(path.join(root, 'App.csproj'), '<Project />');
     await fs.writeFile(path.join(root, 'schema.yaml'), 'mode: original');
-    await fs.writeFile(host, `console.log(JSON.stringify({id:null,type:'ready',success:true,protocolVersion:2,snapshot:'${'a'.repeat(32)}',configuration:'Debug',framework:'net10.0',processTreeGuard:true,hostIdentity:{version:'${WINCODE_VERSION}',configuration:'Release',protocolVersion:2},inputPolicy:{version:1,additionalInputs:[]}})); process.stdin.resume(); setInterval(()=>{},1000);`);
+    await fs.writeFile(host, `console.log(JSON.stringify({id:null,type:'ready',success:true,protocolVersion:2,snapshot:'${'a'.repeat(32)}',configuration:'Debug',framework:'net10.0',processTreeGuard:true,hostIdentity:{version:'${WINCODE_VERSION}',configuration:'Release',protocolVersion:2},inputPolicy:{version:2,additionalInputs:[]}})); process.stdin.resume(); setInterval(()=>{},1000);`);
     config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'App.csproj', configuration: 'Debug',
       targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: host, additionalInputs: ['schema.yaml'] };
     const adapter = new RoslynAdapter(config, resources, () => []);
@@ -264,10 +264,12 @@ it('Roslyn cleanup failure enters sticky E1 recovery and never starts Local text
   try {
     await router.initialize();
     (router.roslyn as any).client = { close: async () => { closes++; throw new Error('injected cleanup failure'); } };
-    await assert.rejects(router.openWorkspace(b), WorkspaceRecoveryRequiredError);
+    await (router as any).watch.stop();
+    await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError);
     assert.equal(router.workspaceRecoveryState?.recoveryAction, 'restart_gateway');
     await assert.rejects(router.openWorkspace(a), WorkspaceRecoveryRequiredError);
-    assert.equal(config.workspaceRoot, b);
+    await assert.rejects(router.openWorkspace(b), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
+    assert.equal(config.workspaceRoot, a);
     assert.equal(closes, 1);
     await assert.rejects(router.acquireRequestSlot(), WorkspaceRecoveryRequiredError);
     const health = await router.getRuntimeHealth();
@@ -283,9 +285,14 @@ it('Roslyn cleanup failure enters sticky E1 recovery and never starts Local text
   }
 });
 
-for (const identity of [undefined, { version: '0.0.0', configuration: 'Release', protocolVersion: 2 },
-  { version: WINCODE_VERSION, configuration: 'Debug', protocolVersion: 2 }]) {
-  it('rejects missing or mismatched Code Host build identity and reaps its process', async () => {
+const currentHostIdentity = { version: WINCODE_VERSION, configuration: 'Release', protocolVersion: 2 };
+for (const rejected of [
+  ...[undefined, { ...currentHostIdentity, version: '0.0.0' }, { ...currentHostIdentity, configuration: 'Debug' }]
+    .map(identity => ({ label: 'build identity', identity, policy: { version: 2, additionalInputs: [] }, code: 'HOST_VERSION_MISMATCH' })),
+  ...[undefined, { version: 1, additionalInputs: [] }]
+    .map(policy => ({ label: 'input policy', identity: currentHostIdentity, policy, code: 'HOST_PROTOCOL_ERROR' })),
+]) {
+  it(`rejects missing or mismatched Code Host ${rejected.label} and reaps its process`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-host-version-'));
     const resources = new ResourceManager();
     try {
@@ -293,14 +300,14 @@ for (const identity of [undefined, { version: '0.0.0', configuration: 'Release',
       const host = path.join(root, 'host.cjs');
       await fs.writeFile(path.join(root, 'App.csproj'), '<Project />');
       const ready = { id: null, type: 'ready', success: true, protocolVersion: 2, snapshot: 'a'.repeat(32),
-        configuration: 'Debug', framework: 'net10.0', processTreeGuard: true, hostIdentity: identity,
-        inputPolicy: { version: 1, additionalInputs: [] } };
+        configuration: 'Debug', framework: 'net10.0', processTreeGuard: true, hostIdentity: rejected.identity,
+        inputPolicy: rejected.policy };
       await fs.writeFile(host, 'console.log(' + JSON.stringify(JSON.stringify(ready)) + '); process.stdin.resume(); setInterval(()=>{},1000);');
       config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'App.csproj', configuration: 'Debug',
         targetFramework: 'net10.0', dotnetPath: process.execPath, hostPath: host };
       const adapter = new RoslynAdapter(config, resources, () => []);
       await assert.rejects(adapter.findSymbolsDetailed('Service'),
-        (error: unknown) => error instanceof CodeQueryError && error.errorCode === 'HOST_VERSION_MISMATCH');
+        (error: unknown) => error instanceof CodeQueryError && error.errorCode === rejected.code);
       assert.equal(adapter.getKnownHealth().snapshotId, null);
       assert.equal(resources.childProcessCount(), 0);
     } finally {
@@ -310,6 +317,23 @@ for (const identity of [undefined, { version: '0.0.0', configuration: 'Release',
     }
   });
 }
+
+it('rejects nonliteral output configuration segments before registering or starting a Host', async () => {
+  const resources = new ResourceManager();
+  try {
+    for (const field of ['configuration', 'targetFramework'] as const) {
+      for (const value of ['.', '..', 'Debug.', 'Debug ', 'a/b', 'a\\b', 'x;y', '$(Configuration)', '%2e%2e', '@(Compile)', 'a\u0000b']) {
+        const config = getDefaultConfig(process.cwd());
+        config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'App.csproj',
+          configuration: 'Debug', targetFramework: 'net10.0', dotnetPath: process.execPath,
+          hostPath: path.resolve('unused-host.dll'), [field]: value };
+        assert.throws(() => new RoslynAdapter(config, resources, () => []),
+          (error: unknown) => error instanceof CodeQueryError && error.errorCode === 'INVALID_ARGUMENT', `${field}: ${value}`);
+        assert.equal(resources.childProcessCount(), 0);
+      }
+    }
+  } finally { await resources.dispose(); }
+});
 
 it('text mode rejects selected identities before any analysis or resource admission', async () => {
   const router = new ToolRouter(getDefaultConfig(process.cwd()));

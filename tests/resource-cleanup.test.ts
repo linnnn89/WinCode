@@ -54,11 +54,13 @@ describe('resource-cleanup', () => {
       assert.strictEqual(hitB, null, 'Data must NOT have drifted into projectB');
     });
 
-    it('ToolRouter: slow in-flight queries drain before openWorkspace and new queries queue', async () => {
+    it('ToolRouter: slow in-flight queries drain before same-root resource recovery', async t => {
       const config = getDefaultConfig(root);
       config.cacheDir = path.join(testCacheDir, 'drain_switch');
       const router = new ToolRouter(config);
+      t.after(() => router.dispose());
       await router.initialize();
+      await (router as any).watch.stop();
 
       let queryFinished = false;
       await router.acquireRequestSlot();
@@ -68,54 +70,64 @@ describe('resource-cleanup', () => {
         router.endRequest();
       })();
 
-      const switchOp = router.openWorkspace(FIXTURE_DOTNET);
+      const switchOp = router.openWorkspace(root);
       await switchOp;
       assert.strictEqual(queryFinished, true, 'openWorkspace must wait for in-flight requests to drain');
-      assert.strictEqual(router.session.current?.workspaceRoot, FIXTURE_DOTNET);
+      assert.strictEqual(router.session.current?.workspaceRoot, root);
+      await slowOp;
 
       await router.openWorkspace(root);
-      await router.dispose();
     });
 
-    it('ToolRouter & McpServer: openWorkspace rejects switch and preserves workspace if in-flight queries do not drain', async () => {
+    it('ToolRouter & McpServer: same-root recovery rejects when in-flight queries do not drain', async t => {
       const config = getDefaultConfig(root);
       config.cacheDir = path.join(testCacheDir, 'drain_timeout');
       config.timeouts.shutdownMs = 60; // short drain timeout
       const router = new ToolRouter(config);
+      t.after(() => router.dispose());
       await router.initialize();
+      await (router as any).watch.stop();
 
       // Hold an in-flight slot that will NOT end in time
       await router.acquireRequestSlot();
       try {
         await assert.rejects(
           async () => {
-            await router.openWorkspace(FIXTURE_DOTNET);
+            await router.openWorkspace(root);
           },
-          /Workspace switch rejected: in-flight queries failed to drain/
+          (error: any) => {
+            assert.strictEqual(error.name, 'WorkspaceRecoveryRequiredError');
+            assert.strictEqual(error.recovery.phase, 'drain');
+            assert.match(error.recovery.message, /Workspace recovery rejected: in-flight queries failed to drain/);
+            assert.strictEqual(error.recovery.recoveryAction, 'workspace_open');
+            return true;
+          }
         );
         // Ensure workspace was NOT changed and remains root
         assert.strictEqual(router.config.workspaceRoot, root);
+        assert.strictEqual(router.inFlightRequests, 1, 'timeout must not release another request');
+        await assert.rejects(router.acquireRequestSlot(), { name: 'WorkspaceRecoveryRequiredError' });
       } finally {
         router.endRequest();
-        await router.dispose();
       }
     });
 
-    it('McpServer: workspace_open does not increment in-flight and completes promptly without self-wait', async () => {
+    it('McpServer: workspace_open does not increment in-flight and completes promptly without self-wait', async t => {
       const config = getDefaultConfig(root);
       config.cacheDir = path.join(testCacheDir, 'server_ws_open');
       const router = new ToolRouter(config);
       const server = new WinCodeMcpServer(router);
+      t.after(() => server.stop());
       await router.initialize();
+      await (router as any).watch.stop();
 
       const t0 = Date.now();
-      await router.openWorkspace(FIXTURE_DOTNET);
+      await router.openWorkspace(root);
       const elapsed = Date.now() - t0;
-      assert.strictEqual(router.inFlightRequests, 0, 'Switch op must not leave in-flight request dangling');
-      assert.ok(elapsed < 4000, `Switch must not wait out drain timeout, took ${elapsed}ms`);
+      assert.strictEqual(router.inFlightRequests, 0, 'Recovery must not leave in-flight request dangling');
+      assert.ok(elapsed < 4000, `Recovery must not wait out drain timeout, took ${elapsed}ms`);
 
       await router.openWorkspace(root);
-      await server.stop();
     });
 
     it('CacheManager: pruneDiskCache counts overflow size, enforces maxDiskBytes, respects grace period & memory protection', async () => {
@@ -207,10 +219,11 @@ describe('resource-cleanup', () => {
       assert.ok(reportAmbiguous.limitations.some((l) => l.includes('未能唯一解析')));
     });
 
-    it('ImpactAnalyzer: unresolved explicitFileHint strictly returns uniqueResolution=false and UNKNOWN', async () => {
+    it('ImpactAnalyzer: unresolved explicitFileHint strictly returns uniqueResolution=false and UNKNOWN', async t => {
       const config = getDefaultConfig(FIXTURE_DOTNET);
       config.cacheDir = path.join(testCacheDir, 'impact_unique');
       const router = new ToolRouter(config);
+      t.after(() => router.dispose());
       await router.initialize();
 
       const report = await router.impact.analyzeImpact('TotallyNonExistentHelper.cs');
@@ -219,7 +232,6 @@ describe('resource-cleanup', () => {
       assert.strictEqual(report.confidence, 'UNCERTAIN');
       assert.strictEqual(report.analysisCompleteness, 'unindexed');
 
-      await router.dispose();
     });
 
     it('CacheManager: computeWorkspaceFingerprint handles non-ASCII and detects in-place content modifications', async () => {

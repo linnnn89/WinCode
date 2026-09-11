@@ -36,8 +36,9 @@ it('ten sequential and ten concurrent workspace lifecycles close native watchers
       const router = new ToolRouter(config);
       try {
         await router.initialize();
-        await router.openWorkspace(other);
+        await assert.rejects(router.openWorkspace(other), (error: any) => error.errorCode === 'WORKSPACE_MISMATCH');
         await fs.writeFile(path.join(other, 'Changed.cs'), 'class Changed {}');
+        await (router as any).watch.stop();
         await router.openWorkspace(workspace);
       } finally {
         await router.dispose();

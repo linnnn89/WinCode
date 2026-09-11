@@ -7,7 +7,7 @@ import { contractHash } from './ContractHash.js';
 export const WORKSPACE_TOOLS = [
   defineTool<WorkspaceOpenOptions & { path: string }>({
     name: 'workspace_open',
-    description: 'Opens a workspace and returns a compact project summary and at most 8 entry paths. Reopening the same healthy workspace preserves the Roslyn Host and snapshot; known HOST_RESTART_REQUIRED or workspace recovery still requires explicit recovery. Default output is bounded to 8000 UTF-16 characters; counts describe bounded discovery, not a complete inventory. Directory tree is opt-in and bounded; use wincode_list_directory for focused browsing.',
+    description: 'Confirms or recovers the workspace fixed at Gateway startup and returns a compact project summary with at most 8 entry paths. Another root is rejected with WORKSPACE_MISMATCH before any state change; select that project connection instead. Healthy same-root confirmation preserves the Roslyn Host and snapshot; known HOST_RESTART_REQUIRED or workspace recovery still requires explicit recovery. Default output is bounded to 8000 UTF-16 characters; counts describe bounded discovery, not a complete inventory. Directory tree is opt-in and bounded; use wincode_list_directory for focused browsing.',
     inputSchema: {
       type: 'object',
       additionalProperties: true,
@@ -15,7 +15,7 @@ export const WORKSPACE_TOOLS = [
         path: {
           type: 'string',
           minLength: 1, maxLength: 4096,
-          description: 'Path to the workspace project directory to open.',
+          description: 'Absolute path of this connection\'s startup workspace. Another project requires its own connection.',
         },
         includeTree: { type: 'boolean', default: false, description: 'Include a bounded compatibility directory tree. Never an unbounded inventory.' },
         maxOutputChars: { type: 'integer', minimum: 2048, maximum: 32768, default: 8000, description: 'Budget for the entire compact JSON text including escaping and metadata; not model tokens.' },
@@ -23,7 +23,7 @@ export const WORKSPACE_TOOLS = [
       required: ['path'],
     },
   }, {
-    aliases: [{ name: 'wincode_workspace_open', listed: false }], switchesWorkspace: true,
+    aliases: [{ name: 'wincode_workspace_open', listed: false }], workspaceControl: true, requestBudget: 'workspace',
     validate: args => { if (!args.path.trim()) throw new Error('path must not be blank.'); },
     execute: async (args, { router, signal }) => jsonResult(await router.openWorkspace(args.path, {
       includeTree: args.includeTree, maxOutputChars: args.maxOutputChars,
@@ -64,6 +64,7 @@ export const WORKSPACE_TOOLS = [
     },
   }, {
     allowDuringWorkspaceRecovery: true,
+    requestLane: 'status',
     validate: (args, context) => {
       if (args.toolName !== undefined && !context.tools.some(tool => tool.name === args.toolName))
         throw new Error(`Tool is not registered in this instance: ${args.toolName}`);
@@ -111,7 +112,8 @@ export const WORKSPACE_TOOLS = [
       properties: {},
     },
   }, {
-    execute: async (_args, { router }) => jsonResult(await router.diagnoseProject(), true),
+    requestBudget: 'diagnostics',
+    execute: async (_args, { router, signal }) => jsonResult(await router.diagnoseProject(signal), true),
   }),
   defineTool<{ filePath: string; reason?: string }>({
     name: 'wincode_safe_move_to_trash',
@@ -120,11 +122,11 @@ export const WORKSPACE_TOOLS = [
       type: 'object', additionalProperties: true,
       properties: {
         filePath: {
-          type: 'string', minLength: 1, pattern: '\\S',
+          type: 'string', minLength: 1, maxLength: 4096, pattern: '\\S',
           description: 'Non-empty relative path of the file within the current workspace to safely move to trash. Absolute paths and drive-relative paths (e.g., C:foo) are strictly rejected.',
         },
         reason: {
-          type: 'string',
+          type: 'string', maxLength: 4096,
           description: 'Reason for removal.',
         },
       },

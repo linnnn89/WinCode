@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolveDotnet } from './lib/dotnet.mjs';
+import { runCheckStage, testReporters } from './lib/check-stage.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
@@ -34,26 +34,10 @@ if (inventoryOnly) {
     environment: { node: process.versions.node, platform: process.platform, arch: process.arch }, stages: [], success: false };
   async function run(name, command, args) {
     console.log(`[check] ${name}`);
-    const started = Date.now();
-    const result = spawnSync(command === 'dotnet' ? toolchain.dotnet : command, args, {
-      cwd: root, env: toolchain.env, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 8 * 1024 * 1024,
-    });
-    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-    await fs.writeFile(path.join(directory, `${name}.log`), output);
-    const success = !result.error && result.status === 0;
-    report.stages.push({ name, command: [command, ...args].map(arg => arg.replaceAll(root, '<repository>').slice(0, 512)), success, durationMs: Date.now() - started,
-      ...(success ? {} : { error: (result.error?.message ?? output.slice(-2000)).slice(0, 2000) }) });
-    if (!success) throw new Error(`${name} failed; see ${path.join(directory, `${name}.log`)}`);
-    return result.stdout;
+    return runCheckStage({ report, directory, root, name, command: command === 'dotnet' ? toolchain.dotnet : command,
+      args, env: toolchain.env });
   }
   const node = (name, args) => run(name, process.execPath, args);
-  const testTotals = output => {
-    const totals = Object.fromEntries([...output.matchAll(/^# (tests|pass|fail|cancelled|skipped) (\d+)\r?$/gm)]
-      .map(match => [match[1], Number(match[2])]));
-    if (!(totals.tests > 0) || ['pass', 'fail', 'cancelled', 'skipped'].some(key => totals[key] === undefined))
-      throw new Error('Test process did not return a complete TAP summary.');
-    return totals;
-  };
   const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
   const tsx = path.join(root, 'node_modules/tsx/dist/cli.mjs');
   const native = 'tools/WinCode.UIA.Host/WinCode.UIA.Host.csproj';
@@ -70,7 +54,7 @@ if (inventoryOnly) {
       await node('verify-delivery', ['scripts/delivery-manifest.mjs', '--verify']);
       await run('restore-wpf', 'dotnet', ['restore', wpf, '--locked-mode']);
       await run('publish-wpf', 'dotnet', ['publish', wpf, '-c', 'Release', '-r', 'win-x64', '--no-self-contained', '--no-restore', ...deterministic]);
-      report.tests = testTotals(await node('desktop-tests', [tsx, '--test', '--test-reporter=tap', '--test-concurrency=1', ...groups['test:ui'], ...groups['test:ui-code']]));
+      await node('desktop-tests', [tsx, '--test', ...testReporters(directory, 'desktop-tests'), '--test-concurrency=1', ...groups['test:ui'], ...groups['test:ui-code']]);
       await node('desktop-owner-death', ['scripts/verify-owner-death.mjs', '--desktop']);
       await node('desktop-tray', ['scripts/verify-tray.mjs']);
       await node('desktop-tray-workflow', ['scripts/verify-tray-workflow.mjs']);
@@ -85,7 +69,7 @@ if (inventoryOnly) {
       await run('build-audit', 'dotnet', ['build', audit, '-c', 'Debug', '--no-restore', ...deterministic]);
       await run('build-query', 'dotnet', ['build', query, '-c', 'Release', '--no-restore', ...deterministic]);
       await run('build-owner-guard', 'dotnet', ['build', ownerGuard, '-c', 'Release', '--no-restore', ...deterministic]);
-      report.tests = testTotals(await node('regression', [tsx, '--test', '--test-reporter=tap', ...groups.test]));
+      await node('regression', [tsx, '--test', ...testReporters(directory, 'regression'), ...groups.test]);
       const stdio = JSON.parse(await node('stdio', [tsx, 'scripts/test-mcp-client.ts']));
       report.runtime = { build: stdio.runtime?.build, schemaHash: stdio.schemaHash, toolCount: stdio.toolCount,
         resourceCleanup: stdio.resourceCleanup, codexConnectionVerified: false };

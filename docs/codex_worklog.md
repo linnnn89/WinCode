@@ -1290,3 +1290,10 @@
 - 重跑的 [逐场景回执](../test-tmp/pr37-ci-211799f-retry/node22/design-time-production/run-1wXhX2/report.json) 显示 WPF 等待就绪触发了验收脚本独有的 20000 ms 限制；生产 RoslynAdapter 默认加载预算为 120000 ms。外层 job 同时被 GitHub 的 15 分钟限制取消，检查注释明确为 The job has exceeded the maximum execution time of 15m0s，完整矩阵未完成。不能只把取消解释为业务用例全部正常，也不能用旧 head 的通过替代此次失败。
 - 根据上述新证据，将设计时语义验收加载预算对齐既有生产默认 120 秒；Windows CI 整项预算设为 20 分钟容纳冷启动和完整矩阵。共享缓存移至构建后优先运行，SDK 并发和设计时输出各占独立步骤。依据 [GitHub workflow timeout 定义](https://github.com/github/docs/blob/main/content/actions/reference/workflows-and-actions/workflow-syntax.md#jobsjob_idtimeout-minutes) 区分 job 总预算与业务截止；生产请求/查询/清理的超时和取消行为均未修改，没有新增测试或依赖。
 - 验证：YAML 解析通过，并比较确认所有验收命令及 Node 条件、job 名称、报告保留设置与修改前一致；脚本语法与 git diff --check 通过。正式发布 Host 的 WPF 定向场景 [run-nKcqEc](../test-tmp/design-time-production/run-nKcqEc/report.json) 1/1 通过，productionChanged=false。新 head 仍需远端完成五项必需检查；当前未合并。
+
+## 2026-09-11 — 合并后共享缓存淘汰验收归属修正
+
+- PR #37 的 e2bce5a 五项必需检查通过并合并为 9fe9ace；随后 main 的 [CI 34563810434](https://github.com/linnnn89/WinCode/actions/runs/34563810434/job/103151717074) 在 Node 22 共享缓存第 3 场景失败。基础构建和回归已通过，失败断言为 evicted backing content must cause a rebuild。此前交付收尾只确认 PR 检查和合并状态，没有等待该次 main 检查。
+- 原场景从磁盘索引取得同键并发写入的最终附件，却只观察客户端 A 的重建次数；两个客户端可以各自持有不同但有效的附件。固定为 A 写入、删除自有索引、B 再写入的顺序后，旧断言确定性失败：[red](../test-tmp/shared-cache/run-v1macn/report.json) 记录 A 附件存在、B 附件已淘汰、A 重建次数为 0。该行为符合 Cache.get 对内存条目及其实际附件的校验；[npm/cacache](https://github.com/npm/cacache/blob/main/lib/get.js) 的内存命中先于索引查询也支持两者不能等同的判断，不引入依赖。
+- 修正原有场景：由 A 单独创建此前未使用的 Item31 条目，断言磁盘附件就是 A 返回的附件，再执行同样 20 次对端写入和并发读取。仍严格要求实际附件淘汰、至少一次重建、删除索引后的有效热命中，其余损坏、源修改、跨根和退出验收保持原样。仅修改验收脚本及本工作日志，未改生产缓存、超时、依赖或增加测试数量。
+- 本地 Node 24：原完整共享缓存验收 [8/8 通过](../test-tmp/shared-cache/run-WDVkcF/report.json)；固定上述双附件顺序后，修正脚本 [8/8 通过](../test-tmp/shared-cache/run-VjL1Cd/report.json)。两次 cleanupFailures 和 survivors 均为空，脚本语法及 git diff --check 通过。Node 22 和本次 PR 的五项必需检查由新 head 的 CI 验证，合并后还需确认 main 新运行；本记录不将待运行检查计为通过。

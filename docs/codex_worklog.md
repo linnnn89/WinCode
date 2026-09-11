@@ -1276,3 +1276,10 @@
 - 该 head 的 Node 24 与三项 CodeQL 通过；Node 22.23.2 为 450 通过、1 失败、1 可选 TavernDesk 跳过。失败位于 owner-process-guard.test.ts 的 finally：Helper 正常退出后仍启动 PowerShell 查询清理，命令超过 5000 ms，被 SIGTERM 终止；JUnit 明确记录 killed=true、code=null、空 stdout/stderr。原始 [CI report](../test-tmp/pr37-ci-2d4ee56/node22/check/2026-09-11T03-29-15-957Z-core/report.json) 与 regression.xml 保留在本机。未把该失败归为生产 OwnerProcessGuard 故障。
 - 对直接阻塞交付的问题只修测试收尾：先用 signal 0 检查 PID，只有 ESRCH 才跳过；存活或未知 PID 仍进入原有持句柄/创建时间核验，保持清理预算。正常/repeat 两个既有用例增加 Helper 已退出断言，没有新增测试。依据 [Node process 文档](https://nodejs.org/api/process.html#processkillpid-signal) 的无副作用存在性检查及 [child_process 文档](https://nodejs.org/api/child_process.html) 的 timeout/killSignal 行为。
 - 修正后 owner-guard 原 13 项全部通过（13.757 秒），类型检查和 git diff --check 通过；没有重复无关全套或修改生产源码。新的远端 head 仍需取得自己的必需检查结果。复杂度评估不新增设计文档或直接重构，结果在本次回复交付。
+
+## 2026-09-11 — PR #37 共享缓存验收契约修正
+
+- head 3a3d176 的 Node 22 在 13 分 55 秒后因共享缓存第 3 场景断言失败；未触发总超时。核心、真实 Roslyn/清理、多实例和正式 Host 21 项矩阵均已通过。原始 [CI 回执](../test-tmp/pr37-ci-3a3d176/node22/shared-cache/run-ho390i/report.json) 报 No overflow record for A_CURRENT_0，调用内容断言已通过，清理失败及残留均为空。
+- 旧验收要求每次有效内存命中后仍能查到磁盘 JSON 索引，超出现有可淘汰缓存契约。Cache.get 在验证内存条目及附件后直接返回；同类 [npm/cacache get 实现](https://github.com/npm/cacache/blob/main/lib/get.js) 也先返回 memoized 数据再查询索引。该参考仅用于核对层次关系，不替代本地验证或引入依赖。
+- 在原场景内确定性删除自有索引、保留有效热条目，旧断言复现同一失败（[red](../test-tmp/shared-cache/run-sO4Dlm/report.json)）。修正为验证实际旧附件淘汰、至少一次重建、索引删除后的正确热命中；其余损坏/修改/跨根/退出场景保留，没有新增自动化测试。
+- 原共享缓存验收修正后 8/8 通过（[green](../test-tmp/shared-cache/run-F11W1L/report.json)，8.303 秒；observedRebuilds=1，warmReadAfterIndexEviction=true，cleanupFailures=[]、survivors=[]）；node --check 和 git diff --check 通过。生产源码和 CI 超时预算未改，下一 head 的远端必需检查仍待运行。

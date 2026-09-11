@@ -1,8 +1,8 @@
 # Security policy / 安全策略
 
-The latest 0.13.x version and current `main` are maintained; `main` is the 0.14.0 baseline, with fixed workspaces in the local 0.15.0 development branch. Older versions do not have a separate backport commitment. Supported runtimes are Node 24 (primary) and Node 22 (compatibility), on Windows x64; build requirements are in [CONTRIBUTING](CONTRIBUTING.md).
+The latest 0.13.x version and current `main` are maintained; `main` contains the unreleased 0.15.0 source with fixed workspaces. Older versions do not have a separate backport commitment. Supported runtimes are Node 24 (primary) and Node 22 (compatibility), on Windows x64; build requirements are in [CONTRIBUTING](CONTRIBUTING.md).
 
-目前维护最新 0.13.x 版本与 `main`；`main` 基线为 0.14.0，本地 0.15.0 开发分支引入固定工作区，不承诺对旧版本单独回补。Windows x64 上以 Node 24 为主要环境、22 为兼容环境；构建要求见贡献指南。
+目前维护最新 0.13.x 版本与 `main`；`main` 中的源码版本为 0.15.0，已包含固定工作区，尚未发布 GitHub Release。不承诺对旧版本单独回补。Windows x64 上以 Node 24 为主要环境、22 为兼容环境；构建要求见贡献指南。
 
 Report suspected vulnerabilities through [GitHub private vulnerability reporting](https://github.com/linnnn89/WinCode/security/advisories/new). Include the affected version/build identity, reproduction steps, expected and observed behavior, and a minimal sanitized example. Do not include credentials, personal databases or private source unnecessarily. Avoid publishing exploit details in a public issue before coordination with the maintainer.
 

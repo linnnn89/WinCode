@@ -1269,3 +1269,10 @@
 - USER_DECISION_REQUIRED：依据用户提供的 AGENTS.md 第四节，需要明确提交/推送授权，才能把本地增量送入同一个 PR #37、更新说明并使用现有 Node 22/24 和 CodeQL CI。推荐直接用仓库现有 CI 获取兼容性证据，避免为了这一步新增本地运行时。合并、发布和真实客户端更新不包含在该建议授权中。README、CHANGELOG、架构、计划及路线图已同步本次结果；所有原始 test-tmp 证据仅保留本地。
 - 可审阅交付：[PR 说明草案](../test-tmp/merge-review/pr-body.md) 已按最终范围准备，尚未发送；建议标题为 feat: isolate workspaces and Roslyn builds with bounded request admission。[最终汇总](../test-tmp/merge-review/final-receipt.json) 从原始回执独立读取并断言 452 项、各集成场景数和同一交付身份，保留 pending 与 mergeReady=false；没有修改原始报告。汇总脚本为 [summarize.mjs](../test-tmp/merge-review/summarize.mjs)。
 - 收尾核对：git diff --check、delivery matched=true、当前文档及本节 59 个本地链接存在性均通过。HEAD 仍为 aa6fc7f；保留 22 个已跟踪修改和 2 个新增文件，包含前序已完成的本地增量。最终核心/非桌面验证之后仅同步说明和本地证据汇总，没有再改生产源码或正式测试。已提出上述提交/推送授权申请，尚未执行外部变更。
+
+## 2026-09-11 11:39 — PR #37 提交与 CI 清理修正（北京时间）
+
+- 用户已授权提交当前版本 PR，随后只读评估近几个版本的工程复杂度。提交 2d4ee56 已推送同一 PR #37，标题和说明已更新；没有合并。
+- 该 head 的 Node 24 与三项 CodeQL 通过；Node 22.23.2 为 450 通过、1 失败、1 可选 TavernDesk 跳过。失败位于 owner-process-guard.test.ts 的 finally：Helper 正常退出后仍启动 PowerShell 查询清理，命令超过 5000 ms，被 SIGTERM 终止；JUnit 明确记录 killed=true、code=null、空 stdout/stderr。原始 [CI report](../test-tmp/pr37-ci-2d4ee56/node22/check/2026-09-11T03-29-15-957Z-core/report.json) 与 regression.xml 保留在本机。未把该失败归为生产 OwnerProcessGuard 故障。
+- 对直接阻塞交付的问题只修测试收尾：先用 signal 0 检查 PID，只有 ESRCH 才跳过；存活或未知 PID 仍进入原有持句柄/创建时间核验，保持清理预算。正常/repeat 两个既有用例增加 Helper 已退出断言，没有新增测试。依据 [Node process 文档](https://nodejs.org/api/process.html#processkillpid-signal) 的无副作用存在性检查及 [child_process 文档](https://nodejs.org/api/child_process.html) 的 timeout/killSignal 行为。
+- 修正后 owner-guard 原 13 项全部通过（13.757 秒），类型检查和 git diff --check 通过；没有重复无关全套或修改生产源码。新的远端 head 仍需取得自己的必需检查结果。复杂度评估不新增设计文档或直接重构，结果在本次回复交付。

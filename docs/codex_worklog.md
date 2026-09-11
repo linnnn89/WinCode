@@ -1366,3 +1366,10 @@
 - 实际 Codex 连接实例 7509c731-baca-4031-a1fe-33a8c722b400，buildId=cbe44dd4e37479ce563c91e5ab9de3439813020de2d4664e3f4e9467e7302741，明确启用 Roslyn，目标为 TavernDesk.Core 的 53 文件隔离副本。完成声明搜索、8 处引用、影响分析和重构建议；副本源码前插入一行后，旧 location 返回 SNAPSHOT_STALE，重新搜索使声明从第 10 行/position 121 移至第 11 行/158，新 snapshot 恢复 8 处引用。报告 `test-tmp/live-roslyn-20260911/report.json`；保留 queryComplete=false、排除 8 个分析器/生成器以及单项目范围，不将 UNKNOWN 风险改称低风险。
 - 原副本已恢复，原项目与副本的 53 个源文件哈希均匹配。项目级临时 `.codex/config.toml` 已移除，CLI 核对默认 WinCode 启动参数已恢复，全局配置未改。用户明确要求后台重启后，核对临时 Gateway PID 30892 与其 Roslyn Host PID 20164 的归属并结束 Gateway，两者均退出；随后实际工具调用返回 Transport closed，说明 Codex 没有自动重建该连接。未启动无客户端连接的替代进程，也未结束其他 WinCode 实例。实际客户端验收已完成；当前连接恢复仍须客户端刷新，不能写成后台重连成功。
 - 此次新增两个测试，更新现有 README、架构说明和待办，删除已完成的验收事项。生产源码、依赖和受管 Skill 均未改变。
+
+## 2026-09-11 — 避免进程退出验收后的重复清理
+
+- PR #42 的最终提交和合并后 main `0958691` 均通过 Node 22/24 与 CodeQL。PR #43 的最终提交同样全部通过后合并为 `cc4b20f`，但合并后的 CI 34593556243 在 Node 22 的 owner-death 验收收尾失败；Node 24 与 CodeQL 通过。报告已保存于 `test-tmp/ci-main-34593556243/owner-death/run-gXvWAB/report.json`。
+- 原报告确认 9 个受管进程全部退出，`survivors=[]`、场景成功；随后 finally 仍逐个启动 PowerShell 做兜底终止，其中一次 `spawnSync powershell.exe ETIMEDOUT`。这是测试收尾失败，不是本次报告中观察到进程泄漏。尚未确定该 PowerShell 调用为何超过 8 秒；Node 22 文档说明 spawnSync 的 timeout 限制子进程运行时间：https://nodejs.org/download/release/v22.23.2/docs/api/child_process.html#child_processspawnsynccommand-args-options。
+- 仅调整默认 owner-death 脚本：验收已确认全部退出后不再兜底终止；失败路径保留原有 PID/创建时间核验及清理。没有放宽超时、忽略清理错误或修改生产代码。
+- 真实正常路径通过，报告 `test-tmp/owner-death/run-HzZLg9/report.json`。另以临时脚本副本故意保留 Gateway，验证残留仍使验收失败、兜底清理实际执行、随后同身份进程全部消失；故障注入验证通过，报告 `test-tmp/owner-death/run-LTW9Qh/report.json`。未重复无关全量测试；新提交的远端检查尚待运行。

@@ -1,5 +1,6 @@
 import { defineTool, jsonResult } from './ToolDefinition.js';
 import { contextResponse } from './ContextResponse.js';
+import { referenceResponse } from './ReferenceResponse.js';
 import { validateContextScope, type PreparedContextOptions } from '../Core/Context.js';
 import type { SymbolLocation } from '../Core/CodeQueries.js';
 import { validateTextSearch, validateFileOutline, type TextSearchOptions, type FileOutlineOptions } from '../Core/CodeNavigation.js';
@@ -140,7 +141,7 @@ export const CODE_TOOLS = [
   }, {
     execute: async (args, { router, signal }) => jsonResult(await router.findCodeSymbols(args.query, args.kind, signal), true),
   }),
-  defineTool<{ symbolName: string; relativePath?: string; symbolLocation?: SymbolLocation }>({
+  defineTool<{ symbolName: string; relativePath?: string; symbolLocation?: SymbolLocation; limit?: number; maxOutputChars?: number }>({
     name: 'wincode_find_references',
     description: 'Queries references within the configured provider scope. For direct Roslyn pass a returned declaration location as symbolLocation and its name as symbolName; simple names return candidates without choosing a potentially ambiguous overload. Stale locations must be searched again. Zero or incomplete references do not imply safe deletion.',
     inputSchema: {
@@ -155,13 +156,21 @@ export const CODE_TOOLS = [
           description: 'Defining file relative to the workspace. Roslyn uses it to scope candidates; local text references remain a workspace-wide textual scan.',
         },
         symbolLocation: symbolLocationSchema,
+        limit: {
+          type: 'integer', minimum: 1, maximum: 1000,
+          description: 'Maximum returned Roslyn references, default 100. Requires symbolLocation; does not change local-text search or semantic coverage. totalReferences counts the known snapshot results, not just the returned entries.',
+        },
+        maxOutputChars: {
+          type: 'integer', minimum: 2048, maximum: 32768, default: 8000,
+          description: 'Budget for the entire formatted JSON text in UTF-16 characters, including escaping and metadata; not model tokens. Applies to both providers and may return fewer entries than limit. Check returnedReferences, totalReferences, truncated and outputOmissions.',
+        },
       },
       required: ['symbolName'],
     },
   }, {
-    execute: async (args, { router, signal }) => jsonResult(await (args.symbolLocation ?
-      router.findCodeReferences(args.symbolName, args.relativePath, signal, args.symbolLocation) :
-      router.findCodeReferences(args.symbolName, args.relativePath, signal)), true),
+    validate: args => { if (args.limit !== undefined && !args.symbolLocation) throw new Error('limit requires a Roslyn symbolLocation; search and select a declaration first.'); },
+    execute: async (args, { router, signal }) => referenceResponse(await router.findCodeReferences(
+      args.symbolName, args.relativePath, signal, args.symbolLocation, args.limit), args.maxOutputChars),
   }),
   defineTool<{ target: string; symbolLocation?: SymbolLocation }>({
     name: 'analyze_change_impact',

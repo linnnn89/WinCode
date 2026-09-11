@@ -76,7 +76,12 @@ export class WinCodeMcpServer {
         checkOperation(lease.operation);
         lease.workStarted = true;
         const result = await definition.execute(args, context);
-        checkOperation(lease.operation);
+        try { checkOperation(lease.operation); }
+        catch (error) {
+          if (!definition.preserveOutcomeOnInterruption) throw error;
+          // Keep mutation evidence while still accounting for the interrupted request.
+          failure = error;
+        }
         return result;
       } catch (error) {
         failure = error;

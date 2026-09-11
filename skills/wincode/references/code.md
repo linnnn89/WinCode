@@ -78,7 +78,7 @@ Host 监听变化并在查询前后比较内容指纹，变化时丢弃结果并
 | `wincode_list_directory` | 无 | `path`: 非空字符串，最长 4096，默认 `.`；`maxDepth`: 整数 1–5，默认 1；`maxEntries`: 整数 1–500，默认 100；`maxOutputChars`: 整数 2048–32768，默认 8000；`includeIgnored`: 布尔值，默认 false |
 | `wincode_analyze_workspace` | 无 | `maxDepth`: 整数 1–5，默认 2；整份 JSON 最多 32768 个 UTF-16 字符 |
 | `wincode_find_code_symbol` | `query`: 非空字符串 | `kind`: 字符串，按下述提供方支持范围使用；Roslyn 的 query 最长 256、kind 最长 128。此工具未声明文件范围参数，指定文件取证改用下面的 `scopeFiles` |
-| `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 定义文件相对路径（Roslyn 用于限定候选，local-text 不据此缩小引用扫描）；`symbolLocation`: Roslyn 搜索返回的 location 对象（snapshotId/project/file/position 均必填，路径各最长 4096）；同时提供 relativePath 时必须与 location.file 一致 |
+| `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 定义文件相对路径（Roslyn 用于限定候选，local-text 不据此缩小引用扫描）；`symbolLocation`: Roslyn 搜索返回的 location 对象（snapshotId/project/file/position 均必填，路径各最长 4096）；同时提供 relativePath 时必须与 location.file 一致；`limit`: 整数 1–1000，Roslyn 默认 100，必须同时提供 symbolLocation，不改变 local-text 扫描；`maxOutputChars`: 整数 2048–32768，默认 8000，两种提供方均适用 |
 | `analyze_change_impact` | `target`: 非空字符串 | `symbolLocation`: 搜索返回的完整定位；提供时 target 必须是该符号的简单名称 |
 | `wincode_plan_refactoring` | `target`、`goal`: 非空字符串 | `symbolLocation`: 同影响分析 |
 | `wincode_safe_move_to_trash` | `filePath`: 工作区内相对路径字符串 | `reason`: 字符串；该工具实际移动文件，须符合用户授权 |
@@ -136,6 +136,12 @@ lineRanges 查看最终 coverage.allRequestedCovered、completeLines 和 details
 
 选定 Roslyn 重载后，将其 name 和 location 原样传给后续工具：引用使用 symbolName，影响分析及重构使用 target，同时传 symbolLocation。后两者先验证定位再分析，不按名字重选目标；SNAPSHOT_STALE/INPUTS_CHANGED 时须重新搜索。简单名称歧义检查 resolution/candidateCount/candidatesTruncated，不能选第一项。queryComplete=false 不等于零引用。
 
+Roslyn 引用默认最多 100 条，显式 `limit` 最大 1000。最终 JSON 文本另受 `maxOutputChars` 限制（默认 8000，范围 2048–32768），计入格式缩进、转义及元数据的 UTF-16 字符数，不是模型 token 数。两项限制先到哪个就在哪截断；提高 limit 不保证能返回全部条目，也不限制 Roslyn 查找引用的计算成本。`totalReferences` 保留当前已加载快照内发现的总数，`returnedReferences` 等于实际返回的 `references.length`；local-text 的 totalReferences 仍只是原有扫描范围内已找到的条数。
+
+字符预算造成省略时，`outputOmissions` 标明 references、candidates 或 fileIssues，`truncated=true`、`queryComplete=false`。候选总数不改写，`candidatesTruncated` 和 `fileIssuesOmitted` 如实更新；返回条目的位置与预览不裁半，symbolLocation、semanticContext 和覆盖限制保持完整。必要元数据本身放不下时返回 `OUTPUT_BUDGET_EXCEEDED`，按需增加 maxOutputChars；不会静默裁剪身份。需要更多已知引用时，在同一有效 symbolLocation 上按需提高 limit 或 maxOutputChars，例如 `wincode_find_references({symbolName: selected.name, symbolLocation: selected.location, limit: 120, maxOutputChars: 32768})`。这不是分页，不扩大项目、生成代码或动态调用覆盖。
+
+输出预算只作用于引用工具的最终回复。影响分析的 `referencesCount` 继续表示参与内部聚合的返回条数，`totalReferences` 和 `referencesTruncated` 保留其引用查询的计数与裁剪情况。未执行引用查询或无法完整计数时总数为 null，未知截断状态为 null；受影响文件/组件仍只来自实际返回引用，UNKNOWN 判定不变。
+
 健康同根 workspace_open 保留 Host/snapshot，不等待业务排空；取消概览确认不会使健康实例进入恢复。已知 SDK 重启要求或清理失败仍遵守诊断手册；另一根在任何重置、缓存、watcher 或 trash 变更前被拒绝，内部 WorkspaceManager 也不能改根。
 
 workspace_open 默认返回项目摘要和最多 8 个入口，整份 JSON 默认不超过 8000 个 UTF-16 字符；不生成目录树或统计全仓大小。检查 projectScanComplete，null 统计不等于零。需要目录时用 wincode_list_directory 指定窄路径，查看 scanComplete/truncated/omissions。includeTree:true 可显式取得有界兼容树，不能当成完整仓库清单。maxOutputChars 为 2048–32768；目录 maxDepth 为 1–5，maxEntries 为 1–500。需要生成目录时显式 includeIgnored:true，但不能越过工作区边界。
@@ -185,6 +191,8 @@ bodyStatusScope 明确该字段描述 displayed-snippet 或 packed-file。symbol
 仅在用户授权移除文件时使用 wincode_safe_move_to_trash({filePath:"相对路径",reason:"原因"})；它会实际移动文件。重构计划本身不执行修改。
 
 trash 响应保留 success/trashPath/message，并用 outcome 区分 completed（移动及元数据完成）、not_moved（本次未移动）、partial（已移动但元数据未完成）。partial 的 errorCode=TRASH_METADATA_FAILED、failureStage=metadata，originalPath/trashPath/metadataPath 给出原位置、实际移动位置及预期元数据位置；metadataPath 不证明元数据完整。立即保留并告知用户实际 trashPath，不把 success=false 当作未执行，不重复移动或自动移回。not_moved 的 trashPath 为空，errorCode=TRASH_NOT_MOVED；先检查 failureStage 和文件实际状态。重启不会自动补写元数据或推断原路径；丢失 partial 响应时，本实现不保证自动恢复原目录映射。
+
+取消/截止检查传递到路径准备和移动前；文件一旦移动，就继续收尾元数据并保留真实 completed/partial 与路径，Gateway 不再用通用超时替换该结果，受理统计仍记录超时或取消。客户端主动取消或断连后不保证收到最终响应，也不代表已经回滚；此版本没有新增事务日志或自动恢复。
 
 回收站目标名含唯一标识，过长的原文件名展示部分会截短，以给元数据文件名预留空间；完整原路径保存在 originalPath 和成功写入的元数据中。恢复时使用这些路径，不从截短的目标名推断原文件名或扩展名。
 

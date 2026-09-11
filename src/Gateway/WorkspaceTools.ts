@@ -133,10 +133,11 @@ export const WORKSPACE_TOOLS = [
       required: ['filePath'],
     },
   }, {
+    preserveOutcomeOnInterruption: true,
     invalidArguments: message => jsonResult(invalidTrashResult(message), true, true),
     validate: (args, { router }) => validateTrashPath(args.filePath, router.config.workspaceRoot, router.config.trashDir),
-    execute: async (args, { router }) => {
-      const result = await router.moveToTrash(args.filePath, args.reason);
+    execute: async (args, { router, signal }) => {
+      const result = await router.moveToTrash(args.filePath, args.reason, signal);
       return jsonResult(result, true, !result.success);
     },
   }),

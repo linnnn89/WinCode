@@ -104,7 +104,7 @@ sequenceDiagram
 
 **有界受理和实际执行分开。** 每实例最多 32 个未完成业务请求（含 workspace_open），hello/tools/list 共享 4 个轻量槽。既有 Roslyn/UI/恢复互斥决定 FIFO 等待；其他已有并行能力继续并行。满额在执行前返回 SERVER_BUSY，不驱逐先来者或自动重放。恢复占用业务容量，但不计入它自己等待排空的 inFlight；关闭和手动释放同时考虑未完成受理与实际清理。
 
-原始参数含未知字段，在归一化前按 UTF-8 JSON 限制为 64 KiB。外层预算包含排队，Router/Adapter 使用剩余 deadline。Router 与准入租约使用同一截止时复用计时器；独立更短的预算保留自己的计时器，异常路径按实际操作上下文保留 REQUEST_TIMEOUT。MCP 在工具执行返回后再次检查截止，不返回已过期的成功结果；租约收尾同时读取实际失败和取消原因，使同步截止检查或更短的适配器预算也计入 timedOut，实际清理完成后才归还容量。health.admission 给出计数和等待/执行耗时；hello 仅读取缓存磁盘观察，诊断才刷新统计。这些限制不能消除 SDK 解析帧的瞬时内存，也不提供挂起 OS I/O 的强制终止保证。
+原始参数含未知字段，在归一化前按 UTF-8 JSON 限制为 64 KiB。外层预算包含排队，Router/Adapter 使用剩余 deadline。Router 与准入租约使用同一截止时复用计时器；独立更短的预算保留自己的计时器，异常路径按实际操作上下文保留 REQUEST_TIMEOUT。MCP 在工具执行返回后再次检查截止，只读工具不返回已过期的成功结果；回收站工具保留已确定的 completed/partial 及实际路径，移动前仍检查取消，移动后完成元数据收尾。租约收尾同时读取实际失败和取消原因，使同步截止检查或更短的适配器预算也计入 timedOut，实际清理完成后才归还容量。客户端取消/断连仍不保证最终响应送达，也不表示副作用回滚。health.admission 给出计数和等待/执行耗时；hello 仅读取缓存磁盘观察，诊断才刷新统计。这些限制不能消除 SDK 解析帧的瞬时内存，也不提供挂起 OS I/O 的强制终止保证。
 
 ## 3. 代码证据的数据流
 
@@ -143,9 +143,13 @@ flowchart LR
 
 0.13.0 退役外部 Serena 配置、连接及旧 source；local-text 与 roslyn 均不能仅凭来源证明完整性。ImpactAnalyzer 对身份不唯一或查询不完整保留 UNKNOWN；零引用不构成可安全删除的证明。
 
+公开引用接口可在 symbolLocation 上指定 Roslyn `limit`（1–1000，默认 100），复用 Host 原有限制，不提供分页。影响报告的 `referencesCount` 为实际聚合条数，`totalReferences` 为查询范围内已知总数（未知为 null），`referencesTruncated` 表示引用返回是否被裁剪（未知为 null）。这些字段不把局部引用扩展成全仓覆盖，也不改变 UNKNOWN 规则。
+
 ### 3.3 输出预算位于最后一公里
 
 普通代码导航由 CodeNavigation 复用 LocalTextScanner：字面量搜索在排他目录/文件范围内进行，文件概览读取实际行数、字节数及文本声明，均返回 prepare_context 续读请求。路径范围先整体校验，实际读取再检查真实路径；扫描预算与最终 JSON 预算分别生效。LocalTextScanner 保留具名文件问题和省略计数，不把词法不确定性隐藏成完整结果。导航不启动语义 Host，也不改变所配置的提供方。
+
+引用工具由 ReferenceResponse 对最终格式化 JSON 执行 `maxOutputChars` 预算（默认 8000，范围 2048–32768，UTF-16 字符），包含缩进、转义和元数据；与 Roslyn 条数 limit 同时生效。按完整条目裁剪引用、候选和文件问题，返回 `returnedReferences`、`outputOmissions` 和实际预算，保留已知总数及精确身份；输出省略时标记 truncated/queryComplete，必要元数据超预算则明确返回 OUTPUT_BUDGET_EXCEEDED。裁剪不修改原始查询对象，因此不会缩小影响分析内部采用的引用集合，也不约束 Host 查找阶段的计算量。
 
 `maxTokens` 当前按 UTF-16 字符数 / 4 估算，最终 MCP 文本块的 JSON 转义、元数据及 legacy 附加文本共同占预算。它不是模型 tokenizer 的精确结果。
 

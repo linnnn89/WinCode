@@ -239,9 +239,10 @@ export class ToolRouter {
   }
 
   /** 精确位置只属于 Roslyn；旧提供方收到该字段必须明确拒绝，不能忽略后再猜符号。 */
-  findCodeReferences(symbolName: string, relativePath?: string, signal?: AbortSignal, location?: SymbolLocation) {
+  findCodeReferences(symbolName: string, relativePath?: string, signal?: AbortSignal, location?: SymbolLocation, limit?: number) {
+    if (limit !== undefined && !location) throw new CodeQueryError('INVALID_ARGUMENT', 'limit requires a Roslyn symbolLocation.');
     if (location && !this.roslyn) throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'Semantic analysis is not configured; local text search cannot accept a Roslyn symbolLocation.');
-    return this.runCode(signal, operation => this.roslyn ? this.roslyn.findReferencesDetailed(symbolName, relativePath, operation, location) :
+    return this.runCode(signal, operation => this.roslyn ? this.roslyn.findReferencesDetailed(symbolName, relativePath, operation, location, limit) :
       this.text.findReferencesDetailed(symbolName, relativePath, operation));
   }
 
@@ -284,8 +285,8 @@ export class ToolRouter {
     return this.runCode(signal, operation => this.refactor.planRefactoring(target, goal, operation, location));
   }
 
-  moveToTrash(filePath: string, reason?: string) {
-    return this.workspace.moveToTrash(filePath, reason);
+  moveToTrash(filePath: string, reason?: string, signal?: AbortSignal) {
+    return this.workspace.moveToTrash(filePath, reason, this.admission.operation(signal) ?? { signal });
   }
 
   listDirectory(options: WorkspaceDirectoryOptions = {}, signal?: AbortSignal) {

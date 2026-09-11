@@ -2,6 +2,9 @@
 
 ## 0.15.0 (unreleased)
 
+- Preserve completed/partial trash outcomes and actual file locations when the request deadline expires during metadata finalization. Propagate cancellation before the move and keep interruption accounting; client cancellation or disconnection still does not guarantee delivery of a final response.
+- Add optional Roslyn reference `limit` (1–1000, default 100, requires `symbolLocation`). Impact reports retain `totalReferences` and `referencesTruncated` alongside the existing returned `referencesCount`; unknown totals remain null and semantic risk/coverage rules stay unchanged.
+- Bound reference-tool replies by final formatted JSON size with `maxOutputChars` (2048–32768, default 8000). Preserve known totals and exact identities, report returned counts and omitted lists, and reject budgets that cannot hold required metadata. The output limit covers both providers and does not bound Roslyn search work or change internal impact aggregation.
 - Add bounded literal text search and file outlines with executable source follow-ups, exclusive/deduplicated scopes and file-level lexical/scan diagnostics. Retain local-text evidence boundaries and existing filesystem/cancellation/byte limits.
 - Add final-output context summaries and observed EOF correction requests without claiming the original range was covered. File-head excerpts now support bounded continuation as well as symbol excerpts.
 - Return an independent STDIO launch recipe on WORKSPACE_MISMATCH and via `--print-connection --workspace <absolute-path>`, without registration, project startup or rebinding. Add opt-in compact UI responses with unchanged snapshot IDs/images, shared C# candidates and live-control expansion requests; default full output remains compatible.

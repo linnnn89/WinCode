@@ -181,10 +181,10 @@ The 2026-09-08 check of the current Codex connection against TavernDesk source p
 | `wincode_analyze_workspace` | Parse solution structure and declared `.sln`/`.csproj` project references. |
 | `wincode_prepare_context` | Return code excerpts with file paths and line ranges within a character-based output limit. |
 | `wincode_find_code_symbol` | Search symbols and report the provider and completeness of the results. |
-| `wincode_find_references` | Find references using a returned symbol location; report ambiguous or incomplete results and provider limitations. |
+| `wincode_find_references` | Find references using a returned symbol location; optional Roslyn `limit` is 1–1000 (default 100, requires `symbolLocation`). Both providers accept `maxOutputChars` (2048–32768, default 8000) for the final JSON text. Preserve known totals and report returned counts, truncation and output omissions. |
 | `analyze_change_impact` | Estimate which code a change may affect. Return `riskLevel: "UNKNOWN"` and `confidence: "UNCERTAIN"` for ambiguous symbols, incomplete results or no references. |
 | `wincode_plan_refactoring` | Suggest pre-edit checks and verification steps based on change impact. |
-| `wincode_safe_move_to_trash` | Validate paths, move files to `trash/` and record metadata. |
+| `wincode_safe_move_to_trash` | Validate paths, move files to `trash/` and record metadata. Cancellation before the move stops it; finalization preserves the actual completed/partial outcome even after a deadline. |
 | `wincode_ui_list_windows` | Enumerate visible top-level windows with title/process filters and count limits. |
 | `wincode_ui_inspect` | Inspect UI control subtrees, interactive states, and optional numbered screenshots. |
 | `wincode_ui_review` | Return explicit XAML/C# source candidates, lines, hashes and scoped next requests from one UI snapshot. |
@@ -436,10 +436,10 @@ Skill 安装和客户端配置方法见 [Skill 与 MCP 配置指南](WinCode-Ski
 | `wincode_analyze_workspace` | 解析解决方案结构及 `.sln`/`.csproj` 中声明的项目引用。 |
 | `wincode_prepare_context` | 按文件、符号或行号读取代码片段，返回文件路径和行号，并限制输出字符数。 |
 | `wincode_find_code_symbol` | 检索代码符号，说明结果来自哪个分析服务，以及查询是否完整。 |
-| `wincode_find_references` | 使用返回的符号位置查找引用，报告匹配不唯一、查询不完整或分析服务能力受限的情况。 |
+| `wincode_find_references` | 使用返回的符号位置查找引用；Roslyn 可选 `limit` 为 1–1000，默认 100，必须同时提供 `symbolLocation`。两种提供方均支持最终 JSON 字符预算 `maxOutputChars`（2048–32768，默认 8000），保留已知总数，报告实际返回数、截断状态和输出省略项。 |
 | `analyze_change_impact` | 评估代码改动可能影响的范围。符号不唯一、查询不完整或未找到引用时，返回 `riskLevel: "UNKNOWN"` 和 `confidence: "UNCERTAIN"`。 |
 | `wincode_plan_refactoring` | 根据改动影响，建议修改前需要检查的内容和修改后的验证步骤。 |
-| `wincode_safe_move_to_trash` | 校验路径后将文件移入 `trash/`，并记录元数据。 |
+| `wincode_safe_move_to_trash` | 校验路径后移入 `trash/` 并记录元数据；移动前取消会停止操作，移动后的收尾即使超时也保留实际 completed/partial 结果。 |
 | `wincode_ui_list_windows` | 列出可见顶层窗口，支持按标题或进程名筛选，并限制返回数量。 |
 | `wincode_ui_inspect` | 读取控件子树、状态和可选的编号截图。 |
 | `wincode_ui_review` | 根据一次 UI 检查结果，返回可能相关的 XAML/C# 代码、行号、哈希及后续读取参数。 |

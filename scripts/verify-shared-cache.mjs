@@ -100,25 +100,30 @@ try {
     assert.equal((await context(a)).fromCache, true); assert.equal((await context(a2)).fromCache, true);
     return { requests: values.length, ...await audit() };
   });
-  const originalAttachment = await backingFor('A_CURRENT_0');
   await scenario('different keys share the cache during concurrent reads and writes', async () => {
     await Promise.all(Array.from({ length: 8 }, (_, i) => context(i % 2 ? a : a2, i + 1)));
     return { requests: 8, ...await audit() };
   });
   await scenario('peer capacity eviction expires old attachments and subsequent context rebuilds', async () => {
+    // Same-key writers may retain different valid attachments. Seed an untouched key
+    // through A alone so the disk eviction target is the attachment A actually uses.
+    const target = 31, marker = `A_CURRENT_${target}`;
+    const initial = await context(a, target), originalAttachment = await backingFor(marker);
+    assert.equal(initial.fromCache, false);
+    assert.ok(initial.content.includes(originalAttachment), 'the eviction target must belong to the observed reader');
     let misses = 0;
     for (let index = 9; index < 29; index++) {
-      const [, value] = await Promise.all([context(a2, index), context(a)]);
+      const [, value] = await Promise.all([context(a2, index), context(a, target)]);
       if (!value.fromCache) misses++;
     }
     assert.equal(await exists(originalAttachment), false, 'peer automatic pruning must actually remove the original attachment');
-    if (!(await context(a)).fromCache) misses++;
+    if (!(await context(a, target)).fromCache) misses++;
     assert.ok(misses > 0, 'evicted backing content must cause a rebuild');
     // A peer can evict the disk index while this Gateway retains a valid warm entry.
     for (const { file, entry } of await records())
-      if (entry.data?.content?.includes('A_CURRENT_0')) await fs.unlink(file);
-    assert.equal((await context(a)).fromCache, true, 'valid warm reads do not require a retained disk index');
-    return { peerWrites: 20, observedRebuilds: misses, originalAttachmentEvicted: true, warmReadAfterIndexEviction: true, ...await audit() };
+      if (entry.data?.content?.includes(marker)) await fs.unlink(file);
+    assert.equal((await context(a, target)).fromCache, true, 'valid warm reads do not require a retained disk index');
+    return { peerWrites: 20, attachmentOwner: a.name, observedRebuilds: misses, originalAttachmentEvicted: true, warmReadAfterIndexEviction: true, ...await audit() };
   });
   await scenario('both warm Gateways reject same-size corrupted backing content', async () => {
     await context(a, 29); await context(a2, 29);

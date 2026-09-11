@@ -77,7 +77,7 @@ export async function listDirectory(root: string, options: WorkspaceDirectoryOpt
     if (incomplete) { result.scanComplete = false; result.truncated = true; }
   };
   // An explicit path is a browsing request, including a source subtree inside work/.
-  // includeIgnored controls filtering of child directories, not access to that path.
+  // includeIgnored controls child filtering, not access to that path.
   const queue = [{ full, depth: 0 }];
   while (queue.length && result.visitedEntries < maxEntries) {
     checkOperation(operation);
@@ -96,6 +96,10 @@ export async function listDirectory(root: string, options: WorkspaceDirectoryOpt
         const rel = relative(entryFull);
         if (entry.isSymbolicLink()) { omit(rel, 'link-not-followed'); continue; }
         if (!entry.isDirectory() && !entry.isFile()) { omit(rel, 'unsupported-entry'); continue; }
+        // Linked worktrees store their Git metadata pointer in a file, not a directory.
+        if (entry.name === '.git' && entry.isFile() && !result.limits.includeIgnored) {
+          omit(rel, 'default-ignore', false); continue;
+        }
         if (entry.isDirectory() && !result.limits.includeIgnored) {
           const reason = await previewOmission(entryFull);
           if (reason) { omit(rel, reason, false); continue; }

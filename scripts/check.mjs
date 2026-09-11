@@ -72,7 +72,7 @@ if (inventoryOnly) {
       await node('regression', [tsx, '--test', ...testReporters(directory, 'regression'), ...groups.test]);
       const stdio = JSON.parse(await node('stdio', [tsx, 'scripts/test-mcp-client.ts']));
       report.runtime = { build: stdio.runtime?.build, schemaHash: stdio.schemaHash, toolCount: stdio.toolCount,
-        resourceCleanup: stdio.resourceCleanup, codexConnectionVerified: false };
+        trayEndpoint: stdio.trayEndpoint, resourceCleanup: stdio.resourceCleanup, codexConnectionVerified: false };
       await node('delivery-manifest', ['scripts/delivery-manifest.mjs']);
       report.delivery = JSON.parse(await node('verify-delivery', ['scripts/delivery-manifest.mjs', '--verify']));
     }

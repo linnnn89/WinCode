@@ -81,8 +81,11 @@ export async function fixture(root, sdk, name, type = name) {
     await write('MainWindow.xaml.cs', 'namespace Probe; public partial class MainWindow : System.Windows.Window { public MainWindow() { InitializeComponent(); } private void HandleSave(object sender, System.Windows.RoutedEventArgs e) { Api.Save(1); } }');
   } else {
     if (type === 'custom') await write('Directory.Build.props', '<Project><PropertyGroup><BaseIntermediateOutputPath>artifacts/obj/</BaseIntermediateOutputPath><IntermediateOutputPath>artifacts/int/$(Configuration)/$(TargetFramework)/</IntermediateOutputPath></PropertyGroup></Project>');
-    await write(project, `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>${props}</PropertyGroup></Project>`);
-    await write('Api.cs', api); await write('Use.cs', use);
+    await write(project, `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>${type === 'multi'
+      ? props.replace('<TargetFramework>net10.0</TargetFramework>', '<TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>') : props}</PropertyGroup>${type === 'multi'
+      ? '<PropertyGroup Condition="\'$(TargetFramework)\' == \'net10.0-windows\'"><DefineConstants>$(DefineConstants);SECOND_FRAMEWORK</DefineConstants></PropertyGroup>' : ''}</Project>`);
+    await write('Api.cs', api); await write('Use.cs', type === 'multi'
+      ? 'namespace Probe; public class Use { public void Run() { Api.Save(1);\n#if SECOND_FRAMEWORK\nApi.Save(2);\n#endif\n} }' : use);
   }
   const restore = runDotnet(sdk, ['restore', path.join(directory, project), '--configfile', path.join(root, 'NuGet.Config'), '--nologo'], root, 30000);
   if (type === 'graph') runDotnet(sdk, ['restore', path.join(directory, 'Peer/Peer.csproj'), '--configfile', path.join(root, 'NuGet.Config'), '--nologo'], root, 30000);
@@ -95,7 +98,7 @@ export async function fixture(root, sdk, name, type = name) {
 export async function installBlocker(project) {
   const directory = path.join(project.root, '.cache/n4-blockers'); await fs.mkdir(directory, { recursive: true });
   const script = path.join(directory, 'block.mjs');
-  await fs.writeFile(script, "import fs from 'node:fs'; import path from 'node:path'; const id=process.env.WINCODE_N4_INSTANCE; const root=process.argv[2]; fs.writeFileSync(path.join(root,id+'.json'),JSON.stringify({pid:process.pid,parent:process.ppid})); const timer=setInterval(()=>{if(fs.existsSync(path.join(root,id+'.release'))){clearInterval(timer);process.exit(0)}},20);\n");
+  await fs.writeFile(script, "import fs from 'node:fs'; import path from 'node:path'; const id=process.env.WINCODE_BUILD_INSTANCE ?? process.env.WINCODE_N4_INSTANCE; if(!/^[a-f0-9]{32}$/.test(id)) throw new Error('Missing Host identity'); const root=process.argv[2]; fs.writeFileSync(path.join(root,id+'.json'),JSON.stringify({pid:process.pid,parent:process.ppid})); const timer=setInterval(()=>{if(fs.existsSync(path.join(root,id+'.release'))){clearInterval(timer);process.exit(0)}},20);\n");
   const escape = value => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
   const target = `<Target Name="WinCodeComparisonBlock" BeforeTargets="GenerateMSBuildEditorConfigFileCore" Condition="('$(DesignTimeBuild)' == 'true' and '$(WINCODE_N4_BLOCK)' == '1') or '$(WINCODE_N4_EXTERNAL_HOLD)' == '1'"><Exec Command="${escape(`"${process.execPath}" "${script}" "${directory}"`)}" /></Target>`;
   const file = path.join(project.root, project.project);

@@ -122,7 +122,9 @@ export class ToolRouter {
     const budget = (this.roslyn?.operationBudgetMs ?? 0) + this.config.timeouts.fileScanMs;
     const admitted = this.admission.operation(signal);
     const operation = { signal: controller.signal, deadline: Math.min(Date.now() + budget, admitted?.deadline ?? Infinity), queue: admitted?.queue };
-    const timer = setTimeout(() => controller.abort(new TimeoutError('operation', budget)), Math.max(1, operation.deadline - Date.now()));
+    // The lease already owns a shared deadline; a second timer can win with an unclassified inner abort.
+    const timer = admitted && operation.deadline === admitted.deadline ? undefined :
+      setTimeout(() => controller.abort(new TimeoutError('operation', budget)), Math.max(1, operation.deadline - Date.now()));
     this.codeOperations.add(controller);
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted || this.shuttingDown) cancel();
@@ -134,6 +136,8 @@ export class ToolRouter {
           phase: 'roslyn-cleanup', message: error.message.slice(0, 1024), recoveryAction: 'restart_gateway' };
         throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
       }
+      // Preserve a shorter operation deadline even when an adapter mutex wraps its abort reason.
+      checkOperation(operation);
       throw error;
     }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); this.codeOperations.delete(controller); }

@@ -1,6 +1,7 @@
 using Microsoft.Build.Evaluation;
 using Microsoft.Build.Construction;
 using Microsoft.Build.Globbing;
+using Microsoft.Build.Exceptions;
 using System.Text;
 using System.Xml.Linq;
 
@@ -10,11 +11,12 @@ internal sealed class DesignTimeBuild
     private readonly List<(string Path, bool CustomCompile, IMSBuildGlob[] Globs, HashSet<string> Explicit)> outputs = [];
     internal readonly List<string> PrivateDirectories = [];
     internal string Hook { get; private set; } = "";
+    private string intermediateOutputPath = "";
     internal static DesignTimeBuild? Current;
     internal static Dictionary<string, string> Properties(string configuration, string framework) => new() {
         ["Configuration"] = configuration, ["TargetFramework"] = framework,
         ["RunAnalyzers"] = "false", ["RunAnalyzersDuringBuild"] = "false",
-        ["IntermediateOutputPath"] = $".cache/wincode-msbuild/{OwnedBuildOutputs.Instance}/{configuration}/{framework}/",
+        ["IntermediateOutputPath"] = Current!.intermediateOutputPath,
         ["CustomBeforeMicrosoftCommonTargets"] = Current!.Hook
     };
     internal static bool IsCandidate(string file)
@@ -32,9 +34,12 @@ internal sealed class DesignTimeBuild
 
     internal static DesignTimeBuild Prepare(string root, string projectPath, string configuration, string framework, string identity, CancellationToken token)
     {
-        if (configuration.IndexOfAny(['/', '\\', ':', ';']) >= 0 || framework.IndexOfAny(['/', '\\', ':', ';']) >= 0)
-            throw new ArgumentException("Configuration and framework must be literal path segments.");
-        var result = new DesignTimeBuild();
+        foreach (var segment in new[] { configuration, framework })
+            if (string.IsNullOrWhiteSpace(segment) || segment.Length > 128 || segment.EndsWith('.') || char.IsWhiteSpace(segment[^1]) ||
+                segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || segment.IndexOfAny(['/', '\\', ':', ';', '$', '%', '@']) >= 0)
+                throw new ArgumentException("Configuration and TargetFramework must be literal directory names.");
+        if (!Guid.TryParseExact(identity, "N", out _)) throw new ArgumentException("Invalid build output identity.");
+        var result = new DesignTimeBuild { intermediateOutputPath = $".cache/wincode-msbuild/{identity}/{configuration}/{framework}/" };
         var xml = new XElement("Project");
         using var collection = new ProjectCollection(new Dictionary<string, string> {
             ["Configuration"] = configuration, ["TargetFramework"] = framework,
@@ -47,8 +52,15 @@ internal sealed class DesignTimeBuild
             token.ThrowIfCancellationRequested(); path = WorkspaceInputs.Inside(root, path);
             if (!seen.Add(path)) continue;
             if (seen.Count > 64) throw new HostFailure("INPUT_BUDGET_EXCEEDED", "More than 64 project layouts.");
-            var project = collection.LoadProject(path);
+            Project project;
+            try { project = collection.LoadProject(path); }
+            catch (InvalidProjectFileException error) { throw new HostFailure("PROJECT_LOAD_FAILED", error.Message); }
             var directory = Path.GetDirectoryName(path)!;
+            var privateDirectory = WorkspaceInputs.Inside(root, Path.Combine(directory, ".cache/wincode-msbuild", identity));
+            var actualOutput = WorkspaceInputs.Inside(root, Path.GetFullPath(result.intermediateOutputPath, directory));
+            var relativeOutput = Path.GetRelativePath(privateDirectory, actualOutput);
+            if (relativeOutput is "." or ".." || relativeOutput.StartsWith(".." + Path.DirectorySeparatorChar) || Path.IsPathRooted(relativeOutput))
+                throw new HostFailure("INVALID_ARGUMENT", "Design-time output escaped its Host namespace.");
             var intermediate = WorkspaceInputs.Inside(root, Path.GetFullPath(project.GetPropertyValue("IntermediateOutputPath"), directory));
             if (string.Equals(intermediate, directory, StringComparison.OrdinalIgnoreCase))
                 throw new HostFailure("INVALID_ARGUMENT", "Intermediate output cannot be the project directory.");
@@ -70,7 +82,7 @@ internal sealed class DesignTimeBuild
                     new XAttribute("Condition", condition + $" And Exists('{ProjectCollection.Escape(originalHook)}')")));
             xml.Add(new XElement("PropertyGroup", new XAttribute("Condition", condition),
                 new XElement("DefaultItemExcludes", "$(DefaultItemExcludes);" + ProjectCollection.Escape(intermediate.Replace('\\', '/')) + "/**")));
-            result.PrivateDirectories.Add(WorkspaceInputs.Inside(root, Path.Combine(directory, ".cache/wincode-msbuild", identity)));
+            result.PrivateDirectories.Add(privateDirectory);
             foreach (var reference in project.GetItems("ProjectReference")) pending.Push(Path.GetFullPath(reference.EvaluatedInclude, directory));
         }
         var storage = WorkspaceInputs.Inside(root, Path.Combine(root, ".cache/wincode-build", identity));

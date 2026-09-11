@@ -90,6 +90,16 @@ try {
   assert.equal(denied.status, 1);
   assert.match(denied.stdout, /Explicit project evaluation permission required/);
   report.scenarios.push('missing evaluation permission rejected before load');
+  for (const field of [4, 5]) for (const value of ['.', '..', 'Debug.', 'Debug ', 'x;y', '$(Configuration)', '%2e%2e', '@(Compile)']) {
+    const invalidArgs = [...args]; invalidArgs[field] = value;
+    const rejected = spawnSync(dotnet, invalidArgs, { cwd: repo, env, input: '', encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    assert.equal(rejected.error, undefined);
+    assert.equal(rejected.status, 1, `${field}: ${value}`);
+    assert.equal(JSON.parse(rejected.stdout.trim()).errorCode, 'INVALID_ARGUMENT');
+    for (const directory of [root, path.join(root, 'App'), path.join(root, 'Lib')])
+      await assert.rejects(fs.stat(path.join(directory, '.cache')), { code: 'ENOENT' });
+  }
+  report.scenarios.push('nonliteral configuration and framework segments are rejected without private output side effects');
   for (const [label, inputs, errorCode] of [
     ['outside additional input', ['../outside.yaml'], 'OUTSIDE_WORKSPACE'],
     ['wildcard additional input', ['*.yaml'], 'INVALID_ARGUMENT'],

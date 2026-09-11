@@ -59,6 +59,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:manual-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify concurrent loading, output ownership and shared caches
+        if: matrix.node == '22'
+        run: |
+          node scripts/verify-multi-agent.mjs --roslyn-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/verify-design-time-concurrency.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/verify-shared-cache.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Preserve check reports and stage logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -73,5 +82,8 @@ jobs:
             test-tmp/roslyn-gateway/**/report.json
             test-tmp/owner-death/**/report.json
             test-tmp/manual-release/**/report.json
+            test-tmp/multi-agent/**/report.json
+            test-tmp/design-time-production/**/report.json
+            test-tmp/shared-cache/**/report.json
           if-no-files-found: warn
           retention-days: 7

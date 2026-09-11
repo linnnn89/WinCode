@@ -60,6 +60,7 @@ export class WinCodeMcpServer {
       }
       let acquired = false;
       let lease: RequestLease | undefined;
+      let failure: unknown;
       try {
         if (definition.workspaceControl) this.router.assertWorkspace(args.path as string);
         const lane = definition.requestLane ?? 'business';
@@ -73,8 +74,11 @@ export class WinCodeMcpServer {
         }
         checkOperation(lease.operation);
         lease.workStarted = true;
-        return await definition.execute(args, context);
+        const result = await definition.execute(args, context);
+        checkOperation(lease.operation);
+        return result;
       } catch (error) {
+        failure = error;
         if (error instanceof ServerBusyError) return toolErrorResult('SERVER_BUSY', error.message, 'retry_later',
           { workStarted: false, retryable: true, lane: error.lane, admission: error.admission });
         if (error instanceof WorkspaceMismatchError)
@@ -97,7 +101,7 @@ export class WinCodeMcpServer {
           recovery?.recoveryAction ?? (this.router.isShuttingDown ? 'restart_gateway' : 'inspect_error'), details);
       } finally {
         if (acquired) this.router.endRequest();
-        lease?.release();
+        lease?.release(failure);
       }
     });
   }

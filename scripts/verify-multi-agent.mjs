@@ -11,6 +11,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { resolveDotnet, runDotnet } from './lib/dotnet.mjs';
+import { verifyDelivery } from './delivery-manifest.mjs';
 import { ownedProcesses, observedSurvivors, terminateObserved } from './lib/owned-processes.mjs';
 
 const repo = path.resolve(import.meta.dirname, '..');
@@ -25,7 +26,10 @@ const report = { root, success: false, scenarios: [], findings: [], timings: [],
     'Generated small projects and bounded bursts; no unlimited-load, long-term leak, concurrent source editing or native UI automation proof.'] };
 const clients = [];
 let auxiliaryTray;
+const roslynOnly = process.argv.includes('--roslyn-only');
 report.mode = process.argv.includes('--boundaries-only') ? 'boundaries-only' : 'full';
+assert.ok(!roslynOnly || report.mode === 'full', '--roslyn-only cannot be combined with --boundaries-only');
+if (roslynOnly) report.limitations.push('Native Tray capacity is excluded; its dedicated acceptance remains separate.');
 const serialSameRoot = process.argv.includes('--serialize-same-root-startup');
 report.startupMode = serialSameRoot ? 'different roots parallel; second same-root host starts afterward' : 'all three hosts parallel';
 if (serialSameRoot) report.limitations.push('Same-project parallel cold startup is excluded in this mode: run-zJc2aM observed an MSBuild obj/editorconfig write collision. This run cannot close that N4 finding.');
@@ -73,6 +77,7 @@ async function scenario(name, work) {
   await fs.writeFile(path.join(root, 'progress.json'), JSON.stringify(report, null, 2));
 }
 try {
+  report.delivery = await verifyDelivery(repo, JSON.parse(await fs.readFile(path.join(repo, 'dist/delivery-manifest.json'), 'utf8')));
   if (report.mode === 'full') {
   const host = path.join(repo, 'tools/WinCode.Code.Host/bin/Release/net10.0/publish/WinCode.Code.Host.dll');
   for (const tag of ['A', 'B']) {
@@ -223,7 +228,7 @@ try {
       return { layer: 'installed SDK transport with in-memory streams', submittedBytes: 161 * chunk.length, closed, errors };
     } finally { await transport.close(); input.destroy(); output.destroy(); }
   });
-  await scenario('native Tray accepts eight registrations, rejects the ninth, and recovers a freed slot', async () => {
+  if (!roslynOnly) await scenario('native Tray accepts eight registrations, rejects the ninth, and recovers a freed slot', async () => {
     const folder = path.join(root, 'tray-capacity'); await fs.mkdir(folder);
     const tray = spawn(path.join(repo, 'tools/WinCode.Tray/bin/Release/net10.0-windows/win-x64/publish/WinCode.Tray.exe'), ['--workflow-test', folder],
       { cwd: repo, env: sdk.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });

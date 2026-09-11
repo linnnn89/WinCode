@@ -26,7 +26,7 @@ export class RequestLease {
   private readonly timer: ReturnType<typeof setTimeout>;
 
   constructor(readonly lane: RequestLane, parent: AbortSignal, budgetMs: number,
-    private readonly finish: (lease: RequestLease, waitMs: number, elapsedMs: number) => void) {
+    private readonly finish: (lease: RequestLease, waitMs: number, elapsedMs: number, error?: unknown) => void) {
     const timeout = new AbortController();
     this.signal = AbortSignal.any([parent, timeout.signal]);
     this.deadline = Date.now() + budgetMs;
@@ -46,12 +46,12 @@ export class RequestLease {
       if (--this.waits === 0) this.waitedMs += performance.now() - this.waitingAt;
     };
   }
-  release(): void {
+  release(error?: unknown): void {
     if (this.released) return;
     if (this.waits) this.waitedMs += performance.now() - this.waitingAt;
     this.released = true;
     clearTimeout(this.timer);
-    this.finish(this, this.waitedMs, performance.now() - this.startedAt);
+    this.finish(this, this.waitedMs, performance.now() - this.startedAt, error);
   }
 }
 
@@ -81,12 +81,13 @@ export class RequestAdmission {
       this.totals[lane].rejected++;
       throw new ServerBusyError(lane, this.snapshot());
     }
-    const lease = new RequestLease(lane, parent, budgetMs, (finished, waitMs, elapsedMs) => {
+    const lease = new RequestLease(lane, parent, budgetMs, (finished, waitMs, elapsedMs, error) => {
       this.leases.delete(finished); this.bySignal.delete(finished.signal);
       const total = this.totals[lane];
       total.completed++; total.waitMs += waitMs; total.executionMs += Math.max(0, elapsedMs - waitMs);
       total.maxWaitMs = Math.max(total.maxWaitMs, waitMs);
-      if (finished.signal.reason instanceof TimeoutError) total.timedOut++;
+      // A deadline check or shorter adapter budget may fail before the lease timer runs.
+      if (error instanceof TimeoutError || finished.signal.reason instanceof TimeoutError) total.timedOut++;
       else if (finished.signal.aborted) total.cancelled++;
     });
     this.leases.add(lease); this.bySignal.set(lease.signal, lease);

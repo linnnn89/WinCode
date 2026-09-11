@@ -1109,3 +1109,163 @@
 - 明日首先处理两个明确的验证入口问题：旧 buildPrototype 文本锚点已不匹配正式接入后的 WorkspaceSession；原型 WINCODE_N4_INSTANCE 与正式 WINCODE_BUILD_INSTANCE 必须统一到被测 Host 的真实 UUID，避免 blocker/产物清理检查错位。不得把当前源码作为原实现基线。然后正式构建，并按 [2026-09-11 恢复顺序](../WinCode-下一轮工程化迭代计划书.md#2026-09-11-恢复顺序)完成并发、输入、生命周期与交付验收。
 - 反证自审保留：原型通过不代表最后两个源码修订正确；动态 ProjectReference、多目标框架、自定义 Compile 仍需检查保守失效行为；Gateway 与 Host 同时硬退出或断电后的孤儿目录未实现自动回收。尚未独立审查、Node 22 验证或当前 PR CI 验证。Codex 继续单列待验，先不动 agy CLI，没有再次更改客户端或权限策略。
 - 同步 README、CHANGELOG、架构说明、路线图和计划的当前状态，保留历史失败日志。test-tmp 原始回执仅保留本机、受 Git 忽略，不上传原始模型配置、日志或运行产物；远端 PR 提供结果摘要及可继续执行的待办。当前进度按用户明确授权提交并推送为草稿 PR，等待明日继续。
+
+## 2026-09-11 08:47 — PR #37 本地续作：错误契约修复与私有输出生产验收（北京时间）
+
+- 授权与范围：用户先要求下载昨晚 PR 的进度、与本地对齐并分析计划缺口，随后明确“继续开展工作”。在 `D:/CODEX PROJECT/WinCode MCP` 对齐 `codex/runtime-baseline-and-cleanup` 的 `aa6fc7f457f5a18b122fd791aec2824ed121195d` 后继续本地修复及验证；原 `codex/architecture-boundaries` 分支保留。本轮没有提交、推送、修改 PR 状态、合并或发布，没有安装新依赖、调用模型或改动真实客户端/已安装 Skill/agy CLI。PR #37 实际为 open、draft=false；昨晚“草稿”描述的是 WIP 检查点，不是 GitHub draft 状态。
+- 证据对齐：通过 GitHub 连接器读取 [PR #37](https://github.com/linnnn89/WinCode/pull/37) 和 [CI run 34489311570](https://github.com/linnnn89/WinCode/actions/runs/34489311570)。Node 22 核心为 422 项、421 通过/1 条件跳过，构建已完成；真实 Host 在 39 个已完成场景后因损坏项目重载预期 `PROJECT_LOAD_FAILED`、实际 `QUERY_FAILED` 而失败，后续同一步网关/owner-death/释放未执行。Node 24 构建与核心通过。CI 合成 merge 的 tree 与 PR aa6fc7f 相同，这些是原 PR 的证据，不是本轮未推送增量的远端结果。下载的受控 CI JSON 保留在 `test-tmp/pr37-audit-20260911`。昨晚四份修订原型 `run-PpetSI/run-LHMyyy/run-ejjK26/run-hJPqME` 及其他历史 test-tmp 未随 Git 下载到本机，历史工作日志不改写。
+- 生产修复：[DesignTimeBuild.cs](../tools/WinCode.Code.Host/DesignTimeBuild.cs) 在实际 `ProjectCollection.LoadProject` 边界将 `InvalidProjectFileException` 映射为 `PROJECT_LOAD_FAILED`，不改变 Program 的 MSBuildLocator 先后顺序。Gateway 与 Native 同时验证 Configuration/TargetFramework 的字面目录段，拒绝点段、尾部点/空白、分隔符、MSBuild 属性/列表/转义字符；私有输出只生成一次并核对规范化后仍在所属 UUID 内。新增缺失/旧 inputPolicy 的拒绝与进程回收测试，错误码保持 `HOST_PROTOCOL_ERROR`，不能持有成功快照。
+- 验证入口：[verify-design-time-concurrency.mjs](../scripts/verify-design-time-concurrency.mjs) 改为当前正式发布 Host 和生产 RoslynHostClient 的验收，不再复制/插桩当前源码作为原基线。运行前后核对 delivery/source 身份，blocker 与 owner.json 使用 client 的实际 `WINCODE_BUILD_INSTANCE`；每个选中场景、编译/引用结果、退出及产物清理分别留证。取消/强杀后由生产关闭逻辑清理，验证脚本不通过手工删除私有目录替代被测回收。完成全部选中场景、非空选择、无失败/交付变化/清理失败/已观测残留才 success=true，否则非零退出。旧原型辅助和 C# 夹具保留作历史材料；正式入口仅接受 `--phase`、`--filter`。
+- [verify-multi-agent.mjs](../scripts/verify-multi-agent.mjs) 增加交付前置核验和 `--roslyn-only`；该选项保留真实 A/B/A 三 Host 同时冷启动、全部 Roslyn/准入/传输验证，只排除原生 Tray 容量项，默认完整模式不变。CI Node 22 已加入该入口及完整私有输出矩阵，失败报告按 always 上传，15 分钟作业预算未提高；本轮未推送或触发 CI。
+
+| 本轮实际验证 | 结果与本地证据 |
+| --- | --- |
+| 核心/类型检查/构建/交付 | [core report](../test-tmp/check/2026-09-11T00-17-41-069Z-core/report.json)：425/425，0 跳过；现有锁定 SDK 10.0.303、Node 24.19.0，包含 Gateway 与三 Native 组件的正式发布和交付核验 |
+| 产物归属及 Roslyn 契约专项 | `test-tmp/n4-production/contracts-after.log`：26/26；目录段测试先在修改前实际失败，`contracts-before.log` 保留 |
+| 真实 Native Host | [fixture-3Rpx5Q](../test-tmp/roslyn-host/fixture-3Rpx5Q/report.json)：59 场景通过，含损坏项目失败/修复链路、原生 16 组非法配置/框架组合在私有目录副作用前拒绝 |
+| 真实 MCP Roslyn Gateway | [run-Rse2Ni](../test-tmp/roslyn-gateway/run-Rse2Ni/report.json)：22 场景通过，含实际 MSBuild 取消/崩溃/超时及恢复 |
+| E4 错误契约 | [run-bWLzfr](../test-tmp/error-contracts/run-bWLzfr/report.json)：17 场景通过 |
+| 真实三个 SDK 客户端 | [run-qwMOna](../test-tmp/multi-agent/run-qwMOna/report.json)：10 场景通过，startupMode=all three hosts parallel，survivors=[]；精确引用 A/B/A=1/2/1，128 请求受理 32、SERVER_BUSY 96，结束占用归零 |
+| 完整私有输出生产矩阵 | [run-1toEyr](../test-tmp/design-time-production/run-1toEyr/report.json)：20/20，228.291 秒；语义 5、并发/退出 5、构建/编辑干扰 6、输入反例 4，productionChanged=false、cleanupFailures=[]、survivors=[] |
+| 验收入口负例 | [run-GkatiK](../test-tmp/design-time-production/run-GkatiK/report.json)：无匹配场景的 filter 实际退出 1，success=false、cases=[]、observed=[]，该失败符合预期 |
+| 手动释放 | [run-TG4ZUS](../test-tmp/manual-release/run-TG4ZUS/report.json)：10 轮通过，已观测残留为空 |
+| Gateway 在加载中死亡 | [run-MayNi6](../test-tmp/owner-death/run-MayNi6/report.json)：9 个已观测进程身份全部退出，survivors=[]、cleanup=[] |
+| RepomixAdapter owner 死亡 | [run-DS7jFN](../test-tmp/owner-death/run-DS7jFN/report.json)：通过，survivors=[]、cleanup=[]；使用受控 Node CLI，不声称真实 Repomix 或完整 Gateway 集成 |
+
+- 矩阵反证：已有自定义 intermediate 先按与 Host 相同的 Configuration/TargetFramework 连续普通构建两次，再检查生产 Host 编译无错误；双 TFM `net10.0/net10.0-windows` 按条件分别得到 1/2 项引用，关闭兄弟后保留原快照。源码编辑使旧定位失效，重载后引用从 1 变为 2，旧定位继续 `SNAPSHOT_STALE`。项目文件中显式引用 App→Lib 改为 App→Peer→Lib 后，先更新生成夹具的 restore 输入，再重载为 3 个项目/2 项引用；新 Peer 输出进入所属清单并随关闭回收。这不是任意 target 动态生成引用的证明。另按报告内容复核 65 份记录的 compilationErrors 均为空。
+- 失败过程保留：`run-Lux8mM` 的输入反例首次返回 `INPUTS_CHANGED`，符合 watcher 事件落在 Capture 期间的既有契约；另一个引用变更场景尚未 restore 更新项目图。修正夹具与断言后要求首次拒绝且不返回证据、紧接着严格 `SNAPSHOT_STALE`，显式重载后引用正确。`run-WDKrAC/run-Y20hsP` 暴露验证脚本遗漏 `runDotnet` 导入，补齐后分别针对性通过，最终由完整 20 项再次覆盖。`run-KuzB7O` 的预构建未显式传入配置/TFM，早期 Directory.Build.props 求值到另一目录；原 MSBuild 求值同样将旧 `.cs` 纳入 Compile。这是夹具条件不一致，未通过改生产排除规则、删除旧产物或关闭特性生成解决；参数统一后 `run-LZbC6v` 及最终矩阵通过。临时筛选变量拼写错误 `run-d411ZJ` 也以失败保留。所有日志位于 `test-tmp/n4-production`，未改写失败回执。
+- 交付身份：version `0.15.0`；buildId `65102c51f7d53138fe7874ba656d7a5e9938168dc9f32c5e2c54ad400387baaa`；schemaHash `4f8a6424c23978ebffe77111f4687c87336de64320f7d24cde8bdeede8ab804f`；delivery contentId `0fded67d16aed5d7ca3c98b566fd6ebe57cdaabda8ea7d18ece422de8dc3c522`；发布 Code Host DLL SHA-256 `631814d5b9fd0997b6c952d56a05c412a989123225b8a4fbb35326418d45f5fd`。收尾 `delivery --verify` matched=true。revision 元数据仍为 aa6fc7f，当前源码是该提交上的本地未提交增量，不能称为干净提交构建。同步来源与客户端部署继续区分，codexConnectionVerified=false。
+- 剩余范围：具体同项目 MSBuild 输出竞争可以在本地生产回归层面关闭，N4 整体未关闭。共享缓存并发写入/清理/读取、双实例源码编辑、UI 窗口交错、任意 target 动态项目图、自定义生成器及双重硬退出/断电孤儿产物继续开放。当前增量未做 Node 22、远端 CI、真实 Grok/Codex 消费、完整桌面/托盘复验、长期资源或独立模型/人工审核。SDK 在 128 请求突发中仍有 11 个 drain 监听器警告，阶段结束为 0；未调整阈值，短时归零不证明长期无泄漏。本轮无新的 USER_DECISION_REQUIRED；后续若需新的清理政策、依赖、真实客户端配置或外部交付，应明确范围后按有效授权执行。
+- 文档同步：更新既有 README、CHANGELOG、架构说明、详细计划和路线图，把已完成的恢复工作移出待办，标记本机缺失的历史报告。历史日志保持原文；本轮回执是本地可核验文件，不随源码提交，也不冒充已上传 CI artifact。
+- 最终检查：四个改动的 `.mjs` 入口/辅助文件 `node --check`、`git diff --check` 和当前文档/本节报告链接存在性检查通过。HEAD 与已抓取远端分支提交差异 0/0，工作区保留 14 个文件的本地增量。交付与完整矩阵结束后未再修改生产源码，也未重复无关完整测试。
+
+## 2026-09-11 09:18 — 借鉴维护者经验，补齐缓存完整性与双实例编辑验收（北京时间）
+
+- 授权与范围：按用户“吸取网友的优秀经验，继续工作”，继续 PR #37 检查点上的本地修复。只核查公开一手资料，使用现有 Node 24.19.0、锁定 SDK 10.0.303 和已安装依赖；没有新增存储架构/依赖、调用模型、修改真实客户端、提交、推送、合并或发布。上一节的本地修改全部保留。
+- 经验落地：[npm cacache 的读取实现](https://github.com/npm/cacache/blob/main/lib/content/read.js) 将大小和内容摘要纳入校验，启发本轮把“附件还存在”改为可验证的内容完整性。[write-file-atomic 实现](https://github.com/npm/write-file-atomic/blob/main/lib/index.js) 的 activeFiles 排队只在单进程内；[Windows 多进程 #28](https://github.com/npm/write-file-atomic/issues/28) 和 [锁冲突 #227](https://github.com/npm/write-file-atomic/issues/227) 是报告/提议，不当作已合入保证或 WinCode 已复现的故障。保留现有唯一临时文件后 rename 和实例内队列，用真实 Gateway 验证跨进程交错，没有因此增加锁或重试。
+- 先复现再修复：[integrity-before.log](../test-tmp/n4-cache/integrity-before.log) 的四个负例在原实现全部失败：同大小且恢复 mtime 的损坏 overflow 被内存/磁盘读者继续当作命中；合法 JSON 正文被修改，或另一个键的整份 JSON 复制到当前文件名，在相同 fingerprint 下返回错误正文。这说明输入身份正确、文件存在和 JSON 可解析都不足以证明缓存正文正确。
+- 生产修复：[Cache.ts](../src/Core/Cache.ts) 增加绑定命名空间键、时间/TTL、fingerprint、正文和附件身份的 SHA-256 元数据，内存/磁盘命中都核验；附件通过同一文件句柄，以 64 KiB 缓冲区在既有磁盘预算内流式校验大小/摘要。缺失、损坏或旧条目没有摘要时重算。JSON 读取按已打开大小加一个探测字节限定，读取期间检测到增长/缩小即未命中；新增文件增长反例验证读取量没有随追加内容膨胀。目录格式、MCP 公开契约和清理所有权未改变。
+- 修复过程保留：[cleanup-integrity.log](../test-tmp/n4-cache/cleanup-integrity.log) 暴露了第一版补丁提前放弃元数据写入，使超出缓存预算的附件无法立即由原容量清理识别。修正为拒绝缓存复用但保留有界受管元数据，既有 TTL/容量回收恢复；没有扩大孤儿扫描或清理权限。相关反例和有界读取测试共新增 5 项，写入既有 [runtime-cache-regressions.test.ts](../tests/runtime-cache-regressions.test.ts)。
+- 新增 [verify-shared-cache.mjs](../scripts/verify-shared-cache.mjs) 和 [cache-gateway.mjs](../tests/fixtures/cache-gateway.mjs)：由测试入口载入正式发布的 ToolRouter/WinCodeMcpServer/Cache 模块，使用真实 SDK stdio 公开工具调用，每个 hello 核对版本、buildId、固定工作区和独立实例。小预算生成夹具用来触发真实写入与自动清理，不是替代 Cache 实现，也不代表实际消费者或标准 CLI 启动配置已验收。关闭回执要求业务占用归零和资源已释放；清理失败、已观测残留或交付变化使验收失败。
+- 共享缓存 8 场景：同键 8 个并发请求；不同键 8 个并发请求；兄弟 20 次实际写入触发容量清理并重建已返回附件；两个热 Gateway 拒绝同大小损坏附件；同项目源码编辑后两端回读更新；A/B 共享物理目录无跨项目正文；一端退出时兄弟继续命中；两个写者退出后全新 Gateway 命中已验证的持久缓存。报告没有损坏 JSON、错误正文、遗留临时文件、关闭后占用或已观测残留；四个客户端 stderr 仅有正常启动消息，没有错误或警告。
+- 验收入口失败保留：[run-5iBtOC](../test-tmp/shared-cache/run-5iBtOC/report.json) 首次在 hello 断言使用错误字段 runtime.version，尚未进入业务场景；实际版本在 hello.version，构建在 hello.runtime.build。按公开返回结构修正断言后重跑完整 8 场景，没有削弱版本/build 核验；失败运行也取得正常停止回执。
+- [verify-design-time-concurrency.mjs](../scripts/verify-design-time-concurrency.mjs) 新增 inputs/peer-source-edit：同项目两个正式 Host 同时加载，初始引用数各为 1；实际编辑生成夹具后，两端旧定位均返回 SNAPSHOT_STALE 且无证据；同时重载后引用各为 2，旧定位继续无效，关闭一个 Host 后另一个保留新快照。默认完整矩阵由 20 增为 21，未改动生产 Roslyn 源码。
+
+| 本次缓存增量后的实际验证 | 结果与本地证据 |
+| --- | --- |
+| 缓存/预算/运行回归专项 | [integrity-after.log](../test-tmp/n4-cache/integrity-after.log)：24/24；含内容损坏和错误键反例 |
+| 清理/边界相关专项 | [cleanup-integrity-corrected.log](../test-tmp/n4-cache/cleanup-integrity-corrected.log)：44/44；包含原容量回收回归与有界读取反例 |
+| 完整核心/类型/构建/交付 | [core report](../test-tmp/check/2026-09-11T00-59-55-956Z-core/report.json)：430/430，0 跳过；typecheck、Gateway、Native 发布、stdio、delivery 全部通过，日志为 test-tmp/n4-cache/core-check.log |
+| 真实 SDK/Gateway 共享缓存 | [run-xTRbJS](../test-tmp/shared-cache/run-xTRbJS/report.json)：8/8，9.501 秒，8 个已观测进程身份，cleanupFailures=[]、survivors=[] |
+| 完整正式 Host 生产矩阵 | [run-CJF7mW](../test-tmp/design-time-production/run-CJF7mW/report.json)：21/21，229.448 秒；89 个已观测进程身份，productionChanged=false、cleanupFailures=[]、survivors=[] |
+| E4 错误契约 | [run-pD7oeb](../test-tmp/error-contracts/run-pD7oeb/report.json)：17/17，通过 |
+
+- 当前交付：version=0.15.0，buildId=`09f71cba0339b2bf9f3f9e7d28cd727df7815aa230af1565cda3a04bce6d3187`，sourceHash=`1bd9aa91805d05f3b04955ed4786cc84dffe8e2ea7a2b49f8036a64aadec84c1`，artifactHash=`0924b27f2ce659f5e30cd677513c3fc1c8fedc65f6f388b37e7afe19766d1a6b`，delivery contentId=`8ec5572d5b85ecbc25601208e6f115038d57b2572e1a0fc36ae4303d52b56f5e`。revision 仍为 aa6fc7f，本地生产修改由源码摘要区分；不把当前构建说成干净提交或已部署连接。15 工具/schema 保持，codexConnectionVerified=false。
+- 反证自审：两端校验通过仍不能保证已返回附件永远存在。实际容量清理删除了原附件，后续请求重建；这保留现有可过期引用契约。磁盘条目/字节限制是定期清理目标，不是跨进程瞬时硬配额：本次配置 4 条时一度 14 条，全新 Gateway 启动清理后回到 4 条。没有用测试通过掩盖这个边界，也没有擅自新增租约或全局锁。
+- 未验证事项：写入中断/掉电持久性、超大附件摘要读取成本、长期缓存/原生资源趋势、多文件多写者原子快照、任意动态项目图、UI 并发取证仍未覆盖。上一节 59/22/SDK 10/释放 10/owner-death 是同日上一构建证据，未在缓存增量后逐项重跑；此前 SDK drain 警告也没有因这 8 个小场景无警告就视为修复。Node 22、远端 CI、独立审核和真实消费者仍待验。当前局部修复没有新的 USER_DECISION_REQUIRED；长期附件保留、硬配额或新清理政策需要先明确需求。
+- 文档与持续验收：同步既有 README、CHANGELOG、架构说明、路线图和详细计划，加入一手经验来源并把已完成的存储/编辑验收移出待办。CI Node 22 的并发步骤新增共享缓存入口及 always 报告收集，15 分钟预算不变；当前没有推送触发。test-tmp 回执仅保留本机，历史日志原文保留。
+- 最终核对：3 个本轮验收入口/夹具的 node --check、git diff --check、75 个当前文档/本节相对链接存在性检查通过，交付再次 matched=true。HEAD 与已抓取 PR 分支仍为 aa6fc7f、提交差异 0/0；当前保留 16 个已跟踪文件修改和 2 个新增文件，含上一节的未提交增量。完整验证后未再修改生产源码。
+
+## 2026-09-11 09:31 — TDD 红—绿重放、退化检验与完整回归（北京时间）
+
+- 目标与范围：用户明确要求“进行TDD测试验证代码”。针对本轮缓存完整性及双实例编辑进行验证，保留全部已有工作区修改；没有新增依赖、改动生产实现、操作真实消费者或推送外部变更。由于实现已经存在，本次采用隔离副本重放修复前后行为，并刻意移除关键保护检验用例能否发现退化，不声称这是从零开始的测试先行开发。
+- 新增 [runtime-cache-regressions.test.ts](../tests/runtime-cache-regressions.test.ts) 的 3 项行为回归：inline/overflow 两类旧缓存缺少 integrity/backingFile 元数据时必须重算，重算后正文正确且再次命中；JSON 在路径大小检查之后追加合法空白，超过 maxEntryBytes 时必须未命中。追加空白不改变 JSON 数据，专门验证读取预算，而非借助正文损坏间接失败。原有文件句柄检查后增长的读取量断言继续保留。
+- 可重放实验：[replay.mjs](../test-tmp/tdd-cache/replay.mjs) 复制当前 55 个 TypeScript 源文件（460581 字节）及该测试文件到 test-tmp 独立目录，仅替换 Cache.ts 为 PR aa6fc7f 的版本。其余模块保持当前代码，用相同 7 个反例验证差异；这不是完整历史 PR 或 Native 的重建。测试仍使用现有 tsx 和本机依赖。每个阶段核对实际 TAP 用例/通过/失败/跳过数量及退出码，失败类型均为 ERR_ASSERTION，没有以编译、导入或环境错误充当红阶段。
+
+| 红—绿/退化验证阶段 | 实际结果 |
+| --- | --- |
+| PR 原版 Cache.ts | 7/7 按预期失败：内存/磁盘同大小附件损坏 2，JSON 正文修改/换键 2，旧缓存两类 2，路径检查后文件增长 1 |
+| 当前 Cache.ts | 同一组 7/7 通过，0 跳过 |
+| 移除正文完整性校验 | 对应 2 个反例均失败 |
+| 摘要不再绑定缓存键 | 换键反例失败 |
+| 移除附件摘要比对 | 内存/磁盘两个损坏附件反例均失败 |
+| 把有界 JSON 读取改为 readFile | 大小检查后增长反例失败 |
+| 恢复当前实现 | 同一组再次 7/7 通过，主工作区 Cache.ts 哈希始终不变 |
+
+- [完整红—绿报告 run-kLuIQ8](../test-tmp/tdd-cache/run-kLuIQ8/report.json)：success=true，7 个阶段，6.627 秒；四种选定退化全部被检出，不作为全项目 mutation coverage。报告包含每阶段日志、实际失败名称、源码/测试 SHA-256 和 productionSourceUnchanged/testsUnchanged=true；副本最后恢复当前实现。正式 Cache.ts 文件摘要为 bbae056552bb3a3eba3a1362fa3ce3dcdb5cd4be3957cee033dbed41ea8212a6，PR 原版为 e84c10c07c856d2b3d389930f5d56adada2ce991023b92f19924f52e7eb1111c。
+- 测试自身的失败也保留：[run-XfrwD0](../test-tmp/tdd-cache/run-XfrwD0/report.json) 首轮当前实现 6/7 通过，失败是新增 overflow 用例把包含随机附件路径的 preview 文本要求完全相同。重建会产生新路径，因此改为验证新旧路径不同、实际附件正文逐字节内容相等，inline 仍比较完整正文；继续要求首次未命中和重建后命中。该失败不归为生产缺陷，未通过修改实现迎合测试。
+
+| 追加的当前实现验证 | 结果与证据 |
+| --- | --- |
+| 完整核心、类型、Gateway/Native 构建、stdio、delivery | [2026-09-11T01-27-26-632Z-core](../test-tmp/check/2026-09-11T01-27-26-632Z-core/report.json)：433/433，0 失败/取消/跳过，45.874 秒；日志 test-tmp/tdd-cache/core-check.log |
+| 真实 SDK/Gateway 共享缓存 | [run-awRGKn](../test-tmp/shared-cache/run-awRGKn/report.json)：8/8，7.541 秒，8 个已观测进程身份，cleanupFailures=[]、survivors=[] |
+| 双正式 Roslyn Host 编辑/重载专项 | [run-xhNUyA](../test-tmp/design-time-production/run-xhNUyA/report.json)：1/1，10.990 秒，4 个已观测身份；编辑前引用 1/1，旧定位均 SNAPSHOT_STALE，重载后 2/2，关闭一端后兄弟仍为 2；cleanupFailures=[]、survivors=[] |
+
+- 交付与边界：buildId 仍为 09f71cba0339b2bf9f3f9e7d28cd727df7815aa230af1565cda3a04bce6d3187，sourceHash、artifactHash 和 delivery contentId 均与上一节相同，matched=true。没有发现需要修改生产实现的新缺陷；源码只新增上述 3 项测试，并同步 README/路线图/计划当前计数与证据。上一节完整 Host 21 场景和 E4 17 是同一生产构建的既有结果，本次 Host 只重跑 peer-source-edit，不冒充再跑完整 21 场景。
+- 反证自审：仅断言未命中可能让“禁用所有缓存”错误实现通过；用例同时要求其他键仍可读取、旧缓存重建后再次命中，并比较实际正文，保留成功路径。隔离副本中的四种刻意退化只证明对应保护被这些测试覆盖，不外推掉电一致性、跨调用附件租约、磁盘瞬时硬配额、UI 并发、长期资源、Node 22、远端 CI 或真实消费者。
+
+## 2026-09-11 09:58 — 整体架构复核与 PR #37 合并就绪判断（北京时间）
+
+- 任务边界：用户要求再次复核整体代码架构、确定下一步并判断是否可以合并。本次检查源码、调用链、已有回执和 GitHub 实时状态，并在 test-tmp 生成小型反例；没有修改生产源码、已有测试或远端 PR，也没有提交/推送/合并。这里只追加复核记录。
+- 架构结论：继续保留单连接固定工作区的 Gateway，由 ToolRegistry/McpServer 统一参数与准入，ToolRouter 组织恢复/释放，现有 Adapter 隔离 Roslyn 与 UIA，Native 以快照和 UUID 归属管理语义及输出。静态扫描 55 个 TypeScript 文件、139 条本地非显式 type-only 导入边，没有发现循环；该扫描不覆盖动态依赖或运行时正确性。重点复查了 RequestAdmission/OperationContext/Mutex、Workspace 固定根、Router drain/恢复、Roslyn Host 协议及退出、私有输出输入策略、缓存、UI 请求截止和交付/CI。现有方向可保留，下一步应先收口并发正确性与交付，不需要为了合并扩大架构。
+- 新发现 [P2]：[Cache.ts](../src/Core/Cache.ts) 的 get 在保存 memEntry 后 await backingFileMatches，再无条件执行 memoryCache.delete/set。等待期间，set、淘汰或 clear 已可能改变同一 Map；恢复时旧对象会覆盖新值或复活已删除条目，且没有相应恢复 memoryBytes。失败校验分支同样需核对自己删除的是否还是原条目。origin/main 也存在同样 await 后 delete/set 结构；本次是发现此前未覆盖的操作交错，不归因于上一节新增测试。
+- 当前正式构建上的确定性反例：[repro-cache-race.mjs](../test-tmp/architecture-review/repro-cache-race.mjs) 直接使用已验证的 dist/Core/Cache.js，只在生成的缓存目录执行公开 CacheManager 方法，无 mock、无生产文件回滚。[run-XoxWYs/report.json](../test-tmp/architecture-review/run-XoxWYs/report.json) 记录三个 reproduced=true：①读旧值与 set(new) 交错，set 已完成后内存仍返回 old，冷读磁盘为 new；②maxMemoryEntries=1 却保留 2 条，报告 2 字节而两个字符串按既有估算合计 4 字节；③clear 已完成后仍返回 old，内存 1 条而统计 0 字节。这是模块行为反例，没有声称已复现跨项目 MCP 错误正文或整个进程 RSS 失控。
+- 测试结论修正：上一节 433/433、7 个红—绿反例和四种退化检验仍是其实际覆盖范围内的通过结果；本次新增反例证明它们没有覆盖异步读取与内存状态修改交错。因此不能据旧测试通过直接判定当前本地代码可合并。建议在本 PR 收尾中先将上述 3 个反例纳入正式回归，异步边界后校验条目身份/状态代次，再修改缓存状态；同时检查磁盘回填的同类交错，避免仅修成功内存命中这一条分支。
+- GitHub 实时状态：通过 GitHub 连接器及现有 gh 的只读查询核对 [PR #37](https://github.com/linnnn89/WinCode/pull/37)。head=aa6fc7f457f5a18b122fd791aec2824ed121195d，base=fb3cd48df3f38b209565b906fbfe3485df48461d，state=open、draft=false、merged=false、mergeable=MERGEABLE，但 mergeStateStatus=BLOCKED；review/review thread 均为空。Git 无冲突不能代替必需检查通过，本地未提交修复也不是 PR 当前内容。
+- 必需检查：gh pr checks --required 返回 5 项，其中 Windows regression (Node 22) 为 FAILURE；Node 24、Analyze (actions/csharp/javascript-typescript) 为 SUCCESS。另一个汇总 CodeQL 也为 SUCCESS。[Node 22 作业 102911583651](https://github.com/linnnn89/WinCode/actions/runs/34489311570/job/102911583651) 的实际日志确认：真实 Host 第 39 个已完成场景后，预期 PROJECT_LOAD_FAILED、实际 QUERY_FAILED，退出 1；该错误映射的本地修复尚未推送。GitHub 状态与昨晚 PR 描述只是远端检查点事实，不作为新的用户指令。
+- 当前交付再核验：delivery matched=true，contentId 仍为 8ec5572d5b85ecbc25601208e6f115038d57b2572e1a0fc36ae4303d52b56f5e；读取现有核心 433/433、完整 Host 21/21、共享缓存 8/8 和 TDD 回执确认其成功/清理状态。本次没有重复无关全套测试，三个新的缓存时序反例才是本轮新运行的验证。
+- 合并前建议顺序：①修复缓存状态交错并以反例驱动回归，确认正常命中、替换/清空结果和容量计数；②重建/核验最终源码，按影响复跑核心、共享缓存及必要 Host 用例；③在获得提交/推送授权后，把当前增量纳入同一个 PR，更新过时的 WIP 描述与证据；④以新的实际 PR head 核对 5 个必需检查、最终差异和分支保护，再决定合并。当前既有 BLOCKED 状态也有尚未修复的相关缺陷，不建议立即合并。
+- 后续验收分层：UI 多实例只读取证、真实消费者/模型闭环、长期/大项目资源和任意动态项目图可以作为后续明确范围的验收；已公开的附件可过期、定期磁盘清理和掉电孤儿产物限制不自动转成此次合并必须完成的新功能。发布或对外承诺相关能力时仍需对应证据。本次为当前助手的架构复核与反例验证，不替代独立模型/人工评审。
+
+## 2026-09-11 10:28 — 缓存状态交错修复、共享截止退化修复与 TDD 验收（北京时间）
+
+- 授权与范围：用户明确要求“好，你开始修复吧”。在原工作区保留全部已有增量，修复上一节缓存 P2；完整检查又暴露一个直接阻碍验收的 N3 超时分类问题，以受控反例确认后局部修复。此次生产代码只新增修改 [Cache.ts](../src/Core/Cache.ts) 和 [ToolRouter.ts](../src/Core/ToolRouter.ts)，未改变公共 MCP 参数/工具数量、缓存布局/清理所有权或并发参数，未新增依赖、服务、跨进程锁或模型调用。没有提交、推送、合并、发布或切换真实消费者。
+- Cache 修复：异步附件校验后核对 Map 中是否仍为原条目，失效则未命中，成功刷新及失败删除都不能作用于替换后的条目；旧写入的附件校验失败也只删除自身。磁盘读取先排空已接受写入，使用单一状态代次阻止旧读回填到新值、清空后的内存或新的 namespace/目录。写入、内容记忆更新、prune 和工作区重置使正在进行的磁盘读失效；无每键永久 tombstone。过期/超大记录的删除进入原写队列，在队内再次核对代次，避免旧读删除新落盘值。并行有效读取继续返回数据并遵守同一 LRU 字节/条目预算；发生其他键的修改时，磁盘读可以保守未命中。
+- 正式回归位于 [runtime-cache-regressions.test.ts](../tests/runtime-cache-regressions.test.ts)：先添加 12 个交错用例，在修改生产实现之前运行 [red.log](../test-tmp/cache-state/red.log)，12/12 为断言失败；修复后相同 12/12 通过。再补已接受 clear/disk-only write 的排空顺序 2 项及正常并行命中 1 项，共 [15/15](../test-tmp/cache-state/green-final.log)。前三类公开方法交错直接复现，无 mock；需要固定磁盘时序的用例只在真实读完/关闭文件后暂停，再执行真实替换/清空。
+
+| 缓存 TDD / 反证阶段 | 实际结果 |
+| --- | --- |
+| 修复前 Cache.ts，隔离重放最终 15 项 | 14 项断言失败，正常并行命中 1 项通过；没有编译、导入或环境错误充当红阶段 |
+| 修复后相同 15 项 | 15/15，0 取消/跳过 |
+| 移除异步内存条目身份检查 | 5 个对应交错均失败 |
+| 移除状态代次更新 | 6 个磁盘回填/删除反例均失败 |
+| 移除失败写入的条目身份检查 | 1 个反例失败 |
+| 磁盘读绕过已接受写队列 | 2 个顺序反例失败 |
+| 强制所有读取未命中 | 正常并行命中反例失败 |
+| 恢复当前 Cache.ts | 15/15，主工作区 Cache.ts 和缓存测试文件哈希始终未变 |
+
+- [隔离重放脚本](../test-tmp/cache-state/replay.mjs) 与 [run-bH8Dhp/report.json](../test-tmp/cache-state/run-bH8Dhp/report.json)：success=true，8 个阶段。旧 Cache 使用前次已保存副本并验证 SHA-256=bbae056552bb3a3eba3a1362fa3ce3dcdb5cd4be3957cee033dbed41ea8212a6；只复制当前 TypeScript 源码/目标测试并替换隔离 Cache，不回滚主工作区。五种选定退化全部被检出，不等同全项目 mutation coverage；该缓存实验在下面 Router 修复之前完成，不能当作完整最终 Gateway 的旧版本重建。
+- 完整检查失败过程保留：[第一轮](../test-tmp/check/2026-09-11T02-12-43-939Z-core/report.json) regression 在 300 秒超时，TAP 总结不完整，日志中 MCP architecture/symbol 两项分别触发原有 8 秒超时，最后仍存活的测试子进程属于 resource-cleanup，超时结束后已不存活。未把它报告为完整通过或确定为缓存死锁。随后单独运行 [resource-cleanup 8/8](../test-tmp/cache-state/resource-cleanup-diagnostic.log) 和 [MCP stdio 12/12](../test-tmp/cache-state/mcp-stdio-diagnostic.log) 均通过，首次全套超时的具体根因仍未确认。
+- [第二轮完整检查](../test-tmp/check/2026-09-11T02-19-09-748Z-core/report.json) 正常结束但 **447/448**，唯一失败为排队过期请求预期 REQUEST_TIMEOUT、实际 CANCELLED；15 个新缓存回归均通过。调查发现 RequestLease 与 runCode 对同一截止各设置一次定时器，内层先触发会经 Mutex 转成 AbortError，而准入层尚未标记超时，导致分类和计数错误。
+- 在 [request-admission.test.ts](../tests/request-admission.test.ts) 新增受控时序：准入后、适配器入队前推进观察时钟，使重复的剩余预算定时器确定先触发；仍要求旧 owner 保持、队列节点移除、REQUEST_TIMEOUT、timedOut=1、cancelled=0。[修复前](../test-tmp/cache-state/deadline-red.log) 确定得到 CANCELLED 并失败。ToolRouter 仅在截止与准入租约相同的时候复用其计时与原因，独立更短的操作仍保留定时器。修复后缓存、准入、请求并发和生命周期取消 [67/67](../test-tmp/cache-state/cache-admission-green.log)；没有延长超时、放宽错误码或降低计数断言。
+
+| 最终源码/构建验证 | 结果与证据 |
+| --- | --- |
+| 完整核心、类型、Gateway/Native 构建、stdio、delivery | [2026-09-11T02-23-40-026Z-core](../test-tmp/check/2026-09-11T02-23-40-026Z-core/report.json)：**449/449**，0 失败/取消/跳过，43.543 秒；原命令 node scripts/check.mjs |
+| 真实 SDK/Gateway 共享缓存 | [run-08Twxo](../test-tmp/shared-cache/run-08Twxo/report.json)：**8/8**，7.589 秒，8 个已观测进程身份，cleanupFailures=[]、survivors=[] |
+| 三个正式 Gateway/Roslyn 同时 A/B/A 冷启动与突发/取消 | [run-aQPfmx](../test-tmp/multi-agent/run-aQPfmx/report.json)：**10/10**，12 个已观测身份，survivors=[]；--roslyn-only 仅排除托盘容量，未串行同根启动 |
+| E4 公开错误契约 | [run-0H1tDE](../test-tmp/error-contracts/run-0H1tDE/report.json)：**17/17**；生成输入及现有 SDK，不使用真实 UI/外部适配器 |
+
+- 最终交付：Node 24.19.0、项目锁定 SDK 10.0.303；buildId=9e644bce6df5c01716938b5f3c923cc2ba80f71f24a2323abda93de4d149bb88，sourceHash=c9dda2872d859b0061a9464ab5e43091e36be589e9d6796c015b12cbfc907589，artifactHash=35b9990e8accd58e64b14e7b6b46c9576432dc887c0fb1e8bd24db8df1a8b587。delivery contentId=1f86b5a058d22be12e60b1cf2a2b0c823069d7bf239bdf29692d000aea7fd1de，matched=true；15 tools 与 schemaHash=4f8a6424c23978ebffe77111f4687c87336de64320f7d24cde8bdeede8ab804f 保持。revision 仍是 aa6fc7f 加本地未提交增量，不是一个已推送新提交；codexConnectionVerified=false。
+- 保留的限制与反证：首次完整运行超时不因随后通过就被解释为已修复；SDK 128 请求突发仍有 11 个 drain 监听器警告，阶段结束为 0，未调整阈值。全套 449 与上述受控场景不证明 Node 22、真实消费者、UI 并发、长期 RSS/原生资源或断电一致性。前次 Host 21/21 仍作为本次 Cache/Router 修复前的结果保留；本次 Native 源码未改，但未再执行完整 21 场景。身份/代次失效允许保守未命中，不增加附件租约或跨进程硬配额。
+- 远端与下一步：本轮 10:17 通过现有 gh 只读核对 PR #37 仍为 OPEN、非 draft、head=aa6fc7f、mergedAt=null、mergeStateStatus=BLOCKED；五个必需检查中 Node 22 FAILURE，Node 24 与三项 Analyze SUCCESS。此次修复已在本地完成，不能声称 PR 当前源码已包含修复或可立即合并。下一步在明确提交/推送授权下整理同一 PR 的新提交与描述，再按新 head 核对检查和最终差异；本轮无新增架构/依赖决策。README、CHANGELOG、架构说明、计划和路线图已同步当前结果及历史证据边界。
+- 最后复核（10:31）：远端 head、BLOCKED 与五项必需检查结果保持上述状态。git diff --check、当前交付 matched=true、本节 18 个本地链接存在性通过；保留 18 个已跟踪文件修改及 2 个新增文件，含此前所有未提交工作。最终全套通过后未再修改生产源码或测试，只同步说明与验收记录。
+
+## 2026-09-11 11:02 — 截止结果修复、失败收尾验证与合并前本地收口（北京时间）
+
+- 目标与范围：按用户要求继续自审、修复，达到合理的 PR 合并标准，操作不超出工程项目文件夹。保留上一节全部修改；使用现有 Node 24.19.0、项目 SDK 10.0.303 和已安装依赖，测试进程的 TEMP/TMP 指向工程内 test-tmp/project-temp。没有修改全局配置、下载新运行时、调用模型、操作真实消费者或提交/推送/合并。以已确认的固定工作区、准入、缓存及 Roslyn 输出隔离为本 PR 范围，不要求新增共享服务、通用租约、UI 全覆盖或无限负载证明。
+- 本次自审：复查 RequestAdmission/OperationContext/McpServer/ToolRouter 的预算和恢复调用链，Workspace 固定根，Cache 身份与代次，Native DesignTimeBuild/OwnedBuildOutputs/WorkspaceSession/WorkspaceInputs，以及 Gateway Host 生命周期、ResourceManager、Repomix/FlaUi 取消传播、CI 和交付边界。保留原架构和公开 15 工具契约；上一节缓存修复没有再改动。
+- 新增三个截止反例，均先在正式 [request-admission.test.ts](../tests/request-admission.test.ts) 中失败，再修生产代码：①准入后推进观察时钟，截止检查先于定时器抛出时仍需计入 timedOut；②状态工具完成时已超出截止，不能返回成功；③更短的适配器排队预算不能经 Mutex 被误报为 CANCELLED，且不得执行已过期回调。原 [deadline-red.log](../test-tmp/merge-review/deadline-red.log) 为 3/3 断言失败，0 跳过，错误和计数断言均未放宽。
+- 生产修复：[RequestAdmission.ts](../src/Core/RequestAdmission.ts) 的 release 接收实际失败原因，补齐同步截止和较短预算的超时计数；[McpServer.ts](../src/Gateway/McpServer.ts) 执行返回后再检查截止，并将失败传入租约收尾；[ToolRouter.ts](../src/Core/ToolRouter.ts) 在保留显式恢复错误之后检查实际 operation，保留适配器超时分类。相同截止继续复用租约定时器，独立较短截止仍有自己的定时器。取消/超时不提前归还尚在清理的容量，不增加自动重放。相关准入、取消、并发和恢复 [57/57](../test-tmp/merge-review/deadline-green.log) 通过。
+- 资源测试失败收尾：[resource-cleanup.test.ts](../tests/resource-cleanup.test.ts) 四个创建 Router/Server 的用例改为创建后立即注册 t.after，在初始化或断言失败时也释放 watcher。隔离故障注入 [verify-cleanup-failure.mjs](../test-tmp/merge-review/verify-cleanup-failure.mjs) 保持正式生产源码，只把目标断言替换为明确的 intentional failure：旧测试 [cleanup-vR6KmS](../test-tmp/merge-review/cleanup-vR6KmS/report.json) 到 4024 ms 仍不能退出/给出完整 TAP；修正后 [cleanup-PUaE5c](../test-tmp/merge-review/cleanup-PUaE5c/report.json) 在 1091 ms 正常以 exit 1 结束，并完整报告 1 个预期失败。正常专项 [8/8](../test-tmp/merge-review/resource-cleanup-green.log)。这证明失败收尾缺陷已修复，不声称首次 8 秒业务超时的全部性能根因已定位。
+- 工程内 TEMP 的一次真实失败：[完整检查 02-43-17](../test-tmp/check/2026-09-11T02-43-17-174Z-core/report.json) 为 451/452，唯一失败是非 Git 夹具在工程内创建后，Git 正确发现了父仓库。[process-failures.test.ts](../tests/process-failures.test.ts) 在该夹具作用域内设置 GIT_CEILING_DIRECTORIES、finally 恢复原值，使测试明确模拟非 Git 工作区；未改变生产 Git 行为或全局环境。相关 [6/6](../test-tmp/merge-review/project-temp-green.log)，随后按原命令重跑全套，没有降低并发或延长超时。
+
+| 最终源码上的本地验证 | 结果与证据 |
+| --- | --- |
+| 核心、类型、Gateway/Native 构建、stdio、交付 | [02-46-37 core report](../test-tmp/check/2026-09-11T02-46-37-493Z-core/report.json)：452/452，0 失败/取消/跳过；44.088 秒；[完整日志](../test-tmp/merge-review/core-check-final.log) |
+| 完整非桌面 CI 命令序列 | [acceptance-5hKQAM](../test-tmp/merge-review/acceptance-5hKQAM/report.json)：11 个步骤退出 0，490.255 秒；每项成功回执和前后交付一致，manifest 文件未变化 |
+| E4 错误契约 | [run-TW1FjA](../test-tmp/error-contracts/run-TW1FjA/report.json)：17/17 |
+| Native Host / Roslyn Gateway | [fixture-o4h1VG](../test-tmp/roslyn-host/fixture-o4h1VG/report.json)：59/59；[run-HR1YxZ](../test-tmp/roslyn-gateway/run-HR1YxZ/report.json)：22/22 |
+| 两类 owner-death | [Roslyn 加载](../test-tmp/owner-death/run-dUQFCo/report.json)、[Repomix 工作](../test-tmp/owner-death/run-aRHJzX/report.json)：各 1/1 |
+| 手动释放 | [run-RsbRP1](../test-tmp/manual-release/run-RsbRP1/report.json)：10 个 cycles、2 类 scenarios；每轮及最终已观测 survivors=[] |
+| 同时 A/B/A SDK/Roslyn | [run-WfBmSB](../test-tmp/multi-agent/run-WfBmSB/report.json)：10/10；survivors=[]；128 突发受理 32、拒绝 96，业务 active/executing/waiting 最终均 0 |
+| 完整正式 Host 生产矩阵 | [run-Q5tOWZ](../test-tmp/design-time-production/run-Q5tOWZ/report.json)：21/21，201.575 秒；89 个已观测身份，productionChanged=false、cleanupFailures=[]、survivors=[] |
+| 真实 SDK/Gateway 共享缓存 | [run-wJWGon](../test-tmp/shared-cache/run-wJWGon/report.json)：8/8，8.381 秒；8 个已观测身份，cleanupFailures=[]、survivors=[] |
+
+- 报告口径：原聚合脚本的 scenarios 字段只处理 scenarios/observations，因 Host 使用 cases 而显示 0；实际执行及成功判断由原 Host 回执的 21 个 passed cases 证明。手动释放按 10 cycles 和 2 scenarios 分别报告，不混用计数。原始回执保留，不静默改写历史。
+- 最终交付：buildId=`ff308c972a7296bce88891287958c73c1c06fd4766c9c6ecab075f302272dad1`，sourceHash=`0a125d874b28457e70e8d231ac65a72b874236798ae5b659eefe88d077adf273`，artifactHash=`308066c6e065f303f85d539c7eaf84ce6a021a4201e5aabab465f83f03c0b519`，delivery contentId=`9ccaeb481c2f716deeb624b2a7de6363663ca3f0f86fed122680a35926af9096`。version=0.15.0 未发布，revision 仍为 aa6fc7f 加本地未提交增量；不能把它当作已推送新提交或已更新消费者。
+- 反证与合理边界：SDK 客户端 @modelcontextprotocol/client 的 StdioClientTransport.send 在 128 请求突发时仍出现 11 个 drain 监听器警告，阶段结束为 0；没有抬高阈值或改依赖来掩盖。已返回附件可被未来容量清理删除，磁盘预算是周期清理目标，现有超时不提供 OS I/O 强制终止。短时受控验收不证明长期原生资源、UI 并发、掉电持久性或任意动态项目图；这些不自动成为本 PR 的新增实现条件。
+- 合并判断：当前自审发现的代码缺陷已修复，本地 Node 24 核心及非桌面验收完成，未发现需要进一步扩展架构的阻塞缺陷。PR 当前仍不能据此认定可直接合并：工程目录没有现成 Node 22，未下载新运行时；最新本地修复尚未进入远端。最后远端证据仍是前序 10:31 的旧 head aa6fc7f、BLOCKED/Node 22 FAILURE，本段未重新查询远端。后续只需在新 head 上完成仓库必需检查与最终差异复核，不额外设定完美目标。
+- USER_DECISION_REQUIRED：依据用户提供的 AGENTS.md 第四节，需要明确提交/推送授权，才能把本地增量送入同一个 PR #37、更新说明并使用现有 Node 22/24 和 CodeQL CI。推荐直接用仓库现有 CI 获取兼容性证据，避免为了这一步新增本地运行时。合并、发布和真实客户端更新不包含在该建议授权中。README、CHANGELOG、架构、计划及路线图已同步本次结果；所有原始 test-tmp 证据仅保留本地。
+- 可审阅交付：[PR 说明草案](../test-tmp/merge-review/pr-body.md) 已按最终范围准备，尚未发送；建议标题为 feat: isolate workspaces and Roslyn builds with bounded request admission。[最终汇总](../test-tmp/merge-review/final-receipt.json) 从原始回执独立读取并断言 452 项、各集成场景数和同一交付身份，保留 pending 与 mergeReady=false；没有修改原始报告。汇总脚本为 [summarize.mjs](../test-tmp/merge-review/summarize.mjs)。
+- 收尾核对：git diff --check、delivery matched=true、当前文档及本节 59 个本地链接存在性均通过。HEAD 仍为 aa6fc7f；保留 22 个已跟踪修改和 2 个新增文件，包含前序已完成的本地增量。最终核心/非桌面验证之后仅同步说明和本地证据汇总，没有再改生产源码或正式测试。已提出上述提交/推送授权申请，尚未执行外部变更。

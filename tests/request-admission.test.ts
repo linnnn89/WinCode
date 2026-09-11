@@ -117,6 +117,86 @@ it('queue wait consumes the request deadline and expiry removes the unexecuted a
   } finally { hold.resolve(); await owner; }
 }));
 
+it('admitted queue expiry stays a timeout when the clock advances before adapter entry', async t => fixture(async ({ call, router }) => {
+  const hold = deferred(), mutex = new Mutex(), order: string[] = [];
+  (router.text as any).findSymbolsDetailed = (query: string, _kind: unknown, _path: unknown, operation: any) =>
+    mutex.runExclusive(async () => { order.push(query); if (query === 'owner') await hold.promise;
+      return { symbols: [], source: 'local-text', queryComplete: true }; }, operation?.signal, operation?.queue);
+  const owner = call('wincode_find_code_symbol', { query: 'owner' });
+  try {
+    await until(() => order.length === 1, 'owner should enter');
+    router.config.timeouts.fileScanMs = 1200;
+    const now = Date.now.bind(Date), acquire = router.acquireRequestSlot.bind(router);
+    let advance = 0;
+    t.mock.method(Date, 'now', () => now() + advance);
+    t.mock.method(router, 'acquireRequestSlot', async (...args: Parameters<typeof acquire>) => {
+      await acquire(...args);
+      // Force any second, remaining-budget timer to fire before the admitted timer.
+      advance = 600;
+    });
+    const expired = await call('wincode_find_code_symbol', { query: 'expired' });
+    assert.equal(body(expired).errorCode, 'REQUEST_TIMEOUT');
+    assert.equal(body(expired).retryable, false);
+    assert.deepEqual(order, ['owner']); assert.equal(mutex.pendingCount, 0);
+    assert.equal(router.admission.snapshot().business.active, 1);
+    assert.equal(router.admission.snapshot().business.timedOut, 1);
+    assert.equal(router.admission.snapshot().business.cancelled, 0);
+  } finally { hold.resolve(); await owner; }
+}));
+
+it('deadline outcome: expiry before adapter entry is counted even before its timer runs', async t => fixture(async ({ call, router }) => {
+  const now = Date.now.bind(Date), acquire = router.acquireRequestSlot.bind(router);
+  let advance = 0, invoked = false;
+  router.config.timeouts.fileScanMs = 1000;
+  t.mock.method(Date, 'now', () => now() + advance);
+  t.mock.method(router, 'acquireRequestSlot', async (...args: Parameters<typeof acquire>) => {
+    await acquire(...args); advance = 2000;
+  });
+  router.findCodeSymbols = async () => { invoked = true; throw new Error('Expired work must not start'); };
+  const result = body(await call('wincode_find_code_symbol', { query: 'expired' }));
+  assert.equal(result.errorCode, 'REQUEST_TIMEOUT'); assert.equal(result.workStarted, false);
+  assert.equal(invoked, false);
+  const state = router.admission.snapshot().business;
+  assert.equal(state.active, 0); assert.equal(state.completed, 1);
+  assert.equal(state.timedOut, 1); assert.equal(state.cancelled, 0);
+}));
+
+it('deadline outcome: status results completed after the deadline cannot be returned as success', async t => fixture(async ({ call, router }) => {
+  const now = Date.now.bind(Date), health = router.getRuntimeHealth.bind(router);
+  let advance = 0;
+  router.config.timeouts.commandProbeMs = 1000;
+  t.mock.method(Date, 'now', () => now() + advance);
+  t.mock.method(router, 'getRuntimeHealth', async (...args: Parameters<typeof health>) => {
+    const result = await health(...args); advance = 2000; return result;
+  });
+  const result = await call('wincode_hello_world');
+  assert.equal(result.isError, true);
+  assert.equal(body(result).errorCode, 'REQUEST_TIMEOUT');
+  assert.equal(body(result).workStarted, true); assert.equal(body(result).retryable, false);
+  const state = router.admission.snapshot().status;
+  assert.equal(state.active, 0); assert.equal(state.completed, 1);
+  assert.equal(state.timedOut, 1); assert.equal(state.cancelled, 0);
+}));
+
+it('deadline outcome: a shorter adapter queue deadline preserves timeout classification and counting', async () => fixture(async ({ call, router }) => {
+  const hold = deferred(), mutex = new Mutex();
+  const owner = mutex.runExclusive(() => hold.promise);
+  let invoked = false;
+  router.config.timeouts.fileScanMs = 40;
+  router.requestBudget = () => 2000;
+  (router.text as any).findSymbolsDetailed = (_q: string, _kind: unknown, _path: unknown, operation: any) =>
+    mutex.runExclusive(async () => { invoked = true; return { symbols: [], source: 'local-text', queryComplete: true }; },
+      operation.signal, operation.queue);
+  try {
+    const result = body(await call('wincode_find_code_symbol', { query: 'expired' }));
+    assert.equal(result.errorCode, 'REQUEST_TIMEOUT'); assert.equal(result.retryable, false);
+    assert.equal(invoked, false); assert.equal(mutex.pendingCount, 0);
+    const state = router.admission.snapshot().business;
+    assert.equal(state.active, 0); assert.equal(state.completed, 1);
+    assert.equal(state.timedOut, 1); assert.equal(state.cancelled, 0);
+  } finally { hold.resolve(); await owner; }
+}));
+
 it('cancelled startup waiters are removed and passive requests stay available during initialization', async () => fixture(async ({ call, router, server, client }) => {
   const startup = deferred(); (server as any).startPromise = startup.promise;
   try {

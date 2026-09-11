@@ -57,9 +57,9 @@ Add WinCode as a stdio MCP server in your agent client configuration (for client
 
 Without `--workspace`, WinCode binds the launch directory for the lifetime of that connection. `health.workspaceBinding` reports the fixed root and its source. `workspace_open` confirms or recovers that root; a different root returns `WORKSPACE_MISMATCH` before draining requests or changing resources. Select a connection configured for the other project. Project-scoped configurations may reuse a server name; multiple instances in one shared configuration need distinct names. Healthy same-root confirmation preserves the Host/snapshot and does not drain active queries; known recovery failures still follow the explicit recovery path.
 
-Known limitation: two Roslyn Hosts cold-loading the same physical project concurrently can collide on MSBuild-generated files under `obj` and return `PROJECT_LOAD_FAILED`. Fixed workspace binding does not isolate those build outputs. This remains an open issue; the passing admission benchmark starts the second same-project Host afterward.
+Each Roslyn Host now uses a private design-time intermediate directory while preserving the project's restore location, Compile exclusions and original import hook. Local production acceptance includes three independent MCP processes cold-loading A/B/A concurrently, exact references and owned output cleanup; the reproduced shared `obj` write collision passes this bounded regression.
 
-Draft checkpoint: a private design-time output implementation is now in source, but its final build and production MCP acceptance are pending. Earlier passing reports and existing local artifacts do not validate this last integration. See the [next-session checklist](WinCode-下一轮工程化迭代计划书.md#2026-09-11-恢复顺序).
+0.15.0 remains unreleased. After the 2026-09-11 cache-state and request-deadline fixes, the final local Node 24.19.0 build passes all 452 core tests and the complete non-desktop acceptance sequence: 59 Native Host cases, 22 Roslyn Gateway cases, 21 published-Host concurrency/input cases, ten simultaneous A/B/A SDK/Roslyn scenarios, eight shared-cache scenarios, 17 error-contract cases, ten release cycles and both owner-death checks. Delivery verification matches before and after acceptance. Earlier failures and the SDK client's transient burst warning remain recorded in the work log. The local changes still require submission and required checks on the new PR head; Node 22 is not locally verified. Generated fixtures do not establish an updated consumer connection, UI concurrency or long-term resource behavior. See the [remaining work](WinCode-下一轮工程化迭代计划书.md#2026-09-11-恢复顺序).
 
 **Specify a project at startup (recommended):** Add `--workspace` followed by the existing project directory's absolute path:
 
@@ -190,7 +190,7 @@ Coding agent ── stdio MCP ── WinCode
 
 - **Owned-process cleanup:** UI inspection executes out-of-process via an isolated helper (`tools/WinCode.UIA.Host`). All process cleanups target only the owned helper process tree via Windows `taskkill /T`; the inspected target application is never terminated or injected.
 - **Concurrency Protection:** UI inspection and health checks share a serial mutex. Each connection keeps its startup workspace; other-root requests are rejected before lifecycle work. Same-root recovery drains in-flight calls within its deadline. Admission accepts at most 32 unfinished business calls and four shared hello/tools-list calls per instance. Existing adapter mutexes keep FIFO waiting; other work can still run in parallel. Queueing consumes the request deadline, and active cancellation retains capacity until cleanup completes.
-- **Byte-Bounded Cache:** The shared cache manager bounds retained serialized data (default 32 MiB memory, 128 MiB disk including overflow); these are not process RSS limits. Local-text queries re-enumerate bounded inputs and reuse declarations by content hash. Builtin packs validate the actual selected contents before reuse; CLI output without a verified input manifest is not cached. Missing overflow files become cache misses. Watch/index probes invalidate the ~2.5s change-hint memo; that hint is not proof of source identity or a guarantee that watcher events are complete.
+- **Byte-Bounded Cache:** The shared cache manager budgets retained serialized data (default 32 MiB memory, 128 MiB disk including overflow); these are not process RSS limits, and periodic disk cleanup is not an instantaneous cross-process quota. Local-text queries re-enumerate bounded inputs and reuse declarations by content hash. Builtin packs validate the actual selected contents before reuse; CLI output without a verified input manifest is not cached. Cache reads check key-bound payload integrity and attachment size/SHA-256; missing, corrupt or older entries without integrity metadata become cache misses. Returned attachments remain subject to later eviction. Watch/index probes invalidate the ~2.5s change-hint memo; that hint is not proof of source identity or a guarantee that watcher events are complete.
 
 | UI budget | Limit / behavior |
 | --- | --- |
@@ -295,9 +295,9 @@ npm run delivery:verify
 
 省略 `--workspace` 会将启动目录固定为本连接的工作区，不能留待后续选择。`health.workspaceBinding` 返回固定根及其来源。`workspace_open` 仅确认或恢复同根；其他根返回 `WORKSPACE_MISMATCH`，不会排空请求或修改资源，应选择绑定该项目的连接。不同项目的局部配置可复用服务名；同一共享配置中的实例需要不同名称。同根健康确认保留 Host、快照及监听，不等待业务排空；已知故障仍按诊断手册恢复。
 
-已知限制：两个 Roslyn Host 同时冷加载同一物理项目，可能竞争 `obj` 内的 MSBuild 生成文件并返回 `PROJECT_LOAD_FAILED`。固定工作区没有隔离这类构建产物，该问题仍待修复；已通过的准入压力验收采用先后启动同项目 Host 的方式。
+每个 Roslyn Host 现在使用私有设计时中间目录，并保留项目的 restore 位置、Compile 排除规则和原导入 hook。本地生产验收已覆盖三个独立 MCP 进程同时冷加载 A/B/A、精确引用和所属产物回收；此前共享 `obj` 写入竞争的具体反例已通过回归。
 
-草稿交接：私有设计时输出已接入源码，最终构建与正式 MCP 验收尚未完成。较早通过的报告和现有磁盘构建不覆盖这次接入，不能据此标记并发问题已修复。明日恢复顺序见[待办清单](WinCode-下一轮工程化迭代计划书.md#2026-09-11-恢复顺序)。
+0.15.0 仍未发布。2026-09-11 缓存状态及请求截止修复后的最终本地 Node 24.19.0 构建通过核心 452/452 及完整非桌面验收：Native Host 59 项、Roslyn Gateway 22 项、正式 Host 并发/输入矩阵 21 项、同时 A/B/A SDK/Roslyn 10 场景、共享缓存 8 场景、错误契约 17 项、手动释放 10 轮及两类 owner-death。验收前后交付核验一致。历史失败和 SDK 客户端突发警告保留在工作日志中。当前增量仍需提交及新 PR head 的必需检查；Node 22 未在本地验证。生成夹具不能证明既有消费者连接已更新、UI 并发或长期资源行为，见[待办清单](WinCode-下一轮工程化迭代计划书.md#2026-09-11-恢复顺序)。
 
 **启动时指定项目（推荐）：**添加 `--workspace` 和已存在的项目目录绝对路径：
 
@@ -426,7 +426,7 @@ Coding Agent ── stdio MCP ── WinCode
 
 - **目标进程绝对免疫：**UI 取证由独立的 C# 辅助进程（`tools/WinCode.UIA.Host`）在进程外执行。所有清理操作严格仅终止自身派生的 Helper 辅助进程树（通过 Windows `taskkill /T`），**被测目标应用进程受绝对免疫保护，绝不被终止或注入**。
 - **并发保护：**UI 访问与健康检查共用串行互斥锁。每条连接固定启动工作区，其他根在生命周期操作前被拒绝。同根恢复限时等待在途请求排空；每实例最多受理 32 个未完成业务请求，hello/tools/list 共享 4 个轻量槽。既有适配器互斥保持 FIFO；排队计入请求预算，执行中取消须在实际清理后归还容量。
-- **按字节约束缓存：**缓存条目按工作区 namespace 隔离，多个实例仍可能共用磁盘目录；默认序列化内存预算 32 MiB、磁盘配额 128 MiB（含 overflow），不等于进程 RSS 上限。local-text 每次有界扫描实际输入，按内容哈希复用声明解析；内置打包核对实际选中文件的内容后复用，没有可核验输入清单的 CLI 结果不缓存。附件缺失按缓存未命中重建。150 ms 去抖监听与索引探测只使约 2.5 秒的变更提示 memo 失效，不能证明源码完整身份或保证监听事件无遗漏。
+- **按字节约束缓存：**缓存条目按工作区 namespace 隔离，多个实例仍可能共用磁盘目录；默认序列化内存预算 32 MiB、磁盘清理目标 128 MiB（含 overflow），不等于进程 RSS 上限，周期磁盘清理也不是跨进程瞬时硬配额。local-text 每次有界扫描实际输入，按内容哈希复用声明解析；内置打包核对实际选中文件的内容后复用，没有可核验输入清单的 CLI 结果不缓存。缓存读取核验绑定键的正文摘要及附件大小/SHA-256；缺失、损坏或旧条目没有校验元数据时重算。已返回的附件仍可能被后续清理。150 ms 去抖监听与索引探测只使约 2.5 秒的变更提示 memo 失效，不能证明源码完整身份或保证监听事件无遗漏。
 
 | 取证预算指标 | 限制值与行为策略 |
 | --- | --- |

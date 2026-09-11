@@ -51,7 +51,9 @@ function start(mode, project, extra = {}) {
   return value;
 }
 async function ready(c, signal) {
-  const result = await c.client.waitReady(20000, { signal, deadline: Date.now() + 20000 });
+  // Match RoslynAdapter's production load budget; this matrix verifies semantics, not a 20-second cold-start target.
+  const loadBudgetMs = 120000;
+  const result = await c.client.waitReady(loadBudgetMs, { signal, deadline: Date.now() + loadBudgetMs });
   c.ready = result; c.readyMs = performance.now() - c.started;
   remember(ownedProcesses(c.client.child.pid));
   assert.equal(result.success, true, JSON.stringify(result));

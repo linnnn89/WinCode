@@ -1283,3 +1283,10 @@
 - 旧验收要求每次有效内存命中后仍能查到磁盘 JSON 索引，超出现有可淘汰缓存契约。Cache.get 在验证内存条目及附件后直接返回；同类 [npm/cacache get 实现](https://github.com/npm/cacache/blob/main/lib/get.js) 也先返回 memoized 数据再查询索引。该参考仅用于核对层次关系，不替代本地验证或引入依赖。
 - 在原场景内确定性删除自有索引、保留有效热条目，旧断言复现同一失败（[red](../test-tmp/shared-cache/run-sO4Dlm/report.json)）。修正为验证实际旧附件淘汰、至少一次重建、索引删除后的正确热命中；其余损坏/修改/跨根/退出场景保留，没有新增自动化测试。
 - 原共享缓存验收修正后 8/8 通过（[green](../test-tmp/shared-cache/run-F11W1L/report.json)，8.303 秒；observedRebuilds=1，warmReadAfterIndexEviction=true，cleanupFailures=[]、survivors=[]）；node --check 和 git diff --check 通过。生产源码和 CI 超时预算未改，下一 head 的远端必需检查仍待运行。
+
+## 2026-09-11 — CI 冷启动与完整验收预算核对
+
+- head 211799f 首轮 Node 22 的 Tray --endpoint 子进程超过生产代码的 3000 ms 预算，被 SIGTERM 终止，stdout/stderr 为空；同一用例本地 375.322 ms 通过。该轮 restore-host/publish-host 分别 33.773/38.214 秒，前一轮为 6.009/8.338 秒，因此只重跑一次相同 head 的失败任务验证环境/冷启动波动线索，没有修改 Tray 或重复重跑已成功的检查。重跑核心、真实 Roslyn/清理及多实例通过；这不证明 Tray 首次超时的根因已经解决。
+- 重跑的 [逐场景回执](../test-tmp/pr37-ci-211799f-retry/node22/design-time-production/run-1wXhX2/report.json) 显示 WPF 等待就绪触发了验收脚本独有的 20000 ms 限制；生产 RoslynAdapter 默认加载预算为 120000 ms。外层 job 同时被 GitHub 的 15 分钟限制取消，检查注释明确为 The job has exceeded the maximum execution time of 15m0s，完整矩阵未完成。不能只把取消解释为业务用例全部正常，也不能用旧 head 的通过替代此次失败。
+- 根据上述新证据，将设计时语义验收加载预算对齐既有生产默认 120 秒；Windows CI 整项预算设为 20 分钟容纳冷启动和完整矩阵。共享缓存移至构建后优先运行，SDK 并发和设计时输出各占独立步骤。依据 [GitHub workflow timeout 定义](https://github.com/github/docs/blob/main/content/actions/reference/workflows-and-actions/workflow-syntax.md#jobsjob_idtimeout-minutes) 区分 job 总预算与业务截止；生产请求/查询/清理的超时和取消行为均未修改，没有新增测试或依赖。
+- 验证：YAML 解析通过，并比较确认所有验收命令及 Node 条件、job 名称、报告保留设置与修改前一致；脚本语法与 git diff --check 通过。正式发布 Host 的 WPF 定向场景 [run-nKcqEc](../test-tmp/design-time-production/run-nKcqEc/report.json) 1/1 通过，productionChanged=false。新 head 仍需远端完成五项必需检查；当前未合并。

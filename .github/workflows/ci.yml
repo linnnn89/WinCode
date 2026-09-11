@@ -17,7 +17,8 @@ jobs:
   regression:
     name: Windows regression (Node ${{ matrix.node }})
     runs-on: windows-2025
-    timeout-minutes: 15
+    # Cold setup plus the full Node 22 native matrix can exceed 15 minutes.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +44,9 @@ jobs:
         run: npm ci
       - name: Build and verify delivery
         run: npm run check
+      - name: Verify shared cache contracts
+        if: matrix.node == '22'
+        run: node scripts/verify-shared-cache.mjs
       - name: Verify tool errors and recovery contracts
         if: matrix.node == '22'
         run: npm run test:error-contracts
@@ -59,15 +63,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:manual-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify concurrent loading, output ownership and shared caches
+      - name: Verify concurrent SDK clients
         if: matrix.node == '22'
-        run: |
-          node scripts/verify-multi-agent.mjs --roslyn-only
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/verify-design-time-concurrency.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/verify-shared-cache.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: node scripts/verify-multi-agent.mjs --roslyn-only
+      - name: Verify design-time output ownership
+        if: matrix.node == '22'
+        run: node scripts/verify-design-time-concurrency.mjs
       - name: Preserve check reports and stage logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

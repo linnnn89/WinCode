@@ -12,17 +12,20 @@ function validateInspect(args: UiInspectRequest): void {
   if (args.hwnd !== undefined && !args.hwnd.trim()) throw new Error('hwnd must be non-empty.');
 }
 
-type UiReviewArgs = UiInspectRequest & { candidateFiles: string[]; candidateCodeFiles?: string[]; textQueries?: string[] };
+type UiInspectArgs = UiInspectRequest & { responseFormat?: 'full' | 'compact' };
+type UiReviewArgs = UiInspectArgs & { candidateFiles: string[]; candidateCodeFiles?: string[]; textQueries?: string[] };
 
 const invalidArguments = (errorMessage: string) => jsonResult({ schemaVersion: '1.0', protocolVersion: '1.0',
   success: false, errorCode: 'INVALID_ARGUMENT', errorMessage }, false, true);
 
-const inspectDefinition = defineTool<UiInspectRequest>({
+const inspectDefinition = defineTool<UiInspectArgs>({
   name: 'wincode_ui_inspect',
   description: 'Inspects a Windows desktop application window using UI Automation. Returns a bounded control tree (JSON) and optional annotated screenshot (MCP image content). Requires either pid or hwnd.',
   inputSchema: {
     type: 'object', additionalProperties: true,
     properties: {
+      responseFormat: { type: 'string', enum: ['full', 'compact'], default: 'full',
+        description: 'compact keeps snapshot IDs/hierarchy/states and image, omits per-node geometry/className, shares code candidates and adds a summary plus live-UI expansion requests. full preserves the complete response shape.' },
       pid: {
         type: 'integer',
         minimum: 1,
@@ -78,7 +81,10 @@ const inspectDefinition = defineTool<UiInspectRequest>({
 }, {
   invalidArguments, validate: validateInspect,
   requestBudget: 'ui',
-  execute: async (args, { router, signal }) => uiResponse(await router.inspectUi({ ...args, hwnd: args.hwnd?.trim() }, signal)),
+  execute: async (args, { router, signal }) => {
+    const { responseFormat, ...input } = args;
+    return uiResponse(await router.inspectUi({ ...input, hwnd: input.hwnd?.trim() }, signal), responseFormat);
+  },
 });
 const uiInspectTool = inspectDefinition.tool;
 
@@ -141,8 +147,8 @@ export const UI_TOOLS = [
     },
     requestBudget: 'ui',
     execute: async (args, { router, signal }) => {
-      const { candidateFiles, candidateCodeFiles, textQueries, ...input } = args;
-      return uiResponse(await router.reviewUi({ ...input, hwnd: input.hwnd?.trim() }, candidateFiles, signal, textQueries, candidateCodeFiles));
+      const { candidateFiles, candidateCodeFiles, textQueries, responseFormat, ...input } = args;
+      return uiResponse(await router.reviewUi({ ...input, hwnd: input.hwnd?.trim() }, candidateFiles, signal, textQueries, candidateCodeFiles), responseFormat);
     },
   }),
 ];

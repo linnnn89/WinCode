@@ -7,6 +7,7 @@ import { ADMISSION_LIMITS, RequestLease, ServerBusyError } from '../Core/Request
 import { checkOperation } from '../Core/OperationContext.js';
 import { CodeQueryError } from '../Core/CodeQueries.js';
 import { WorkspaceMismatchError } from '../Core/WorkspaceContracts.js';
+import { connectionGuide } from './ConnectionGuide.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { toolErrorResult, codeRecoveryAction, type ToolExecutionContext } from './ToolDefinition.js';
 
@@ -83,7 +84,8 @@ export class WinCodeMcpServer {
           { workStarted: false, retryable: true, lane: error.lane, admission: error.admission });
         if (error instanceof WorkspaceMismatchError)
           return toolErrorResult(error.errorCode, error.message, 'select_workspace_connection',
-            { activeWorkspace: error.activeWorkspace, requestedWorkspace: error.requestedWorkspace });
+            { activeWorkspace: error.activeWorkspace, requestedWorkspace: error.requestedWorkspace,
+              connectionGuide: connectionGuide(error.requestedWorkspace) });
         // 同根恢复失败必须携带真实恢复状态；取消不能掩盖已发生的部分状态变更。
         const recovery = error instanceof WorkspaceRecoveryRequiredError ? error.recovery : this.router.workspaceRecoveryState;
         const details = recovery ? { workspaceRecovery: recovery } : {};

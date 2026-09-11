@@ -58,6 +58,8 @@ export interface SymbolReference {
 }
 
 export interface FindSymbolsResult {
+  fileIssues?: { path: string; reason: string }[];
+  fileIssuesOmitted?: number;
   semanticContext?: SemanticContext;
   query: string;
   kindFilter?: string;
@@ -74,6 +76,8 @@ export interface FindSymbolsResult {
 }
 
 export interface FindReferencesResult {
+  fileIssues?: { path: string; reason: string }[];
+  fileIssuesOmitted?: number;
   semanticContext?: SemanticContext;
   symbolName: string;
   totalReferences: number;

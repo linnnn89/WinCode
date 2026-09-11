@@ -6,6 +6,7 @@ import { WinCodeMcpServer } from './Gateway/McpServer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { resolveTrayEndpoint, TrayClient } from './Gateway/TrayClient.js';
+import { connectionGuide } from './Gateway/ConnectionGuide.js';
 
 async function main() {
   let workspaceRoot = process.cwd();
@@ -18,6 +19,14 @@ async function main() {
       workspaceRoot = target;
       workspaceRootSource = 'argument';
     }
+  }
+
+  if (args.includes('--print-connection')) {
+    if (workspaceRootSource !== 'argument') throw new Error('--print-connection requires --workspace with an absolute target path.');
+    if (args.some(arg => !['--print-connection', '--workspace', '-w', workspaceRoot].includes(arg)))
+      throw new Error('--print-connection accepts only --workspace; add other startup options explicitly to the generated configuration.');
+    process.stdout.write(JSON.stringify(connectionGuide(workspaceRoot), null, 2) + '\n');
+    return;
   }
 
   const config = getDefaultConfig(workspaceRoot);

@@ -52,6 +52,20 @@ await server.start();
     assert.deepEqual(hello.toolContract.tool.inputSchema, schema);
     assert.equal(hello.toolContract.tool.schemaHash, contractHash(schema));
     for (const key of ['scopeFiles', 'symbol', 'lineRanges']) assert.ok(Object.hasOwn(schema.properties!, key));
+    const found = await call('wincode_search_text', { query: 'RuntimeProbeTarget', scopePaths: ['Target.ts'] });
+    assert.deepEqual(found.matches.map((item: any) => [item.file, item.line]), [['Target.ts', 50]]);
+    const discovered = await call('wincode_prepare_context', found.matches[0].nextRequest);
+    assert.equal(discovered.coverage.allRequestedCovered, true);
+    assert.ok(discovered.evidence[0].snippet.includes(lines[49]));
+    const outline = await call('wincode_file_outline', { file: 'Target.ts' });
+    assert.equal(outline.fileLineCount, 60);
+    assert.equal(outline.sizeBytes, Buffer.byteLength(lines.join('\n')));
+    assert.equal(outline.symbols[0].line, 50);
+    const pastEof = await call('wincode_prepare_context', { task: 'Read tail', lineRanges: [{ file: 'Target.ts', startLine: 58, endLine: 70 }] });
+    assert.equal(pastEof.coverage.allRequestedCovered, false);
+    const corrected = await call('wincode_prepare_context', pastEof.coverage.details[0].nextRequest);
+    assert.equal(corrected.evidence[0].snippet, lines.slice(57).join('\n'));
+    assert.equal(corrected.summary.status, 'complete');
     const symbol = await call('wincode_prepare_context', { task: 'Inspect runtime target', scopeFiles: ['Target.ts'], symbol: 'RuntimeProbeTarget' });
     assert.ok(symbol.evidence.some((item: any) => item.file === 'Target.ts' && item.line === 50 && item.snippet.includes('RUNTIME_TARGET_BODY')));
     const range = await call('wincode_prepare_context', { task: 'Inspect runtime target', lineRanges: [{ file: 'Target.ts', startLine: 50, endLine: 50 }] });
@@ -68,7 +82,8 @@ await server.start();
       upstreams: false, gui: false, codexConnectionVerified: false, version: hello.version,
       runtime: hello.runtime, schemaHash: hello.toolContract.schemaHash, toolCount: tools.length,
       resourceCleanup: { observation: 'before shutdown; not proof of process exit', value: hello.health?.resourceCleanup ?? null },
-      checks: ['initialize', 'tools/list', 'hello schema agreement', 'symbol body at line 50', 'exact range body', 'unknown fields ignored', 'known field type rejected', 'stable instance'] }, null, 2));
+      checks: ['initialize', 'tools/list', 'hello schema agreement', 'literal search to source', 'file outline', 'EOF correction to source',
+        'symbol body at line 50', 'exact range body', 'unknown fields ignored', 'known field type rejected', 'stable instance'] }, null, 2));
   } finally {
     try { await client.close(); } finally {
       try { await transport?.close(); } finally {

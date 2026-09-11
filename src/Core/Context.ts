@@ -73,7 +73,7 @@ export interface PreparedContextResult {
   evidence: ContextEvidence[];
   relatedFiles: { path: string; included: boolean; reason: string }[];
   omittedFiles: string[];
-  fileIssues: { path: string; reason: string }[];
+  fileIssues: { path: string; reason: string; fileLineCount?: number }[];
   queryComplete: boolean;
   truncated: boolean;
   evidenceInsufficient: boolean;
@@ -592,7 +592,10 @@ export class ContextManager {
       if (stat.size >= 500_000) { issues.push({ path: rel, reason: 'file-too-large' }); return null; }
       const content = sourceContent ?? await fs.readFile(fullPath, { encoding: 'utf8', signal: operation?.signal });
       const lines = content.split(/\r?\n/);
-      if (range && range.endLine > lines.length) { issues.push({ path: rel, reason: 'line-range-out-of-bounds' }); return null; }
+      if (range && range.endLine > lines.length) {
+        issues.push({ path: rel, reason: 'line-range-out-of-bounds', fileLineCount: lines.length });
+        return null;
+      }
       const symbol = symbols.find((s) => this.normalizeRel(s.file) === this.normalizeRel(rel) &&
         Number.isInteger(s.line) && s.line! > 0 && s.line! <= lines.length);
       const center = symbol?.line && symbol.line > 0 ? symbol.line - 1 : 0;

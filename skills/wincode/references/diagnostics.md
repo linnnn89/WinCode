@@ -1,5 +1,7 @@
 # 诊断与审计
 
+跨项目入口：新构建的 `WORKSPACE_MISMATCH` 响应包含 `connectionGuide`，其中 `configuration.command/args` 是独立 STDIO 连接配置，`verification` 给出连接后检查工作区的调用。也可运行 `node <WinCode安装目录>/dist/index.js --print-connection --workspace <目标绝对路径>` 输出同一配置；不创建缓存、不注册或重启客户端、不启动项目 Host。配置默认 local-text，不复制已有 Roslyn、开发或托盘选项；目录存在性在实际连接启动时校验。选择已有正确连接优先，建立新连接仍遵守用户授权。刷新连接后再使用新增导航工具或 UI 精简参数，磁盘重建和 Skill 同步不会热替换旧 MCP Schema。
+
 0.15.0 的 WORKSPACE_MISMATCH 是固定工作区拒绝：检查 activeWorkspace/requestedWorkspace，选择对应项目连接。错误发生在工作区资源变更之前，不表示旧根已切换或需要清空缓存。hello.health.workspaceBinding 给出固定根及启动来源；argument 是显式 CLI 参数，cwd 是启动目录回退，configuration 是嵌入式配置。显式 --workspace 必须有绝对目录值；已有连接不会因磁盘重建或配置保存自行更新。
 
 0.15.0 的 health.admission 返回 business/status 的 active、executing、waiting、accepted、completed、rejected、cancelled、timedOut、peakActive，以及累计 waitMs/executionMs 和 maxWaitMs。每实例最多 32 个未完成业务请求、4 个共享轻量状态请求；内层互斥保持 FIFO，运行中取消须在实际清理后归还容量。workspace_open 占用业务容量，但不计入它自己等待排空的 inFlight。状态不等待慢查询或同根恢复；tools/list 满额以协议错误 data.errorCode=SERVER_BUSY 表达。
@@ -60,7 +62,7 @@ Code Host 内部协议 v2 的失败包含 success=false、errorCode 和 error，
 
 Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回；失败的 JSON 文本与 structuredContent 一致，仍保留领域差异。健康状态下同根 workspace_open 保留 Host 和 snapshot；它不是强制冷启动命令，也不是等待在途业务清理完成的屏障。普通同根确认取消不进入恢复；客户端取消先返回时，后台操作仍可能正在清理，不能把客户端 Promise 结束当作 Host 已退出。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，此时才关闭旧 Host，再由显式搜索重新选择 SDK。INPUTS_CHANGED/SNAPSHOT_STALE 按 search_again 重新搜索，普通打开不清除已知重载要求。启动时的项目、Configuration、TFM 和可执行文件配置固定于 Adapter；修改客户端启动配置后须正常重建连接，workspace_open 不热应用配置文件。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
 
-INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项目路径，以及 additionalInputs 中的文件是否存在；补充文件缺失时，重载也会失败，恢复文件后再显式搜索。不要为恢复查询而静默移除真实构建输入。HOST_VERSION_MISMATCH 先核对 Code Host 与 Gateway 的版本、Release 配置和协议；不要继续使用混合交付。HOST_PROTOCOL_ERROR 同时检查协议 v2、inputPolicy.version=1 和实际补充列表；旧 Host 没有确认新策略时不能绕过。LEGACY_SYMBOL_ID 要求重新搜索 Roslyn 身份；UNSUPPORTED_SYMBOL_LOCATION 表示该实例未配置 Roslyn；SYMBOL_MISMATCH 表示名称和定位不一致。INPUT_BUDGET_EXCEEDED 区分枚举规模与受跟踪输入字节限制，先缩小受支持范围，不能接受截断指纹。内部 BUSY 表示队列已满，DUPLICATE_REQUEST 要求新的 id；CANCELLED 是目标终止结果，取消确认不替代它。OUTSIDE_WORKSPACE/UNSUPPORTED_LINK 拒绝越界或链接路径，不放松校验来恢复。
+INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项目路径，以及 additionalInputs 中的文件是否存在；补充文件缺失时，重载也会失败，恢复文件后再显式搜索。不要为恢复查询而静默移除真实构建输入。HOST_VERSION_MISMATCH 先核对 Code Host 与 Gateway 的版本、Release 配置和协议；不要继续使用混合交付。HOST_PROTOCOL_ERROR 同时检查协议 v2、inputPolicy.version=2 和实际补充列表；旧 Host 没有确认新策略时不能绕过。LEGACY_SYMBOL_ID 要求重新搜索 Roslyn 身份；UNSUPPORTED_SYMBOL_LOCATION 表示该实例未配置 Roslyn；SYMBOL_MISMATCH 表示名称和定位不一致。INPUT_BUDGET_EXCEEDED 区分枚举规模与受跟踪输入字节限制，先缩小受支持范围，不能接受截断指纹。内部 BUSY 表示队列已满，DUPLICATE_REQUEST 要求新的 id；CANCELLED 是目标终止结果，取消确认不替代它。OUTSIDE_WORKSPACE/UNSUPPORTED_LINK 拒绝越界或链接路径，不放松校验来恢复。
 
 维护接口变更时，同步检查 Gateway 工具定义、相应 references 手册、实际客户端 Schema 和已安装四份受管文件；更新源码手册后运行 skill:sync，再以 skill:check 校验。仍须单独确认 MCP 实例的版本/构建/Schema，不能用手册同步代替重连。公共接口尚未发布时，只记录实验边界，不提前把新参数加入 MCP 规范字段表。
 
@@ -87,7 +89,7 @@ Gateway 通过子进程私有环境传递所属 PID；两个 .NET Host 在项目
 
 ## 手动 Roslyn 释放与可选托盘（0.14.0）
 
-自动释放关闭，本版不创建 idle timer。用户可按 README 手动启动独立 Tray，并给希望管理的 Gateway 启动参数添加 --tray 后刷新连接。托盘只管理已注册的实例，不扫描/终止外部客户端或目标应用；MCP 仍为原有 15 个工具，没有让 Agent 自动代替用户释放的管理工具。默认不启用托盘连接、不设置自启动。
+自动释放关闭，本版不创建 idle timer。用户可按 README 手动启动独立 Tray，并给希望管理的 Gateway 启动参数添加 --tray 后刷新连接。托盘只管理已注册的实例，不扫描/终止外部客户端或目标应用；当前新增两个只读导航工具后共 17 个公开工具名称，仍没有让 Agent 自动代替用户释放的管理工具。默认不启用托盘连接、不设置自启动。
 
 手动释放遇到业务在途、语义排队/收尾、工作区确认或恢复门时拒绝，不自动延后执行。释放完成后新请求继续；旧 symbolLocation 返回 SNAPSHOT_STALE，显式重新搜索取得当前定位。保留 Gateway、watcher、缓存与最后诊断。清理失败进入 restart_gateway 恢复门，不能靠反复点击清除错误。local-text 没有可释放的 Roslyn。
 

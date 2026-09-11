@@ -39,7 +39,8 @@ export function rangeCoverage(data: PreparedContextResult, originalEvidence: Pre
         endLine: Math.min(item.endLine, requested.endLine),
         endLineComplete: item.endLine > requested.endLine || item.endLineComplete === true,
       }));
-      const issue = originalIssues.find(item => item.path === requested.file)?.reason;
+      const fileIssue = originalIssues.find(item => item.path === requested.file);
+      const issue = fileIssue?.reason;
       const missingRanges: Array<LineRange & { reason: string }> = [];
       for (let line = requested.startLine; line <= requested.endLine; line++) {
         if (finalComplete.has(line)) continue;
@@ -60,8 +61,16 @@ export function rangeCoverage(data: PreparedContextResult, originalEvidence: Pre
       const retryBudget = retryNeedsMoreBudget ? Math.min(65536, data.metrics.budgetTokens * 2) : data.metrics.budgetTokens;
       const retryAdvances = retry && (retry.startLine > requested.startLine || retry.endLine < requested.endLine);
       const retryBlocked = retry && retryNeedsMoreBudget && retryBudget <= data.metrics.budgetTokens && !retryAdvances;
+      // Keep the original gap intact; suggest only its intersection with the observed file.
+      const correctedEnd = issue === 'line-range-out-of-bounds' ? fileIssue?.fileLineCount : undefined;
+      const correction = correctedEnd !== undefined && requested.startLine <= correctedEnd ? {
+        task: 'Read the valid portion of the requested range; the original request exceeded EOF.',
+        lineRanges: [{ file: requested.file, startLine: requested.startLine, endLine: Math.min(requested.endLine, correctedEnd) }],
+        maxTokens: data.metrics.budgetTokens,
+      } : undefined;
       return {
         file: requested.file,
+        ...(fileIssue?.fileLineCount !== undefined ? { fileLineCount: fileIssue.fileLineCount } : {}),
         requested: { startLine: requested.startLine, endLine: requested.endLine },
         returned, completeRanges: groupLines([...finalComplete]), missingRanges, status,
         ...(retryBlocked ? { retryBlockedReason: 'maximum-budget-without-progress',
@@ -70,7 +79,7 @@ export function rangeCoverage(data: PreparedContextResult, originalEvidence: Pre
           task: 'Read the missing source lines.',
           lineRanges: [{ file: requested.file, startLine: retry.startLine, endLine: retry.endLine }],
           maxTokens: retryBudget,
-        } } : {}),
+        } } : correction ? { nextRequest: correction } : {}),
       };
     });
     return {

@@ -145,11 +145,15 @@ flowchart LR
 
 ### 3.3 输出预算位于最后一公里
 
+普通代码导航由 CodeNavigation 复用 LocalTextScanner：字面量搜索在排他目录/文件范围内进行，文件概览读取实际行数、字节数及文本声明，均返回 prepare_context 续读请求。路径范围先整体校验，实际读取再检查真实路径；扫描预算与最终 JSON 预算分别生效。LocalTextScanner 保留具名文件问题和省略计数，不把词法不确定性隐藏成完整结果。导航不启动语义 Host，也不改变所配置的提供方。
+
 `maxTokens` 当前按 UTF-16 字符数 / 4 估算，最终 MCP 文本块的 JSON 转义、元数据及 legacy 附加文本共同占预算。它不是模型 tokenizer 的精确结果。
 
 ContextResponse 在最终裁剪后重新计算范围覆盖，区分读取阶段不足和响应预算不足，并给出缺失区间或后续请求。符号窗口没有解析方法结束边界，`symbolCoverage=unknown` 不能被显示的几行正文替代。
 
 ## 4. 桌面取证与源码候选的数据流
+
+Gateway 可显式输出 compact 格式：UiCompact 保留快照节点 ID、树结构与状态，省略节点几何/类名，把重复 C# 候选提取为 candidateIds 引用的共享表；截图仍属于同一快照。展开请求是新的实时 UI 查询，不是原快照续页；几何详情和查询唯一性由 full 响应重新验证。默认 full 契约保留，序列化裁剪使用独立副本。
 
 ```mermaid
 flowchart TB
@@ -204,6 +208,8 @@ flowchart TB
 架构概览不再另走无总量限制的旧树/项目读取：共用 ProjectDiscovery、WorkspaceBrowser 和 OperationContext。发现上限 2000 项、树 500 项；图上限 16 个项目/64 KiB 单文件/256 KiB 合计、入口枚举 2000 项，返回完整性与遗漏；整份报告上限 32768 UTF-16 字符。取消后的读取在实际返回并关闭句柄后结束归属，不靠外层超时提前释放。文本声明先规范化空白并拒绝超过 16384 字符的规范化单行，避免原有重叠可选空白匹配；不是完整语法分析器。
 
 ### 5.2 固定工作区与同根恢复
+
+WORKSPACE_MISMATCH 的 connectionGuide 与 CLI `--print-connection` 由同一纯配置生成器提供绝对命令、参数和核对步骤；不读取其他客户端设置、不注册或启动进程、不切换工作区。目标路径存在性仍由真正的连接初始化验证。
 
 启动时捕获并保护 config.workspaceRoot，内部 setRoot 与 openWorkspace 也校验固定根。显式 CLI 路径须为绝对路径；缺省绑定 cwd。初始化前验证目录已存在且路径无链接，其他根或 junction 别名不能作为切换入口。这不是对抗并发文件系统替换的原子沙盒。
 

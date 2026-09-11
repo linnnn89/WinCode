@@ -1311,3 +1311,25 @@
 - 文档提交 `26d0a42` 的 [CI 34575235538](https://github.com/linnnn89/WinCode/actions/runs/34575235538) 中，Node 24 和三项 CodeQL 通过，Node 22 在 owner-death 测试结束时失败。Roslyn Host 59 项、Gateway 22 项均通过；owner-death 主场景记录 9 个已观察进程、survivors=[]、success=true。
 - 失败来自随后执行的兜底清理检查：`terminateObserved` 启动的 PowerShell 子进程触发 8000 ms 超时，报告 `spawnSync powershell.exe ETIMEDOUT`，导致整组测试按既有规则失败。现有记录不能确定超时发生在 PowerShell 启动还是命令执行阶段，也不能证明运行环境抖动就是根因。报告已下载到本地 `test-tmp/pr39-ci-26d0a42-attempt1`。
 - 与已通过的 main `d51f3e1` 比较，生产代码和相关测试脚本完全一致。核对了 Node child_process 超时说明，并检索 GitHub runner-images 的相关记录，未找到可直接确认本次根因的同类案例。先记录失败并重新验证，以检查是否为偶发超时；不更改生产代码、测试断言、清理范围或超时时间，不将重跑通过称为根因已修复。合并仍要求当前 PR 提交的全部必需检查通过。
+
+## 2026-09-11 — Agent 导航、上下文恢复与 UI 精简迭代
+
+- 按用户要求把实际 New-tavern 审查中的操作摩擦分成四阶段实施：上下文恢复与摘要、限定范围的代码导航、独立连接引导、UI 精简与展开。改动位于 WinCode 工作区；没有增加依赖或修改应用数据库。保留已有文档工作，本轮未提交或推送。
+- 上下文 EOF 错误保留原始缺口，附实际行数及有效交集的续读请求；起点已超过 EOF 或文件不存在时不盲目重试。最终序列化后生成范围明确的 summary，普通文件开头片段也可续读。原有 512-token 字符估算预算、半行覆盖和未知任务覆盖语义保留。
+- 新增 wincode_search_text / wincode_file_outline：字面量搜索、排他文件/目录范围、重叠文件去重、同次读取的行数/字节数和声明概览、可执行的源码续读参数。复用有界 LocalTextScanner；越界范围在读取前拒绝，实际链接再核对真实路径，词法/编码/文件大小等问题按文件报告并保留省略数。导航不启动语义 Host。
+- WORKSPACE_MISMATCH 返回 connectionGuide；CLI --print-connection --workspace 输出同一默认 local-text 配置。真实 STDIO 验证从 A 的错误响应直接启动 B，并分别读到 A/B 标记；打印配置不创建目标缓存，不注册或重启客户端。
+- UI 增加显式 compact 格式，默认 full 保持兼容。控件 ID、层级、状态及图片保留，节点几何和类名可用 expansionRequests 恢复，重复 C# 候选用 candidateIds 共享。同一六控件夹具中 full=13165、compact=8750 字符，约减少 33.5%；图片字节和节点 ID 不变。这不是普遍 token/延迟收益或长期性能结论。
+- 各阶段先执行失败场景再实现：EOF 缺少实际行数/续读、导航工具缺失/词法失败不具名、生产错误缺少可用连接配置、UI 精简仍返回几何及重复候选。相关集合分别通过 36、59、8、37 项检查，集合有重叠，不相加。新增两个 it 场景，其余扩展既有测试及生产 STDIO 驱动。
+- 首次完整 core 检查：452/454，通过的实现之外有两处旧测试仍期望 15 个工具；更新为 17。记录：test-tmp/check/2026-09-11T07-58-37-514Z-core/report.json。第二次：453/454，唯一失败为旧恢复测试把整个仓库扫描计入 4 秒阈值，实际 4108 ms；记录：test-tmp/check/2026-09-11T08-02-02-436Z-core/report.json。将该测试改为隔离项目、真实 MCP 调用和实际恢复状态断言，定向通过 1/1；确认排空时 inFlight=0、监听器恢复、后续健康确认不再次排空。没有放宽时间阈值，也没有第三次全量重跑；原始完整检查报告仍保留失败状态。
+- 首次 desktop 集合 34/35：新增断言误认为按钮只有一个节点，UIA 实际还返回内部文本。改为对照独立原生计数，定向重跑真实 WPF 流程通过 1/1：compact 候选续读、full 展开恢复真实几何、定位判定方法、隔离副本修改/重新编译后同按钮由禁用变为可用；原仓库夹具哈希保持。记录：test-tmp/check/2026-09-11T08-08-23-380Z-desktop/report.json，原始失败未改写。
+- 后续验证通过：最终类型检查；新生产 STDIO 的 17 工具/Schema、搜索到源码、文件概览与 EOF 修正；17 个错误契约场景（test-tmp/error-contracts/run-10DlYB/report.json）；桌面 owner-death（test-tmp/owner-death/run-0toZoN/report.json）；WinForms/Named Pipe 托盘（test-tmp/tray/run-WQWlW7/report.json）；实际 Roslyn 托盘工作流（test-tmp/tray-workflow/run-TuKjVN/report.json）。未重新跑已通过的完整集合，也未把分项通过写成单次全量全绿。
+- Gateway/原生 Release 构建完成，交付清单生成与核验 matched=true，contentId=6bc3f0e6aae0d0726a801897581801b8a27e019e3ad71234f49463f2346af106。生产新实例 buildId=866c93db7b87c8a5a5f5975f8c81ad601b01c02477a562b837414fbd9f344ba3，Schema=96d30bd506af37f08afcc02025ed3254d9ba2b9bd6f71732a31ad1a8f749f876。构建基于 8e4b70c 加当前未提交源码，版本仍为 0.15.0 未发布。
+- 四份受管 Skill 已备份后同步，安装入口保留精简写法，skill check matched=true；备份在 C:/Users/6/.codex/skills/.wincode-backup-948552f4-4d0b-4c9d-b2ce-3ba47349bba0。当前 Codex 连接仍为实例 4a6e5836-c683-4602-8ddf-696ebcd7d94e、旧 buildId=ff308c972a7296bce88891287958c73c1c06fd4766c9c6ecab075f302272dad1、15 工具且无 UI responseFormat。需要正常刷新连接才能加载新 Schema；未修改 MCP 配置或自动重启。Node 22/远端 CI 和当前 Codex 新接口使用尚未验证。
+
+## 2026-09-11 — 导航与 UI 功能提交前复核
+
+- 按用户确认开始收尾。将原目录 31 个修改文件和 3 个新文件完整保存为本地快照 da2d394，备份分支 codex/backup-navigation-before-delivery-20260911；从 main de14850 建立独立 worktree 和 codex/navigation-delivery-20260911，迁移后 Git tree 与快照一致。原目录保留，依赖和精确 SDK 复用本机现有安装。
+- 复核搜索范围、真实路径、扫描与序列化预算、取消传播、EOF 续读、UI 精简/展开和默认 full 兼容。未发现需要增加产品代码修改的缺陷；两份 Skill 手册的 inputPolicy 仍写 1，与 WorkspaceSession 和 RoslynAdapter 的实际版本 2 不符，已改正。未增加依赖、测试或架构层次。
+- 本地 Node 24.19.0：Gateway 构建和类型检查通过；上下文、导航、扫描、工具契约与 UI 候选集合 86/86；生产固定工作区集合 8/8；修订后的 MCP 恢复场景 1/1；真实 WPF 源码修改与重编译流程 1/1。正式 STDIO 的 17 工具、搜索/概览/EOF 续读、错误契约 17 场景通过。原生三组件经锁定 restore 和正式 Release 发布，交付清单校验通过。原始失败记录保留；本轮未重复完整本地 core/desktop 集合，完整兼容性检查交给最终 PR 提交的 CI。分阶段回执：test-tmp/navigation-delivery/report.json。
+- 实际 Codex 连接已在本次核对前刷新：实例 44103150-ef65-41e1-9f61-db8162ef752f，17 个工具、buildId=866c93db7b87c8a5a5f5975f8c81ad601b01c02477a562b837414fbd9f344ba3，与独立 worktree 构建相同。通过该连接完成限定目录搜索、文件概览、按返回请求读取 25/25 行；针对本轮启动的隔离 WPF 窗口完成 compact 读取及 full 展开，原生查询唯一，控件状态和几何恢复正确。回执：test-tmp/navigation-delivery/live-client.json。未改 MCP 配置；源码和 Schema 无后续变化，不要求再次重启当前连接。
+- 安装的 Skill 已通过既有脚本备份并同步，仅更新两份手册的策略版本，入口仍为 22 行；备份 .wincode-backup-946fa519-9d5c-4008-ba14-e3ac6fdf27dd，校验 matched=true。最终 PR-head 的 Node 22/24、三项 CodeQL 和合并后 main 检查仍待运行；不沿用 PR #39 的成功结果。

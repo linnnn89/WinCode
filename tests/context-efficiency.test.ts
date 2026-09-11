@@ -86,7 +86,7 @@ it('precise retrieval remains bounded after response serialization', async () =>
   });
 });
 
-async function fixture(run: (root: string, router: ToolRouter, call: (args: Record<string, unknown>) => Promise<any>) => Promise<void>) {
+async function fixture(run: (root: string, router: ToolRouter, call: (args: Record<string, unknown>, name?: string) => Promise<any>) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-context-'));
   const config = getDefaultConfig(root);
 
@@ -101,7 +101,7 @@ async function fixture(run: (root: string, router: ToolRouter, call: (args: Reco
       i === 49 ? 'export function SaveTarget() { return "TARGET_BODY"; }' : `// fixture line ${i + 1}`).join('\n'));
     router.text.findSymbolsDetailed = async () => ({ symbols: [], limitations: [], queryComplete: true } as any);
     await Promise.all([client.connect(clientTransport), (server as any).server.connect(serverTransport)]);
-    await run(root, router, args => client.callTool({ name: 'wincode_prepare_context', arguments: args }));
+    await run(root, router, (args, name = 'wincode_prepare_context') => client.callTool({ name, arguments: args }));
   } finally {
     await client.close();
     await server.stop();
@@ -120,6 +120,68 @@ function payload(result: any) {
   assert.ok(length <= data.metrics.budgetTokens * 4, `response ${length} exceeds total character budget`);
   return { data, texts };
 }
+
+it('scoped navigation finds a literal call, outlines its file and follows source without reading outside links', async t => fixture(async (root, _router, call) => {
+  await fs.mkdir(path.join(root, 'src'));
+  const source = 'public class Session {\n public void Save() {\n Cache[0].Save("marker");\n }\n}';
+  await fs.writeFile(path.join(root, 'src/Session.cs'), source);
+  await fs.writeFile(path.join(root, 'Decoy.cs'), 'Cache[0].Save("OUT_OF_SCOPE");');
+  const decode = (result: any) => {
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    return JSON.parse(result.content[0].text);
+  };
+  const found = decode(await call({ query: 'Cache[0].Save(', scopePaths: ['src', 'src/Session.cs'] }, 'wincode_search_text'));
+  assert.equal(found.queryComplete, true);
+  assert.equal(found.matches.length, 1, 'overlapping scopes must not duplicate matches');
+  assert.equal(found.matches[0].file, 'src/Session.cs');
+  assert.equal(found.matches[0].line, 3);
+  assert.equal(found.matches[0].column, 2);
+  assert.ok(!JSON.stringify(found).includes('OUT_OF_SCOPE'));
+  const read = payload(await call(found.matches[0].nextRequest)).data;
+  assert.equal(read.evidence[0].snippet, source);
+  const outline = decode(await call({ file: path.join(root, 'src/Session.cs') }, 'wincode_file_outline'));
+  assert.equal(outline.fileLineCount, 5);
+  assert.equal(outline.sizeBytes, Buffer.byteLength(source));
+  assert.deepEqual(outline.symbols.map((s: any) => [s.name, s.line]), [['Session', 1], ['Save', 2]]);
+  const method = payload(await call(outline.symbols[1].nextRequest)).data;
+  assert.ok(method.evidence[0].snippet.includes('public void Save()'));
+  const none = decode(await call({ query: 'Cache0XSave(', scopePaths: ['src'] }, 'wincode_search_text'));
+  assert.equal(none.matches.length, 0, 'query metacharacters must be literal');
+  await fs.writeFile(path.join(root, 'src/Broken.ts'), 'const text = `unterminated');
+  const broken = decode(await call({ file: 'src/Broken.ts' }, 'wincode_file_outline'));
+  assert.equal(broken.fileLineCount, 1);
+  assert.equal(broken.queryComplete, false);
+  assert.ok(broken.fileIssues.some((i: any) => i.path === 'src/Broken.ts' && i.reason === 'lexical-uncertainty'));
+  await fs.writeFile(path.join(root, 'src/Large.cs'), 'x'.repeat(256 * 1024 + 1));
+  const external = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-navigation-outside-'));
+  try {
+    await fs.writeFile(path.join(external, 'Secret.cs'), 'Cache[0].Save("MUST_NOT_READ");');
+    await fs.symlink(external, path.join(root, 'src/linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    const opened: string[] = [];
+    const realOpen = fs.open;
+    const open = t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+      opened.push(String(args[0]));
+      return realOpen(...args);
+    });
+    const linked = decode(await call({ query: 'Cache[0].Save(', scopePaths: ['src/linked'] }, 'wincode_search_text'));
+    assert.equal(linked.queryComplete, false);
+    assert.ok(linked.fileIssues.some((i: any) => i.reason === 'invalid-scope'));
+    assert.ok(!opened.some(file => file.startsWith(external)), 'an outside file must never be opened');
+    opened.length = 0;
+    const invalid = await call({ query: 'Cache', scopePaths: ['src', '../outside'] }, 'wincode_search_text');
+    assert.equal(invalid.isError, true);
+    assert.equal(opened.length, 0, 'all scopes must validate before any file is opened');
+    open.mock.restore();
+    const boundedResult = await call({ query: 'x', scopePaths: ['src'], maxOutputChars: 2048 }, 'wincode_search_text');
+    const bounded = decode(boundedResult);
+    assert.ok(boundedResult.content[0].text.length <= 2048);
+    assert.equal(bounded.queryComplete, false);
+    assert.ok(bounded.fileIssues.some((i: any) => i.path === 'src/Large.cs' && i.reason === 'file-byte-limit'));
+  } finally {
+    assert.equal(path.dirname(external), path.resolve(os.tmpdir()));
+    await fs.rm(external, { recursive: true, force: true });
+  }
+}));
 
 it('compact MCP response returns file evidence once and accounts for its entire output', async () => fixture(async (_root, _router, call) => {
   const { data, texts } = payload(await call({ task: '查看文件', candidateFiles: ['Service.ts'], maxTokens: 2000 }));

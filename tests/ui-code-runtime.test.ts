@@ -147,6 +147,24 @@ await server.start();
     const beforePid = running.pid;
     const disabled = await inspect();
     assert.equal(disabled.tree!.isEnabled, false);
+    const compact = await call('wincode_ui_review', {
+      pid: running.pid, hwnd: running.hwnd, backgroundOnly: true, capture: 'none', responseFormat: 'compact',
+      query: { automationId: 'btnCodeNavigation', maxSearchNodes: 500, maxMatches: 2 }, maxDepth: 2, maxNodes: 10,
+      candidateFiles: ['MainWindow.xaml'], candidateCodeFiles: ['MainWindow.xaml.cs'],
+    });
+    assert.equal(compact.tree.automationId, 'btnCodeNavigation');
+    assert.equal(compact.tree.isEnabled, false);
+    assert.equal(compact.summary.observedNodes, disabled.totalNodes, 'compare retained nodes with the independent native snapshot count, including button content');
+    assert.equal(compact.codeEvidence.runtimeSourceVerified, false);
+    const compactClue = compact.codeEvidence.clues.find((item: any) => item.identifier === 'ReviewActionCommand');
+    const compactAssignment = compact.codeEvidence.candidates.find((item: any) => compactClue.candidateIds.includes(item.id) && item.kind === 'assignment');
+    const compactSource = await call('wincode_prepare_context', compactAssignment.nextRequest);
+    assert.ok(compactSource.evidence[0].snippet.includes('new SourceRepairCommand(CanExecuteReviewAction)'));
+    const expansion = compact.expansionRequests.find((item: any) => item.arguments.query?.automationId === 'btnCodeNavigation');
+    const expanded = await call(expansion.tool, expansion.arguments);
+    assert.equal(expanded.tree.automationId, 'btnCodeNavigation');
+    assert.equal(expanded.tree.isEnabled, false);
+    assert.ok(expanded.tree.bounds, 'the returned expansion must restore the real control geometry');
     const xaml = disabled.sourceEvidence!.nodes.find(node => node.nodeId === disabled.tree!.id)!;
     assert.equal(xaml.candidateCount, 1);
     assert.equal(xaml.candidates[0].declarations.Command, '{Binding ReviewActionCommand}');

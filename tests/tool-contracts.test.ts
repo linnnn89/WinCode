@@ -46,6 +46,7 @@ const examples: Record<string, Record<string, unknown>> = {
   wincode_list_directory: { path: '.', maxDepth: 1 }, wincode_hello_world: { greeting: 'hello' },
   wincode_analyze_workspace: { maxDepth: 2 }, wincode_prepare_context: { task: 'Inspect Target', scopeFiles: ['Target.ts'] },
   wincode_find_code_symbol: { query: 'Target', kind: 'class' }, wincode_find_references: { symbolName: 'Target', relativePath: 'Target.ts' },
+  wincode_search_text: { query: 'Target', scopePaths: ['Target.ts'] }, wincode_file_outline: { file: 'Target.ts' },
   analyze_change_impact: { target: 'Target' }, wincode_analyze_change_impact: { target: 'Target' },
   wincode_diagnose_project: {}, wincode_plan_refactoring: { target: 'Target', goal: 'Improve reliability' },
   wincode_safe_move_to_trash: { filePath: 'Target.ts', reason: 'fixture' },
@@ -62,6 +63,8 @@ const expectedCalls: Record<string, { method: string; args: unknown[] }> = {
   wincode_analyze_workspace: { method: 'analyzeWorkspace', args: [2, '<signal>'] },
   wincode_prepare_context: { method: 'prepareContext', args: [{ task: 'Inspect Target', scopeFiles: ['Target.ts'] }, '<signal>'] },
   wincode_find_code_symbol: { method: 'findCodeSymbols', args: ['Target', 'class', '<signal>'] },
+  wincode_search_text: { method: 'searchText', args: [{ query: 'Target', scopePaths: ['Target.ts'] }, '<signal>'] },
+  wincode_file_outline: { method: 'fileOutline', args: [{ file: 'Target.ts' }, '<signal>'] },
   wincode_find_references: { method: 'findCodeReferences', args: ['Target', 'Target.ts', '<signal>'] },
   analyze_change_impact: { method: 'analyzeChangeImpact', args: ['Target', '<signal>'] },
   wincode_analyze_change_impact: { method: 'analyzeChangeImpact', args: ['Target', '<signal>'] },
@@ -73,14 +76,14 @@ const expectedCalls: Record<string, { method: string; args: unknown[] }> = {
   wincode_ui_review: { method: 'reviewUi', args: [{ pid: 5, hwnd: undefined }, ['View.xaml'], '<signal>', ['Save'], ['View.cs']] },
 };
 
-it('calls all 15 published tools and the hidden alias; unknown fields do not reach use cases', async () => fixture(async (client, router) => {
+it('calls all published tools and the hidden alias; unknown fields do not reach use cases', async () => fixture(async (client, router) => {
   await fs.writeFile(path.join(router.config.workspaceRoot, 'Target.ts'), 'export class Target {}');
   const prepared = await router.prepareContext(examples.wincode_prepare_context as any);
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const stub = (method: string, result: unknown) => {
     (router as any)[method] = async (...args: unknown[]) => { calls.push({ method, args }); return structuredClone(result); };
   };
-  for (const method of ['openWorkspace', 'listDirectory', 'analyzeWorkspace', 'findCodeSymbols', 'findCodeReferences', 'diagnoseProject', 'planRefactoring'])
+  for (const method of ['openWorkspace', 'listDirectory', 'analyzeWorkspace', 'findCodeSymbols', 'findCodeReferences', 'diagnoseProject', 'planRefactoring', 'searchText', 'fileOutline'])
     stub(method, { success: true });
   stub('prepareContext', prepared);
   stub('moveToTrash', { success: true });
@@ -90,7 +93,7 @@ it('calls all 15 published tools and the hidden alias; unknown fields do not rea
   stub('inspectUi', { success: true });
   stub('reviewUi', { success: true });
   const published = (await client.listTools()).tools;
-  assert.equal(published.length, 15);
+  assert.equal(published.length, 17);
   assert.ok(!published.some(tool => tool.name === 'wincode_workspace_open'));
   assert.deepEqual(new Set([...published.map(tool => tool.name), 'wincode_workspace_open']), new Set(Object.keys(examples)));
   const responses = new Map<string, unknown>();

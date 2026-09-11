@@ -87,7 +87,9 @@ try {
 import { getDefaultConfig } from ${url('Core/Config.js')};
 import { ToolRouter } from ${url('Core/ToolRouter.js')};
 import { WinCodeMcpServer } from ${url('Gateway/McpServer.js')};
-const config = getDefaultConfig(${JSON.stringify(temporary)});
+const config = getDefaultConfig(${JSON.stringify(workspace)});
+config.cacheDir = ${JSON.stringify(path.join(temporary, 'cache'))};
+config.trashDir = ${JSON.stringify(path.join(temporary, 'trash'))};
 
 config.adapters.repomix.useCli = false;
 const server = new WinCodeMcpServer(new ToolRouter(config));
@@ -99,6 +101,7 @@ await server.start();
   await client.connect(transport);
   const hello = await call('wincode_hello_world', {}, report.setup);
   assert.equal(hello.runtime.build.status, 'verified');
+  assert.equal(hello.workspace, workspace);
   report.runtime = hello.runtime;
   report.schemaHash = hello.toolContract.schemaHash;
   await call('workspace_open', { path: workspace }, report.setup);

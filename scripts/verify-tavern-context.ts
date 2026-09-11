@@ -42,7 +42,9 @@ try {
 import { getDefaultConfig } from ${url('Core/Config.js')};
 import { ToolRouter } from ${url('Core/ToolRouter.js')};
 import { WinCodeMcpServer } from ${url('Gateway/McpServer.js')};
-const config = getDefaultConfig(${JSON.stringify(temporary)});
+const config = getDefaultConfig(${JSON.stringify(workspace)});
+config.cacheDir = ${JSON.stringify(path.join(temporary, 'cache'))};
+config.trashDir = ${JSON.stringify(path.join(temporary, 'trash'))};
 
 config.adapters.flaui.enabled = ${Boolean(uiPid)};
 config.adapters.repomix.useCli = false;
@@ -60,6 +62,7 @@ await server.start();
   };
   report.hello = (await call('wincode_hello_world', { toolName: 'wincode_prepare_context' })).data;
   assert.equal(report.hello.runtime.build.status, 'verified');
+  assert.equal(report.hello.workspace, workspace);
   report.open = await call('workspace_open', { path: workspace });
   assert.ok(report.open.characters <= 8000);
   const scenarios = [

@@ -288,7 +288,7 @@
 - 基线：分支 codex/agent-efficiency-round1，HEAD 6fba44a7404960257e5c749210892477ad26845c，源码版本 0.9.0，SDK 锁文件 1.30.0；不把旧对话 main@b492491 当作本地基线。开始时工作区干净。
 - 当前核查：workspace_open 仍默认附带深度 2、宽度及整响应未设预算的目录树；hello 返回 0.9.0 和工具名，缺少构建/schema 身份。当前会话已经暴露 scopeFiles/symbol/lineRanges，本次限定 483–705 行实际只返回 483–576、truncated=true；不能用 queryComplete=true/evidenceInsufficient=false 代替任务覆盖。历史约 5 万 token 为用户提供的实测概括，本次未重测 TavernDesk 或复算原始响应。
 - 路线决定：按用户指定将工作区摘要、运行实例/能力核对、精准取证实机验收排在前三；随后 Serena 身份/解析正确性、MCP SDK v2、UI→XAML→C#，MSBuild/WPF 深检/Repo Map 按真实需求进入。应用导航可访问性、computer use 错归窗口与测试环境初始化分别归因，不算成 WinCode 三类新增缺陷。固定测试目录的既有完成状态引用原工作记录，不冒称本轮验证。
-- 交付：[WinCode-迭代路线图.md](../WinCode-迭代路线图.md)。包含 R1–R9 目标、最小范围、代码落点、验收反例、GitHub 五项经验、暂缓项和后续 USER_DECISION_REQUIRED。补充同会话诊断与真实宿主验收区别、最终正文范围覆盖、Node 20+ 迁移门槛；不为 Inspector 额外安装或升级环境。
+- 交付：[WinCode-迭代路线图.md](https://github.com/linnnn89/WinCode/blob/d51f3e105b07b50b1e2535ca541f532ea77b3fc5/WinCode-%E8%BF%AD%E4%BB%A3%E8%B7%AF%E7%BA%BF%E5%9B%BE.md)。包含 R1–R9 目标、最小范围、代码落点、验收反例、GitHub 五项经验、暂缓项和后续 USER_DECISION_REQUIRED。补充同会话诊断与真实宿主验收区别、最终正文范围覆盖、Node 20+ 迁移门槛；不为 Inspector 额外安装或升级环境。
 - 文档验证：UTF-8、13 个不同本地链接、占位/冲突标记与围栏检查通过；初次空白检查发现 Markdown 换行末空格，已改为段落分隔。最终复核仅新增路线图并增订本日志。未修改生产代码、配置或锁文件，未运行代码回归、GUI/Serena 实机验收，未提交、推送或更新发布包。
 
 ## 2026-09-08（北京时间）— R1 工作区摘要 0.9.1
@@ -905,7 +905,7 @@
 
 ## 2026-09-10 11:57 — 回顾并精简下一轮规划，形成并发治理最终推荐（北京时间）
 
-- 用户要求结合 GitHub 优秀案例给出最终推荐，并写入原规划书、删除已经确定实现的部分。本轮仅修改 [详细计划](../WinCode-下一轮工程化迭代计划书.md)、[简版路线图](../WinCode-迭代路线图.md) 和本日志，没有修改生产代码、测试、依赖、实际客户端配置或远端。
+- 用户要求结合 GitHub 优秀案例给出最终推荐，并写入原规划书、删除已经确定实现的部分。本轮仅修改 [详细计划](../WinCode-下一轮工程化迭代计划书.md)、[简版路线图](https://github.com/linnnn89/WinCode/blob/d51f3e105b07b50b1e2535ca541f532ea77b3fc5/WinCode-%E8%BF%AD%E4%BB%A3%E8%B7%AF%E7%BA%BF%E5%9B%BE.md) 和本日志，没有修改生产代码、测试、依赖、实际客户端配置或远端。
 - 复核当前 0.14.0 未发布工作树及现有回执：核心 360/360、桌面 35/35、真实托盘/Roslyn 贯通、最近托盘专项、三实例诊断、第二轮失败、修正后边界和混合负载报告。delivery:verify 再次 matched=true，contentId=132e047e7d81a73a26b3b1cc24623ee464fa653f718049f30af1d1873c54fa7d；不是重跑这些代码测试，不把旧回执套到未经验证的新生产修改。
 - 从未来待办删除旧 M0–M4 已完成的本机重建、owner guard、UIA 延迟探测、手动释放、托盘/安全 IPC、状态可信度和原生交付绑定步骤；已验证托盘八注册/拒绝/空位恢复也移出开发队列。删除已过期版本建议、相互矛盾的“没有托盘/缺少可逆释放/仍主动启动探测”等基线，以及 M5 中 2/5/10 分钟自动释放设置的旧执行方案。只保留简短基线和历史链接，不删除既有日志与失败回执。
 - 最终推荐为独立 Gateway、连接固定项目、健康 Host 保持热态、有界排队。N1 固定根和错误目标零副作用；N2 同根确认与必要恢复分流；N3 有界受理/公平等待/取消收尾/明确过载；N4 真实共享缓存/源码变更和窗口边界验证；N5 实际消费者、原生未定位失败及交付验收。每项列关键模块和可反证验收。
@@ -1106,7 +1106,7 @@
 - 正式源码已接入 [DesignTimeBuild](../tools/WinCode.Code.Host/DesignTimeBuild.cs)、[OwnedBuildOutputs](../tools/WinCode.Code.Host/OwnedBuildOutputs.cs)、[DesignTimeArtifacts](../src/Adapters/DesignTimeArtifacts.ts)，并连接 WorkspaceSession、WorkspaceInputs、RoslynHostClient。输入策略协议升为 2，适配器和已有契约夹具同步；旧策略 Host 的专项拒绝测试尚待补充。最后加入的重叠输出目录候选合并、从实际 Imports 解析原 hook 两项修改在本轮原型回执之后，尚未构建验证。
 - 已实际执行 `node node_modules/tsx/dist/cli.mjs --test tests/design-time-artifacts.test.ts tests/roslyn-contracts.test.ts`：**23/23 通过**，含仅回收所属 UUID、全量预校验、越根/其他 UUID/链接/损坏清单拒绝及 Roslyn 契约。该命令未生成持久报告；不得将这些 TypeScript 测试当作正式 Native 编译或 MCP 并发验收。
 - **当前最终源码为 WIP**：尚未执行正式接入后的 typecheck、Native Release 构建、完整核心检查、默认三 Host 并发冷加载和交付身份核对。磁盘 dist/Native 及前文 417 项、真实客户端等结果对应 N4 接入前构建，不覆盖最后源码；AssemblyAttributes.cs/editorconfig 并发问题仍不能在生产验收层面关闭。
-- 明日首先处理两个明确的验证入口问题：旧 buildPrototype 文本锚点已不匹配正式接入后的 WorkspaceSession；原型 WINCODE_N4_INSTANCE 与正式 WINCODE_BUILD_INSTANCE 必须统一到被测 Host 的真实 UUID，避免 blocker/产物清理检查错位。不得把当前源码作为原实现基线。然后正式构建，并按 [2026-09-11 恢复顺序](../WinCode-下一轮工程化迭代计划书.md#2026-09-11-恢复顺序)完成并发、输入、生命周期与交付验收。
+- 明日首先处理两个明确的验证入口问题：旧 buildPrototype 文本锚点已不匹配正式接入后的 WorkspaceSession；原型 WINCODE_N4_INSTANCE 与正式 WINCODE_BUILD_INSTANCE 必须统一到被测 Host 的真实 UUID，避免 blocker/产物清理检查错位。不得把当前源码作为原实现基线。然后正式构建，并按 [2026-09-11 恢复顺序](https://github.com/linnnn89/WinCode/blob/d51f3e105b07b50b1e2535ca541f532ea77b3fc5/WinCode-%E4%B8%8B%E4%B8%80%E8%BD%AE%E5%B7%A5%E7%A8%8B%E5%8C%96%E8%BF%AD%E4%BB%A3%E8%AE%A1%E5%88%92%E4%B9%A6.md#2026-09-11-%E6%81%A2%E5%A4%8D%E9%A1%BA%E5%BA%8F)完成并发、输入、生命周期与交付验收。
 - 反证自审保留：原型通过不代表最后两个源码修订正确；动态 ProjectReference、多目标框架、自定义 Compile 仍需检查保守失效行为；Gateway 与 Host 同时硬退出或断电后的孤儿目录未实现自动回收。尚未独立审查、Node 22 验证或当前 PR CI 验证。Codex 继续单列待验，先不动 agy CLI，没有再次更改客户端或权限策略。
 - 同步 README、CHANGELOG、架构说明、路线图和计划的当前状态，保留历史失败日志。test-tmp 原始回执仅保留本机、受 Git 忽略，不上传原始模型配置、日志或运行产物；远端 PR 提供结果摘要及可继续执行的待办。当前进度按用户明确授权提交并推送为草稿 PR，等待明日继续。
 
@@ -1297,3 +1297,17 @@
 - 原场景从磁盘索引取得同键并发写入的最终附件，却只观察客户端 A 的重建次数；两个客户端可以各自持有不同但有效的附件。固定为 A 写入、删除自有索引、B 再写入的顺序后，旧断言确定性失败：[red](../test-tmp/shared-cache/run-v1macn/report.json) 记录 A 附件存在、B 附件已淘汰、A 重建次数为 0。该行为符合 Cache.get 对内存条目及其实际附件的校验；[npm/cacache](https://github.com/npm/cacache/blob/main/lib/get.js) 的内存命中先于索引查询也支持两者不能等同的判断，不引入依赖。
 - 修正原有场景：由 A 单独创建此前未使用的 Item31 条目，断言磁盘附件就是 A 返回的附件，再执行同样 20 次对端写入和并发读取。仍严格要求实际附件淘汰、至少一次重建、删除索引后的有效热命中，其余损坏、源修改、跨根和退出验收保持原样。仅修改验收脚本及本工作日志，未改生产缓存、超时、依赖或增加测试数量。
 - 本地 Node 24：原完整共享缓存验收 [8/8 通过](../test-tmp/shared-cache/run-WDVkcF/report.json)；固定上述双附件顺序后，修正脚本 [8/8 通过](../test-tmp/shared-cache/run-VjL1Cd/report.json)。两次 cleanupFailures 和 survivors 均为空，脚本语法及 git diff --check 通过。Node 22 和本次 PR 的五项必需检查由新 head 的 CI 验证，合并后还需确认 main 新运行；本记录不将待运行检查计为通过。
+
+## 2026-09-11 — 清理旧计划并更新 0.15.0 文档
+
+- 核对本地代码、测试脚本和 main `d51f3e1` 的 [CI](https://github.com/linnnn89/WinCode/actions/runs/34571066627) / [CodeQL](https://github.com/linnnn89/WinCode/actions/runs/34571066444)：PR #37/#38 已合并，Node 22/24 和三项 CodeQL 检查通过，GitHub Release 列表为空。固定工作区、请求限制、独立设计时输出、共享缓存和合并验证已从待办移除。
+- 删除重复的迭代路线图，将原详细计划缩减为后续测试清单。保留实际客户端 Roslyn、双连接 UI、未定位的 UI/托盘失败和 SDK 突发请求警告；大项目、长期运行、特殊 MSBuild 项目和异常退出按实际需求测试。旧计划及研究记录可从 Git 历史查看。
+- 更新中英文 README，修正架构说明、CHANGELOG 和安全说明中的版本及合并状态，保留原安全维护承诺。第一版写完后按用户要求润色：删去“绝对免疫”“杜绝大模型产生误判”等过度承诺，将“业务闭环”“取证路由”等改为具体操作；同时按源码纠正影响分析字段，未知风险为 riskLevel=UNKNOWN，置信度为 confidence=UNCERTAIN。历史工作日志仅将三处旧路线图或已删除章节的链接改为固定提交链接，原记录文字保留。
+- 本机 WinCode Skill 已在前一轮安装并精简入口，Codex 连接已确认运行 0.15.0 / local-text；完整 Roslyn 流程仍需测试。本次只修改文档，未运行代码或桌面测试，未修改受管 Skill、客户端配置或依赖。
+- 文档验证通过：扫描 360 处相对链接和章节链接，本次未新增失效链接；历史文档中原有的 64 处失效链接保留原记录。README 的 8 段 JSON 示例均可解析且与修改前完全一致，12 个 npm 命令均存在于 package.json；源码版本 0.15.0、SDK 10.0.303 与配置一致。Markdown 围栏、UTF-8、历史日志正文保留检查和 git diff --check 均通过。变更仅涉及 8 个 Markdown 文件（含删除 1 个），未提交或推送。
+
+## 2026-09-11 — PR #39 的 CI 清理检查超时
+
+- 文档提交 `26d0a42` 的 [CI 34575235538](https://github.com/linnnn89/WinCode/actions/runs/34575235538) 中，Node 24 和三项 CodeQL 通过，Node 22 在 owner-death 测试结束时失败。Roslyn Host 59 项、Gateway 22 项均通过；owner-death 主场景记录 9 个已观察进程、survivors=[]、success=true。
+- 失败来自随后执行的兜底清理检查：`terminateObserved` 启动的 PowerShell 子进程触发 8000 ms 超时，报告 `spawnSync powershell.exe ETIMEDOUT`，导致整组测试按既有规则失败。现有记录不能确定超时发生在 PowerShell 启动还是命令执行阶段，也不能证明运行环境抖动就是根因。报告已下载到本地 `test-tmp/pr39-ci-26d0a42-attempt1`。
+- 与已通过的 main `d51f3e1` 比较，生产代码和相关测试脚本完全一致。核对了 Node child_process 超时说明，并检索 GitHub runner-images 的相关记录，未找到可直接确认本次根因的同类案例。先记录失败并重新验证，以检查是否为偶发超时；不更改生产代码、测试断言、清理范围或超时时间，不将重跑通过称为根因已修复。合并仍要求当前 PR 提交的全部必需检查通过。

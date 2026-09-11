@@ -1305,3 +1305,9 @@
 - 更新中英文 README，修正架构说明、CHANGELOG 和安全说明中的版本及合并状态，保留原安全维护承诺。第一版写完后按用户要求润色：删去“绝对免疫”“杜绝大模型产生误判”等过度承诺，将“业务闭环”“取证路由”等改为具体操作；同时按源码纠正影响分析字段，未知风险为 riskLevel=UNKNOWN，置信度为 confidence=UNCERTAIN。历史工作日志仅将三处旧路线图或已删除章节的链接改为固定提交链接，原记录文字保留。
 - 本机 WinCode Skill 已在前一轮安装并精简入口，Codex 连接已确认运行 0.15.0 / local-text；完整 Roslyn 流程仍需测试。本次只修改文档，未运行代码或桌面测试，未修改受管 Skill、客户端配置或依赖。
 - 文档验证通过：扫描 360 处相对链接和章节链接，本次未新增失效链接；历史文档中原有的 64 处失效链接保留原记录。README 的 8 段 JSON 示例均可解析且与修改前完全一致，12 个 npm 命令均存在于 package.json；源码版本 0.15.0、SDK 10.0.303 与配置一致。Markdown 围栏、UTF-8、历史日志正文保留检查和 git diff --check 均通过。变更仅涉及 8 个 Markdown 文件（含删除 1 个），未提交或推送。
+
+## 2026-09-11 — PR #39 的 CI 清理检查超时
+
+- 文档提交 `26d0a42` 的 [CI 34575235538](https://github.com/linnnn89/WinCode/actions/runs/34575235538) 中，Node 24 和三项 CodeQL 通过，Node 22 在 owner-death 测试结束时失败。Roslyn Host 59 项、Gateway 22 项均通过；owner-death 主场景记录 9 个已观察进程、survivors=[]、success=true。
+- 失败来自随后执行的兜底清理检查：`terminateObserved` 启动的 PowerShell 子进程触发 8000 ms 超时，报告 `spawnSync powershell.exe ETIMEDOUT`，导致整组测试按既有规则失败。现有记录不能确定超时发生在 PowerShell 启动还是命令执行阶段，也不能证明运行环境抖动就是根因。报告已下载到本地 `test-tmp/pr39-ci-26d0a42-attempt1`。
+- 与已通过的 main `d51f3e1` 比较，生产代码和相关测试脚本完全一致。核对了 Node child_process 超时说明，并检索 GitHub runner-images 的相关记录，未找到可直接确认本次根因的同类案例。先记录失败并重新验证，以检查是否为偶发超时；不更改生产代码、测试断言、清理范围或超时时间，不将重跑通过称为根因已修复。合并仍要求当前 PR 提交的全部必需检查通过。

@@ -41,6 +41,17 @@ describe('workspace-files', () => {
       assert.ok(!childNames.includes('.git'), '.git directory must be excluded');
     });
 
+    it('excludes worktree git files by default while preserving explicit ignored listings', async () => {
+      const fixture = await fs.mkdtemp(path.join(testCacheDir, 'git-file-'));
+      await fs.writeFile(path.join(fixture, '.git'), 'gitdir: ../repository/.git/worktrees/example\n');
+      await fs.writeFile(path.join(fixture, 'source.ts'), 'export const value = 1;\n');
+      const workspace = new WorkspaceManager(getDefaultConfig(fixture));
+      const tree = await workspace.getDirectoryTree(1);
+      assert.deepStrictEqual(tree.children?.map(item => item.name), ['source.ts']);
+      const listing = await workspace.listDirectory({ includeIgnored: true, maxDepth: 1 });
+      assert.ok(listing.entries.some(item => item.path === '.git' && item.type === 'file'));
+    });
+
     it('Security Boundary: Safe moveToTrash must move file and write metadata', async () => {
       const testFile = path.join(root, 'tdd_temp_file_for_trash.txt');
       await fs.writeFile(testFile, 'Crucial content that should never be permanently deleted', 'utf-8');

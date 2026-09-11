@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { TrayClient, resolveTrayEndpoint } from '../src/Gateway/TrayClient.js';
+import { TrayClient } from '../src/Gateway/TrayClient.js';
 import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { getDefaultConfig } from '../src/Core/Config.js';
 
@@ -33,10 +33,6 @@ async function fixture() {
     counts: () => ({ shutdown, release }),
     close: async () => { client.dispose(); socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); await router.dispose(); } };
 }
-
-it('Tray endpoint resolves the published current-user helper without starting a Tray', { timeout: 8000 }, async () => {
-  assert.match(await resolveTrayEndpoint(new AbortController().signal), /^WinCode\.Tray\.v1\.S-1-/);
-});
 
 it('registration acknowledgement is passive and refusal reports its reason without stopping MCP', { timeout: 8000 }, async () => {
   const f = await fixture();

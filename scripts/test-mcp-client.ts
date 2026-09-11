@@ -14,6 +14,11 @@ async function verify() {
   const client = new Client({ name: 'wincode-runtime-probe', version: '1' });
   let transport: StdioClientTransport | undefined;
   try {
+    // check.mjs runs this after parallel regression, so native startup does not compete with its test workers.
+    const { resolveTrayEndpoint } = await import(pathToFileURL(path.join(repo, 'dist/Gateway/TrayClient.js')).href);
+    const endpointStarted = performance.now();
+    assert.match(await resolveTrayEndpoint(new AbortController().signal), /^WinCode\.Tray\.v1\.S-1-/);
+    const trayEndpoint = { verified: true, durationMs: performance.now() - endpointStarted };
     const lines = Array.from({ length: 60 }, (_, index) => index === 49 ?
       'export function RuntimeProbeTarget() { return "RUNTIME_TARGET_BODY"; }' : `// padding ${index + 1}`);
     await fs.writeFile(path.join(root, 'Target.ts'), lines.join('\n'));
@@ -80,9 +85,9 @@ await server.start();
     assert.deepEqual(after.runtime, hello.runtime);
     console.log(JSON.stringify({ status: 'passed', transport: 'stdio', productionHandlers: true,
       upstreams: false, gui: false, codexConnectionVerified: false, version: hello.version,
-      runtime: hello.runtime, schemaHash: hello.toolContract.schemaHash, toolCount: tools.length,
+      runtime: hello.runtime, schemaHash: hello.toolContract.schemaHash, toolCount: tools.length, trayEndpoint,
       resourceCleanup: { observation: 'before shutdown; not proof of process exit', value: hello.health?.resourceCleanup ?? null },
-      checks: ['initialize', 'tools/list', 'hello schema agreement', 'literal search to source', 'file outline', 'EOF correction to source',
+      checks: ['published Tray endpoint', 'initialize', 'tools/list', 'hello schema agreement', 'literal search to source', 'file outline', 'EOF correction to source',
         'symbol body at line 50', 'exact range body', 'unknown fields ignored', 'known field type rejected', 'stable instance'] }, null, 2));
   } finally {
     try { await client.close(); } finally {

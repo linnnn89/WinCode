@@ -1333,3 +1333,11 @@
 - 本地 Node 24.19.0：Gateway 构建和类型检查通过；上下文、导航、扫描、工具契约与 UI 候选集合 86/86；生产固定工作区集合 8/8；修订后的 MCP 恢复场景 1/1；真实 WPF 源码修改与重编译流程 1/1。正式 STDIO 的 17 工具、搜索/概览/EOF 续读、错误契约 17 场景通过。原生三组件经锁定 restore 和正式 Release 发布，交付清单校验通过。原始失败记录保留；本轮未重复完整本地 core/desktop 集合，完整兼容性检查交给最终 PR 提交的 CI。分阶段回执：test-tmp/navigation-delivery/report.json。
 - 实际 Codex 连接已在本次核对前刷新：实例 44103150-ef65-41e1-9f61-db8162ef752f，17 个工具、buildId=866c93db7b87c8a5a5f5975f8c81ad601b01c02477a562b837414fbd9f344ba3，与独立 worktree 构建相同。通过该连接完成限定目录搜索、文件概览、按返回请求读取 25/25 行；针对本轮启动的隔离 WPF 窗口完成 compact 读取及 full 展开，原生查询唯一，控件状态和几何恢复正确。回执：test-tmp/navigation-delivery/live-client.json。未改 MCP 配置；源码和 Schema 无后续变化，不要求再次重启当前连接。
 - 安装的 Skill 已通过既有脚本备份并同步，仅更新两份手册的策略版本，入口仍为 22 行；备份 .wincode-backup-946fa519-9d5c-4008-ba14-e3ac6fdf27dd，校验 matched=true。最终 PR-head 的 Node 22/24、三项 CodeQL 和合并后 main 检查仍待运行；不沿用 PR #39 的成功结果。
+
+## 2026-09-11 — 合并后 Node 22 失败与 worktree 浏览修正
+
+- PR #40 的最终提交 7ceeeff 在 Node 22/24 和三项 CodeQL 首次检查全部通过后合并为 0944051；随后 main CI 34584238856 的 Node 22 回归失败。唯一失败项为 Tray 端点解析，耗时 3049.8471 ms，原生进程因生产 resolver 的 3000 ms 超时被终止；尚无证据区分 .NET 冷启动、系统负载或其他启动延迟。
+- 将已有的真实端点断言从并行回归移到现有生产 STDIO 阶段，调用编译后的生产 resolver，并将实际耗时写入 check 报告。生产超时、版本与管道断言不变；失败仍阻断 check，无跳过或自动重试。其余九项 Tray 协议测试保留。Node 官方文档说明测试文件默认通过子进程并行运行：https://nodejs.org/download/release/v22.23.2/docs/api/test.html；本调整减少测试启动竞争，不声称已经确定所有端点超时的根因。
+- 本地第一次完整 check 失败于原有目录树断言：worktree 的 .git 是文件，现有目录过滤没有排除它。Git 官方说明此布局：https://git-scm.com/docs/git-worktree。新增一个临时文件回归先复现失败，再仅补充 .git 文件的默认排除；includeIgnored=true 仍能列出该文件。相关浏览测试 17/17 通过。
+- 最终一次本地完整 check 通过：Node 24.19.0，454/454、无跳过；生产 STDIO 的 Tray 端点 251.4701 ms、17 工具与导航/EOF 检查通过；三组件正式构建和交付清单验证通过。报告 test-tmp/check/2026-09-11T09-42-37-700Z-core/report.json。先前失败报告 test-tmp/check/2026-09-11T09-37-13-728Z-core/report.json 保留。未再次运行无关 desktop 集合。
+- 本次修改不增加依赖或架构层次。远端最终 PR-head 和合并后 main 检查仍待运行；当前 Codex 连接已验证 PR #40 的导航与 UI 行为，但最后这条目录过滤需要下一次正常连接加载新构建。

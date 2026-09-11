@@ -1356,3 +1356,13 @@
 - 排查上一次完整检查中的四个 8000 ms 超时。加入有界 stderr 后运行六个相关文件，55/55 通过，子进程 stderr 共 97 字节；未复现超时，不把管道阻塞或 Node 版本差异称为已确定根因。诊断记录：`test-tmp/r3/stdio-diagnostic-parallel.log`。Node 官方文档说明测试文件默认并行执行：https://nodejs.org/docs/latest-v24.x/api/test.html。
 - 确认旧协议测试直接扫描整个开发仓库，所创建的独立 cache 配置没有传给实际 CLI。将输入改为三个固定文件组成的临时项目，源码及 trash 均在该项目内；删除无效配置。复用已安装 MCP SDK 的握手、传输与关闭，保留 8000 ms 超时、原有 12 个场景及协议错误断言，错误附最多 8192 字符 stderr。没有新增测试、依赖或生产代码。
 - 定向 12/12 通过；最终完整 `npm run check` 455/455、0 失败、0 跳过，生产 stdio、原生构建及交付清单核验通过。报告：`test-tmp/check/2026-09-11T10-46-38-024Z-core/report.json`。先前失败报告保留；当前结果证明固定输入的测试通过，不宣称已解释历史机器负载。修改后的 PR-head 仍需 Node 22/24 与 CodeQL 检查。
+
+## 2026-09-11 — 完成产品任务、双 Gateway UI 与实际客户端 Roslyn 验收
+
+- TavernDesk 专用 profile 的目录 ACL 未见明显异常。临时诊断构建将测试回执中的异常类型改为完整调用栈，未复现启动失败；随后按原始字节恢复 App.xaml.cs，用未修改源码重建到 WinCode 的 test-tmp，启动成功。未重置权限、使用管理员提权或接触日常数据库，原始 UnauthorizedAccessException 原因仍未确定，不归因于用户玩游戏或移动窗口。
+- 新构建的专用测试窗口 PID 3132 / HWND 0x1B0C2A 完成六个产品任务，全部通过；回执 `test-tmp/product-tasks/1789123829157-28704/report.json`，启动记录 `test-tmp/r3/tavern-current-startup-passed.json`。验收后关闭该进程，New-tavern 源码无保留改动。
+- 新增两个真实 stdio Gateway 场景，覆盖同一窗口和不同窗口。复用 WPF 夹具中的 UIA provider 握手，增加可释放的测试等待，确保首个 Helper 已进入 UIA 后再验证另一个 Gateway 的 AUDIT_BUSY；释放后检查 PID/HWND、不同标题、PNG 尺寸及 Helper 退出。仅修改测试和夹具，没有修改生产 Mutex、队列或重试行为。测试窗口使用已有后台模式，不主动抢焦点。定向 2/2 通过；随后修正 SDK stderr 静态类型不支持 resume 的类型错误，改为监听 data，类型检查通过。
+- 桌面集合最终 37/37，通过 owner-death（`test-tmp/owner-death/run-Ae2zd0/report.json`）和托盘协议（`test-tmp/tray/run-HmVbOK/report.json`）。用户重启整个 Codex 时，check:desktop 最后的托盘工作流被中断，未生成完整总报告；已完成的日志和 JUnit 在 `test-tmp/check/2026-09-11T10-53-12-759Z-desktop`。仅补跑未完成的托盘工作流，通过 `test-tmp/tray-workflow/run-8FHrV2/report.json`，survivors=[]；不将这些分段结果描述为一次完整 desktop 检查通过。
+- 实际 Codex 连接实例 7509c731-baca-4031-a1fe-33a8c722b400，buildId=cbe44dd4e37479ce563c91e5ab9de3439813020de2d4664e3f4e9467e7302741，明确启用 Roslyn，目标为 TavernDesk.Core 的 53 文件隔离副本。完成声明搜索、8 处引用、影响分析和重构建议；副本源码前插入一行后，旧 location 返回 SNAPSHOT_STALE，重新搜索使声明从第 10 行/position 121 移至第 11 行/158，新 snapshot 恢复 8 处引用。报告 `test-tmp/live-roslyn-20260911/report.json`；保留 queryComplete=false、排除 8 个分析器/生成器以及单项目范围，不将 UNKNOWN 风险改称低风险。
+- 原副本已恢复，原项目与副本的 53 个源文件哈希均匹配。项目级临时 `.codex/config.toml` 已移除，CLI 核对默认 WinCode 启动参数已恢复，全局配置未改。用户明确要求后台重启后，核对临时 Gateway PID 30892 与其 Roslyn Host PID 20164 的归属并结束 Gateway，两者均退出；随后实际工具调用返回 Transport closed，说明 Codex 没有自动重建该连接。未启动无客户端连接的替代进程，也未结束其他 WinCode 实例。实际客户端验收已完成；当前连接恢复仍须客户端刷新，不能写成后台重连成功。
+- 此次新增两个测试，更新现有 README、架构说明和待办，删除已完成的验收事项。生产源码、依赖和受管 Skill 均未改变。

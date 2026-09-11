@@ -2,12 +2,101 @@ import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { FlaUiAdapter } from '../src/Adapters/FlaUiAdapter.js';
 import { getDefaultConfig } from '../src/Core/Config.js';
 import { killProcessTree } from '../src/Core/ResourceManager.js';
 import { UiInspectResult } from '../src/Core/UiContracts.js';
+
+for (const sameWindow of [false, true]) {
+  it(`two stdio Gateways preserve ${sameWindow ? 'one window' : 'distinct windows'} across audit contention`, { timeout: 45000 }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-two-ui-'));
+    const marker = path.join(root, 'provider-entered');
+    const fixtures: ChildProcess[] = [];
+    const gateways: Array<{ client: Client; transport: StdioClientTransport }> = [];
+    const targets: Array<{ pid: number; hwnd: string }> = [];
+    let first: Promise<any> | undefined;
+    const call = async (index: number, name: string, args: Record<string, unknown> = {}) => {
+      const result = await gateways[index].client.callTool({ name, arguments: args }, { timeout: 20000 });
+      return { response: result, data: JSON.parse((result.content as Array<{ text: string }>)[0].text) };
+    };
+    try {
+      for (let i = 0; i < 2; i++) {
+        const child = spawn(path.resolve('tests/fixtures/wpf-ui-review/bin/Release/net10.0-windows/win-x64/publish/wpf-ui-review.exe'),
+          ['--background-fixture', '--auto-close=40000'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+            env: { ...process.env, WINCODE_TEST_UI_LABEL: `Gateway target ${i}`, ...(i === 0 ? { WINCODE_TEST_UI_HOLD_MARKER: marker } : {}) } });
+        fixtures.push(child);
+        child.stderr!.resume();
+        targets.push(await new Promise<{ pid: number; hwnd: string }>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('WPF fixture READY timeout')), 8000);
+          let output = '';
+          child.stdout!.on('data', chunk => {
+            output = (output + chunk).slice(-4096);
+            const ready = /READY (\d+) (0x[0-9A-F]+)/i.exec(output);
+            if (ready) { clearTimeout(timer); resolve({ pid: Number(ready[1]), hwnd: ready[2] }); }
+          });
+          child.once('error', error => { clearTimeout(timer); reject(error); });
+          child.once('exit', code => { clearTimeout(timer); reject(new Error(`WPF fixture exited: ${code}`)); });
+        }));
+        const workspace = path.join(root, `workspace-${i}`);
+        await fs.mkdir(workspace);
+        const transport = new StdioClientTransport({ command: process.execPath,
+          args: [path.resolve('dist/index.js'), '--workspace', workspace], cwd: workspace, stderr: 'pipe' });
+        transport.stderr?.on('data', () => {});
+        const client = new Client({ name: `two-gateways-${i}`, version: '1' });
+        gateways.push({ client, transport });
+        await client.connect(transport);
+      }
+      assert.notEqual(gateways[0].transport.pid, gateways[1].transport.pid);
+      const request = (target: number) => ({ ...targets[target], backgroundOnly: true, capture: 'original', maxDepth: 2 });
+      await fs.writeFile(marker + '.armed', '');
+      first = call(0, 'wincode_ui_inspect', request(0));
+      // The provider marker is written only after the first helper enters real UIA access.
+      const deadline = Date.now() + 8000;
+      while (!(await fs.stat(marker).catch(() => null)) && Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(await fs.readFile(marker, 'utf8'), String(targets[0].pid));
+      const active = (await call(0, 'wincode_hello_world')).data.health.flaui.runtime.activePid;
+      assert.ok(active);
+      const target = sameWindow ? 0 : 1;
+      const blocked = await call(1, 'wincode_ui_inspect', request(target));
+      assert.equal(blocked.data.errorCode, 'AUDIT_BUSY');
+      assert.equal(blocked.data.success, false);
+      assert.equal(blocked.data.tree, undefined);
+      await fs.writeFile(marker + '.release', '');
+      const completed = await first;
+      const recovered = await call(1, 'wincode_ui_inspect', request(target));
+      for (const [result, expected] of [[completed, 0], [recovered, target]] as const) {
+        assert.equal(result.data.success, true, JSON.stringify(result.data));
+        assert.equal(result.data.pid, targets[expected].pid);
+        assert.equal(result.data.hwnd.toLowerCase(), targets[expected].hwnd.toLowerCase());
+        assert.equal(result.data.tree.name, `Gateway target ${expected}`);
+        const image = (result.response.content as Array<{ type: string; data?: string }>).find(block => block.type === 'image');
+        assert.ok(image?.data, 'A successful original capture must contain a screenshot');
+        const png = Buffer.from(image.data, 'base64');
+        assert.equal(png.subarray(1, 4).toString(), 'PNG');
+        assert.equal(png.readUInt32BE(16), result.data.imageWidth);
+        assert.equal(png.readUInt32BE(20), result.data.imageHeight);
+      }
+      assert.throws(() => process.kill(active, 0), 'Completed helper must exit');
+      for (let i = 0; i < 2; i++) {
+        const health = (await call(i, 'wincode_hello_world')).data.health;
+        assert.equal(health.flaui.runtime.activePid, null);
+        assert.equal(health.managedChildProcesses, 0);
+      }
+    } finally {
+      await fs.writeFile(marker + '.release', '');
+      await first?.catch(() => {});
+      for (const gateway of gateways) { await gateway.client.close(); await gateway.transport.close(); }
+      for (const child of fixtures) { await killProcessTree(child); assert.throws(() => process.kill(child.pid!, 0)); }
+      assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}
 
 it('window discovery rejects invalid filters, disabled configuration and queued cancellation', async () => {
   const config = getDefaultConfig(process.cwd());

@@ -14,7 +14,8 @@ public partial class MainWindow : Window
 {
     protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer()
     {
-        var marker = Environment.GetEnvironmentVariable("WINCODE_TEST_OWNER_UI_MARKER");
+        var marker = Environment.GetEnvironmentVariable("WINCODE_TEST_OWNER_UI_MARKER")
+            ?? Environment.GetEnvironmentVariable("WINCODE_TEST_UI_HOLD_MARKER");
         return marker == null ? base.OnCreateAutomationPeer() : new OwnerDeathPeer(this, marker);
     }
 
@@ -26,7 +27,13 @@ public partial class MainWindow : Window
             if (System.IO.File.Exists(marker + ".armed"))
             {
                 System.IO.File.WriteAllText(marker, Environment.ProcessId.ToString());
-                System.Threading.Thread.Sleep(60000);
+                if (Environment.GetEnvironmentVariable("WINCODE_TEST_UI_HOLD_MARKER") == marker)
+                {
+                    var deadline = Stopwatch.StartNew();
+                    while (!System.IO.File.Exists(marker + ".release") && deadline.ElapsedMilliseconds < 15000)
+                        System.Threading.Thread.Sleep(10);
+                }
+                else System.Threading.Thread.Sleep(60000);
             }
             return base.GetNameCore();
         }
@@ -72,6 +79,7 @@ public partial class MainWindow : Window
             };
         }
         if (Environment.GetCommandLineArgs().Contains("--window-list-fixture")) Title = "WinCode 窗口发现夹具";
+        if (Environment.GetEnvironmentVariable("WINCODE_TEST_UI_LABEL") is string label) Title = label;
         if (Environment.GetCommandLineArgs().Contains("--budget-fixture"))
         {
             var panel = new StackPanel();

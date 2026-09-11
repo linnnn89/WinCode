@@ -63,9 +63,9 @@ Each instance accepts up to **32 unfinished tool requests**, including queued re
 
 **Verified baseline on 2026-09-11:** Navigation and compact UI results ([PR #40](https://github.com/linnnn89/WinCode/pull/40)), followed by the worktree `.git` filter and Tray test scheduling correction ([PR #41](https://github.com/linnnn89/WinCode/pull/41)), are merged. The resulting `main` commit `631f8ba` passed [Node 22/24 CI](https://github.com/linnnn89/WinCode/actions/runs/34586761303) and all three [CodeQL checks](https://github.com/linnnn89/WinCode/actions/runs/34586761201). Node 22 recorded 453 core tests passed, zero failed and one optional TavernDesk test skipped; Roslyn Host 59/59, Gateway 22/22, shared-cache 8/8, SDK concurrency 10/10 and design-time isolation 21/21 passed. Node 22 runs additional acceptance stages, so its total job duration is not a Node 22/24 performance comparison.
 
-The opt-in TavernDesk scripts now bind the requested repository at startup and keep cache/trash in a separate temporary directory. The eight real-project context scenarios passed locally. The six UI product tasks remain unverified in this run: the dedicated TavernDesk application exited with `UnauthorizedAccessException` before showing its window. These scripts use fresh stdio connections; they do not verify the active Codex connection or its Roslyn workflow.
+The opt-in TavernDesk scripts bind the requested repository at startup and keep cache/trash in a separate temporary directory. The eight real-project context scenarios and six UI product tasks passed locally. The dedicated application initially failed with `UnauthorizedAccessException`; a build from current, unchanged source started successfully. The original startup failure remains unexplained.
 
-Concurrent UI inspection, the full Roslyn workflow in actual agent clients, and resource use during extended runs still need testing. Pending work is listed in the [remaining test plan](WinCode-下一轮工程化迭代计划书.md); previous results and failures are in the [work log](docs/codex_worklog.md).
+Local acceptance also covered two independent Gateway processes inspecting the same and different windows: overlapping access returned `AUDIT_BUSY`, subsequent access recovered, and window identity, screenshots and helper cleanup were checked. The actual Codex connection completed Roslyn search, references, impact and refactoring guidance on an isolated TavernDesk.Core copy; after a source edit, old locations were rejected and a new search restored reference queries. This covers one project/configuration and excludes eight analyzer/generator references; it does not establish complete application coverage. Extended resource use and unresolved UI issues remain in the [test plan](WinCode-下一轮工程化迭代计划书.md); results and failures are in the [work log](docs/codex_worklog.md).
 
 **Specify a project at startup (recommended):** Add `--workspace` followed by the existing project directory's absolute path:
 
@@ -324,9 +324,9 @@ npm run delivery:verify
 
 **2026-09-11 已验证基线：**代码导航和 UI 精简输出（[PR #40](https://github.com/linnnn89/WinCode/pull/40)），以及 worktree 的 `.git` 文件过滤与托盘测试调度修正（[PR #41](https://github.com/linnnn89/WinCode/pull/41)）均已合并。合并后的 `main` 提交 `631f8ba` 通过 [Node 22/24 CI](https://github.com/linnnn89/WinCode/actions/runs/34586761303) 和三项 [CodeQL 检查](https://github.com/linnnn89/WinCode/actions/runs/34586761201)。Node 22 记录核心测试 453 项通过、0 项失败、1 项可选 TavernDesk 测试跳过；Roslyn Host 59/59、Gateway 22/22、共享缓存 8/8、SDK 并发 10/10、设计时隔离 21/21 均通过。Node 22 还执行额外验收，不能用两个任务的总耗时比较 Node 22/24 的性能。
 
-可选 TavernDesk 验收脚本已改为启动时绑定目标仓库，缓存和回收站使用独立临时目录。真实项目的 8 个上下文场景已在本机通过；本轮 6 个 UI 产品任务尚未验证，因为专用测试应用在显示窗口前以 `UnauthorizedAccessException` 退出。这些脚本使用新建的 stdio 连接，不代表当前 Codex 连接或其中的 Roslyn 流程已经验证。
+可选 TavernDesk 验收脚本在启动时绑定目标仓库，缓存和回收站使用独立临时目录。真实项目的 8 个上下文场景和 6 个 UI 产品任务均已在本机通过。专用应用最初报 `UnauthorizedAccessException`；用当前未修改的源码构建后启动成功，但原始启动失败的原因尚未确定。
 
-UI 并发检查、实际 Agent 客户端中的完整 Roslyn 操作流程，以及长期运行的资源占用仍需测试。未完成事项见[后续测试计划](WinCode-下一轮工程化迭代计划书.md)，历史测试结果和失败记录见[工作日志](docs/codex_worklog.md)。
+本机还验证了两个独立 Gateway 检查同一窗口及不同窗口：重叠访问返回 `AUDIT_BUSY`，随后恢复成功，窗口身份、截图及辅助进程清理均通过检查。实际 Codex 连接使用 TavernDesk.Core 的隔离副本完成 Roslyn 搜索、引用、影响分析和重构建议；修改源码后，旧位置被拒绝，重新搜索后引用查询恢复。此次只覆盖一个项目和配置，排除了 8 个分析器/生成器引用，不代表完整应用覆盖。长期资源占用和未定位的 UI 问题见[后续测试计划](WinCode-下一轮工程化迭代计划书.md)，测试结果和失败记录见[工作日志](docs/codex_worklog.md)。
 
 **启动时指定项目（推荐）：**添加 `--workspace` 和已存在的项目目录绝对路径：
 

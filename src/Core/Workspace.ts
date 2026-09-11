@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runGit } from './GitClient.js';
 import { assertLinkFreePath } from './FileSystemBoundary.js';
-import type { OperationContext } from './OperationContext.js';
+import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { WinCodeConfig } from './Config.js';
 import { randomUUID } from 'node:crypto';
 
@@ -236,7 +236,8 @@ export class WorkspaceManager {
    * Safe file deletion policy: Moves files to the project trash directory.
    * Only accepts non-empty relative paths strictly within the workspace.
    */
-  async moveToTrash(relativeFilePath: string, reason?: string): Promise<TrashMoveResult> {
+  async moveToTrash(relativeFilePath: string, reason?: string, operation?: OperationContext): Promise<TrashMoveResult> {
+    checkOperation(operation);
     try { validateTrashPath(relativeFilePath, this.root, this.config.trashDir); }
     catch (error) {
       return invalidTrashResult(error instanceof Error ? error.message : String(error));
@@ -264,6 +265,7 @@ export class WorkspaceManager {
       await assertLinkFreePath(this.config.trashDir);
 
       failureStage = 'prepare';
+      checkOperation(operation);
       await fs.mkdir(this.config.trashDir, { recursive: true });
       await assertLinkFreePath(this.config.trashDir);
       if (await fs.realpath(this.config.trashDir) !== realTrash) throw new Error('Trash destination changed during preparation.');
@@ -289,9 +291,11 @@ export class WorkspaceManager {
       failureStage = 'move';
       await assertLinkFreePath(this.config.trashDir);
       if (await this.getRealPath(targetPath) !== realTarget) throw new Error('Trash source changed during preparation.');
+      checkOperation(operation);
       await fs.rename(targetPath, destinationPath);
       moved = true;
 
+      // After the move, finish recording its location rather than cancelling metadata recovery evidence.
       failureStage = 'metadata';
       const metaPath = path.join(this.config.trashDir, `${trashFileName}.meta.json`);
       await assertLinkFreePath(this.config.trashDir);
@@ -315,6 +319,7 @@ export class WorkspaceManager {
         message: `File safely moved to trash: ${path.relative(this.root, destinationPath)}`,
       };
     } catch (err) {
+      if (!moved) rethrowOperationError(err, operation);
       const detail = err instanceof Error ? err.message : String(err);
       return {
         success: false,

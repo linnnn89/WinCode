@@ -45,6 +45,73 @@ it('raw UTF-8 argument budget applies before unknown fields are discarded', asyn
   assert.notEqual(legal.isError, true);
 }));
 
+it('trash retains completed and partial file outcomes when metadata finalization crosses the deadline', async t => fixture(async ({ root, router, call }) => {
+  const now = Date.now.bind(Date), write = fs.writeFile.bind(fs);
+  let advance = 0, failMetadata = false;
+  router.config.timeouts.fileScanMs = 1000;
+  t.mock.method(Date, 'now', () => now() + advance);
+  const metadataWrite = t.mock.method(fs, 'writeFile', async (...args: Parameters<typeof fs.writeFile>) => {
+    if (String(args[0]).startsWith(root + path.sep) && String(args[0]).endsWith('.meta.json')) {
+      advance = 2000;
+      if (failMetadata) throw new Error('fixture metadata failure after deadline');
+    }
+    return write(...args);
+  });
+  try {
+    for (const partial of [false, true]) {
+      advance = 0; failMetadata = partial;
+      const file = partial ? 'partial.txt' : 'completed.txt';
+      const originalPath = path.join(root, file);
+      await write(originalPath, 'preserve this payload');
+      const response = await call('wincode_safe_move_to_trash', { filePath: file });
+      const result = body(response);
+      assert.equal(result.outcome, partial ? 'partial' : 'completed');
+      assert.equal(response.isError, partial);
+      assert.equal(result.originalPath, originalPath);
+      await assert.rejects(fs.stat(originalPath), { code: 'ENOENT' });
+      assert.equal(path.dirname(result.trashPath), router.config.trashDir);
+      assert.equal(await fs.readFile(result.trashPath, 'utf8'), 'preserve this payload');
+      if (partial) {
+        assert.equal(result.errorCode, 'TRASH_METADATA_FAILED');
+        assert.equal(result.failureStage, 'metadata');
+        assert.deepEqual(response.structuredContent, result);
+        await assert.rejects(fs.stat(result.metadataPath), { code: 'ENOENT' });
+      } else assert.equal(JSON.parse(await fs.readFile(result.metadataPath, 'utf8')).originalPath, originalPath);
+    }
+    assert.equal(router.admission.snapshot().business.timedOut, 2);
+    assert.equal(router.admission.pendingCount, 0);
+  } finally { advance = 0; metadataWrite.mock.restore(); }
+}));
+
+it('trash cancellation during path validation leaves the source untouched and releases admission after cleanup', async t => fixture(async ({ root, router, call }) => {
+  const originalPath = path.join(root, 'keep.txt');
+  await fs.writeFile(originalPath, 'keep');
+  const entered = deferred(), resume = deferred(), controller = new AbortController();
+  const realpath = fs.realpath.bind(fs), move = router.moveToTrash.bind(router);
+  let operationSignal: AbortSignal | undefined;
+  t.mock.method(router, 'moveToTrash', (file: string, reason?: string, signal?: AbortSignal) => {
+    operationSignal = signal;
+    return (move as any)(file, reason, signal);
+  });
+  const heldPath = t.mock.method(fs, 'realpath', async (...args: Parameters<typeof fs.realpath>) => {
+    const result = await realpath(...args);
+    if (String(args[0]) === originalPath) { entered.resolve(); await resume.promise; }
+    return result;
+  });
+  const rename = t.mock.method(fs, 'rename', fs.rename.bind(fs));
+  const pending = call('wincode_safe_move_to_trash', { filePath: 'keep.txt' }, controller.signal).catch(error => error);
+  try {
+    await entered.promise;
+    assert.ok(operationSignal, 'trash must receive the request cancellation signal');
+    controller.abort();
+    await until(() => operationSignal!.aborted, 'cancellation must reach the operation before validation resumes');
+  } finally { resume.resolve(); await pending; heldPath.mock.restore(); }
+  await until(() => router.admission.pendingCount === 0, 'cancelled operation must finish cleanup');
+  assert.equal(rename.mock.callCount(), 0);
+  assert.equal(await fs.readFile(originalPath, 'utf8'), 'keep');
+  assert.equal(router.admission.snapshot().business.cancelled, 1);
+}));
+
 for (const count of [4, 8, 16]) it(`${count} ordinary queued calls complete in FIFO order without overload`, async () => fixture(async ({ router, call }) => {
   const hold = deferred(), mutex = new Mutex(), order: string[] = [];
   (router.text as any).findSymbolsDetailed = (query: string, _kind: unknown, _path: unknown, operation: any) =>

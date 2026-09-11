@@ -8,6 +8,7 @@ import { getDefaultConfig } from '../src/Core/Config.js';
 import { ToolRouter } from '../src/Core/ToolRouter.js';
 import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 import { WINCODE_TOOLS, toolsContractHash } from '../src/Gateway/Protocol.js';
+import type { FindReferencesResult } from '../src/Core/CodeQueries.js';
 
 async function fixture(run: (client: Client, router: ToolRouter, admissions: () => number) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-tool-contract-'));
@@ -31,6 +32,84 @@ async function fixture(run: (client: Client, router: ToolRouter, admissions: () 
     await fs.rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
 }
+
+it('MCP reference output budgets escaped source text and preserves known counts', async t => fixture(async (client, router) => {
+  const directory = 'nested-' + 'long-path-'.repeat(6);
+  const file = path.join(directory, '中文-references.ts');
+  const preview = `Target(${JSON.stringify('引号" 反斜杠\\ 制表符\t 😀'.repeat(40))});`;
+  await fs.mkdir(path.join(router.config.workspaceRoot, directory));
+  await fs.writeFile(path.join(router.config.workspaceRoot, file), Array.from({ length: 120 }, () => preview).join('\n'));
+  const counts: number[] = [];
+  for (const budget of [2048, undefined, 32768]) {
+    const response: any = await client.callTool({ name: 'wincode_find_references', arguments: {
+      symbolName: 'Target', ...(budget === undefined ? {} : { maxOutputChars: budget }),
+    } });
+    const body = JSON.parse(response.content[0].text);
+    assert.notEqual(response.isError, true, JSON.stringify(body));
+    assert.ok(response.content[0].text.length <= (budget ?? 8000));
+    assert.equal(body.totalReferences, 120);
+    assert.equal(body.returnedReferences, body.references.length);
+    assert.ok(body.references.length > 0 && body.references.length < 120);
+    assert.equal(body.source, 'local-text'); assert.equal(body.queryComplete, false);
+    assert.equal(body.truncated, true); assert.deepEqual(body.outputOmissions, ['references']);
+    assert.equal(body.limits.maxOutputChars, budget ?? 8000);
+    for (const reference of body.references) {
+      assert.equal(reference.file.replaceAll('\\', '/'), file.replaceAll('\\', '/'));
+      assert.equal(reference.preview, preview);
+      assert.ok(reference.line >= 1 && reference.line <= 120);
+    }
+    counts.push(body.references.length);
+    t.diagnostic(JSON.stringify({ budget: budget ?? 8000, textChars: response.content[0].text.length, returned: body.returnedReferences, total: body.totalReferences }));
+  }
+  assert.ok(counts[0] < counts[1] && counts[1] < counts[2]);
+  const empty: any = await client.callTool({ name: 'wincode_find_references', arguments: { symbolName: 'Missing' } });
+  const emptyBody = JSON.parse(empty.content[0].text);
+  assert.equal(emptyBody.totalReferences, 0); assert.equal(emptyBody.returnedReferences, 0);
+  assert.equal(emptyBody.truncated, false); assert.equal(emptyBody.queryComplete, true);
+  assert.deepEqual(emptyBody.outputOmissions, []);
+}));
+
+it('MCP reference budgets retain candidate identity, omission counts and required metadata', async () => fixture(async (client, router) => {
+  const location = { snapshotId: 'a'.repeat(32), project: 'App.csproj', file: 'Target.cs', position: 13 };
+  const source: FindReferencesResult = {
+    symbolName: 'Target', source: 'roslyn', totalReferences: 0, references: [], resolution: 'ambiguous',
+    analysisCompleteness: 'incomplete', queryComplete: false, truncated: false,
+    limitations: ['Loaded snapshot only; generated and external callers are not covered.'],
+    candidates: Array.from({ length: 40 }, (_, index) => ({ name: 'Target', kind: 'class', file: `src/${index}/Target.cs`, line: 1,
+      signature: 'class Target /* ' + '"\\😀'.repeat(80) + ' */', location: { ...location, file: `src/${index}/Target.cs` } })),
+    candidateCount: 40, candidatesTruncated: false,
+    fileIssues: Array.from({ length: 12 }, (_, index) => ({ path: `src/${index}.cs`, reason: 'Cannot read source. '.repeat(20) })),
+    fileIssuesOmitted: 3,
+  };
+  const original = structuredClone(source);
+  router.findCodeReferences = async () => source;
+  const response: any = await client.callTool({ name: 'wincode_find_references', arguments: { symbolName: 'Target', maxOutputChars: 4096 } });
+  const body = JSON.parse(response.content[0].text);
+  assert.notEqual(response.isError, true); assert.ok(response.content[0].text.length <= 4096);
+  assert.equal(body.resolution, 'ambiguous'); assert.equal(body.totalReferences, 0); assert.equal(body.candidateCount, 40);
+  assert.ok(body.candidates.length > 0 && body.candidates.length < 40); assert.equal(body.candidatesTruncated, true);
+  assert.equal(body.truncated, true); assert.equal(body.queryComplete, false);
+  assert.deepEqual(body.candidates, original.candidates!.slice(0, body.candidates.length));
+  assert.deepEqual(body.limitations, original.limitations);
+  assert.equal(body.fileIssues.length + body.fileIssuesOmitted, 15);
+  assert.ok(body.outputOmissions.includes('candidates')); assert.ok(body.outputOmissions.includes('fileIssues'));
+  assert.deepEqual(source, original, 'formatting must not mutate query evidence shared with other consumers');
+
+  const required: FindReferencesResult = { ...source, resolution: 'resolved', candidates: undefined, candidateCount: undefined,
+    candidatesTruncated: undefined, fileIssues: undefined, fileIssuesOmitted: undefined,
+    symbolLocation: { ...location, project: 'p'.repeat(1500) + '.csproj', file: 'f'.repeat(1500) + '.cs' } };
+  router.findCodeReferences = async () => required;
+  const overflow: any = await client.callTool({ name: 'wincode_find_references', arguments: { symbolName: 'Target', maxOutputChars: 2048 } });
+  const failure = JSON.parse(overflow.content[0].text);
+  assert.equal(overflow.isError, true); assert.ok(overflow.content[0].text.length <= 2048);
+  assert.equal(failure.errorCode, 'OUTPUT_BUDGET_EXCEEDED'); assert.equal(failure.recoveryAction, 'increase_output_budget');
+  assert.deepEqual(overflow.structuredContent, failure);
+  const expanded: any = await client.callTool({ name: 'wincode_find_references', arguments: { symbolName: 'Target', maxOutputChars: 8000 } });
+  assert.notEqual(expanded.isError, true); assert.ok(expanded.content[0].text.length <= 8000);
+  const expandedBody = JSON.parse(expanded.content[0].text);
+  assert.deepEqual(expandedBody.symbolLocation, required.symbolLocation);
+  assert.deepEqual(expandedBody.outputOmissions, []); assert.equal(expandedBody.truncated, false);
+}));
 
 it('rejects object-valued symbol queries before admission or adapter execution', async () => fixture(async (client, router, admissions) => {
   let calls = 0;
@@ -65,12 +144,12 @@ const expectedCalls: Record<string, { method: string; args: unknown[] }> = {
   wincode_find_code_symbol: { method: 'findCodeSymbols', args: ['Target', 'class', '<signal>'] },
   wincode_search_text: { method: 'searchText', args: [{ query: 'Target', scopePaths: ['Target.ts'] }, '<signal>'] },
   wincode_file_outline: { method: 'fileOutline', args: [{ file: 'Target.ts' }, '<signal>'] },
-  wincode_find_references: { method: 'findCodeReferences', args: ['Target', 'Target.ts', '<signal>'] },
+  wincode_find_references: { method: 'findCodeReferences', args: ['Target', 'Target.ts', '<signal>', undefined, undefined] },
   analyze_change_impact: { method: 'analyzeChangeImpact', args: ['Target', '<signal>'] },
   wincode_analyze_change_impact: { method: 'analyzeChangeImpact', args: ['Target', '<signal>'] },
   wincode_diagnose_project: { method: 'diagnoseProject', args: ['<signal>'] },
   wincode_plan_refactoring: { method: 'planRefactoring', args: ['Target', 'Improve reliability', '<signal>'] },
-  wincode_safe_move_to_trash: { method: 'moveToTrash', args: ['Target.ts', 'fixture'] },
+  wincode_safe_move_to_trash: { method: 'moveToTrash', args: ['Target.ts', 'fixture', '<signal>'] },
   wincode_ui_list_windows: { method: 'listUiWindows', args: [{ pid: 5 }, '<signal>'] },
   wincode_ui_inspect: { method: 'inspectUi', args: [{ pid: 5, query: { name: 'Save' }, hwnd: undefined }, '<signal>'] },
   wincode_ui_review: { method: 'reviewUi', args: [{ pid: 5, hwnd: undefined }, ['View.xaml'], '<signal>', ['Save'], ['View.cs']] },
@@ -83,8 +162,10 @@ it('calls all published tools and the hidden alias; unknown fields do not reach 
   const stub = (method: string, result: unknown) => {
     (router as any)[method] = async (...args: unknown[]) => { calls.push({ method, args }); return structuredClone(result); };
   };
-  for (const method of ['openWorkspace', 'listDirectory', 'analyzeWorkspace', 'findCodeSymbols', 'findCodeReferences', 'diagnoseProject', 'planRefactoring', 'searchText', 'fileOutline'])
+  for (const method of ['openWorkspace', 'listDirectory', 'analyzeWorkspace', 'findCodeSymbols', 'diagnoseProject', 'planRefactoring', 'searchText', 'fileOutline'])
     stub(method, { success: true });
+  stub('findCodeReferences', { symbolName: 'Target', source: 'local-text', totalReferences: 0, references: [],
+    analysisCompleteness: 'degraded', limitations: [], queryComplete: true, truncated: false });
   stub('prepareContext', prepared);
   stub('moveToTrash', { success: true });
   stub('analyzeChangeImpact', { formattedReport: 'Fixture report' });
@@ -194,6 +275,9 @@ it('rejects blank required operation text before admission', async () => fixture
 it('rejects declared enum, range and nested type violations before admission', async () => fixture(async (client, _router, admissions) => {
   const cases: Array<[string, Record<string, unknown>]> = [
     ['wincode_list_directory', { maxDepth: 6 }], ['workspace_open', { path: 'example', maxOutputChars: 2047 }],
+    ['wincode_find_references', { symbolName: 'Target', maxOutputChars: 2047 }],
+    ['wincode_find_references', { symbolName: 'Target', maxOutputChars: 32769 }],
+    ['wincode_find_references', { symbolName: 'Target', maxOutputChars: 8000.5 }],
     ['wincode_prepare_context', { task: 'x', responseFormat: 'yaml' }], ['wincode_prepare_context', { task: 'x', maxTokens: 511 }],
     ['wincode_prepare_context', { task: 'x', lineRanges: [{ file: 'A.cs', startLine: '1', endLine: 3 }] }],
     ['wincode_ui_inspect', { pid: 5, capture: 'interactive' }], ['wincode_ui_inspect', { pid: 5, query: { name: 'Save', maxMatches: 21 } }],

@@ -3,15 +3,85 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { RoslynHostClient } from '../src/Adapters/RoslynHostClient.js';
 import { RoslynAdapter } from '../src/Adapters/RoslynAdapter.js';
 import { WINCODE_VERSION, getDefaultConfig } from '../src/Core/Config.js';
 import { ResourceManager } from '../src/Core/ResourceManager.js';
 import { CodeQueryError } from '../src/Core/CodeQueries.js';
 import { ToolRouter, WorkspaceRecoveryRequiredError } from '../src/Core/ToolRouter.js';
+import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 import { ImpactAnalyzer } from '../src/CompositeTools/ImpactAnalyzer.js';
 import { RefactorAssistant } from '../src/CompositeTools/RefactorAssistant.js';
 import type { CodeReferenceQuery, SymbolReference } from '../src/Core/CodeQueries.js';
+
+it('MCP preserves 120 known Roslyn references and accepts bounded limits without changing snapshot coverage', async () => {
+  const repo = path.resolve(import.meta.dirname, '..');
+  const { resolveDotnet, runDotnet } = await import(pathToFileURL(path.join(repo, 'scripts/lib/dotnet.mjs')).href);
+  const toolchain = resolveDotnet(repo);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-reference-limit-'));
+  const config = getDefaultConfig(root);
+  config.adapters.flaui.enabled = false; config.adapters.repomix.useCli = false;
+  config.adapters.roslyn = { enabled: true, allowProjectEvaluation: true, project: 'Probe.csproj', configuration: 'Debug',
+    targetFramework: 'net10.0', dotnetPath: toolchain.dotnet,
+    hostPath: path.join(repo, 'tools/WinCode.Code.Host/bin/Release/net10.0/publish/WinCode.Code.Host.dll') };
+  const router = new ToolRouter(config), server = new WinCodeMcpServer(router);
+  const client = new Client({ name: 'reference-limit-regression', version: '1' });
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const response: any = await client.callTool({ name, arguments: args }, { timeout: 60000 });
+    const data = JSON.parse(response.content[0].text);
+    assert.notEqual(response.isError, true, JSON.stringify(data));
+    if (name === 'wincode_find_references') assert.ok(response.content[0].text.length <= (args.maxOutputChars as number ?? 8000));
+    return data;
+  };
+  try {
+    await fs.writeFile(path.join(root, 'Probe.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableNETAnalyzers>false</EnableNETAnalyzers></PropertyGroup></Project>');
+    const source = 'public static class Api { public static void Call() {} }\npublic class Consumer { public void Run() {\n' +
+      Array.from({ length: 120 }, () => 'Api.Call();').join('\n') + '\n} }\n';
+    await fs.writeFile(path.join(root, 'Probe.cs'), source);
+    await fs.copyFile(path.join(repo, 'global.json'), path.join(root, 'global.json'));
+    const packages = path.join(root, 'empty-package-source'); await fs.mkdir(packages);
+    runDotnet(toolchain, ['restore', path.join(root, 'Probe.csproj'), '--source', packages, '--nologo'], root, 30000);
+    await router.initialize();
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(a), (server as any).server.connect(b)]);
+    const found = await call('wincode_find_code_symbol', { query: 'Call', kind: 'method' });
+    const selected = found.symbols.find((symbol: any) => symbol.name === 'Call');
+    assert.ok(selected?.location);
+    const args = { symbolName: 'Call', symbolLocation: selected.location };
+    const defaults = await call('wincode_find_references', args);
+    assert.equal(defaults.totalReferences, 120); assert.ok(defaults.references.length > 0 && defaults.references.length < 100);
+    assert.equal(defaults.truncated, true);
+    assert.deepEqual(defaults.outputOmissions, ['references']);
+    assert.equal(defaults.returnedReferences, defaults.references.length);
+    const countBounded = await call('wincode_find_references', { ...args, maxOutputChars: 32768 });
+    assert.equal(countBounded.references.length, 100); assert.deepEqual(countBounded.outputOmissions, []);
+    const impact = await call('analyze_change_impact', { target: 'Call', symbolLocation: selected.location });
+    assert.equal(impact.referencesCount, 100); assert.equal(impact.totalReferences, 120);
+    assert.equal(impact.referencesTruncated, true); assert.equal(impact.riskLevel, 'UNKNOWN');
+    for (const limit of [1, 120, 1000]) {
+      const result = await call('wincode_find_references', { ...args, limit, maxOutputChars: 32768 });
+      assert.equal(result.references.length, Math.min(limit, 120));
+      assert.equal(result.totalReferences, 120); assert.equal(result.truncated, limit < 120);
+      assert.equal(result.queryComplete, false);
+      assert.deepEqual(result.outputOmissions, []);
+      assert.equal(result.semanticContext.snapshotId, selected.location.snapshotId);
+      assert.equal(new Set(result.references.map((item: any) => item.start)).size, result.references.length);
+      for (const reference of result.references) assert.equal(source.slice(reference.start, reference.start + reference.length), 'Call');
+    }
+    for (const invalid of [{ ...args, limit: 0 }, { ...args, limit: 1001 }, { ...args, limit: 1.5 }, { symbolName: 'Call', limit: 120 }]) {
+      const response: any = await client.callTool({ name: 'wincode_find_references', arguments: invalid });
+      assert.equal(response.isError, true);
+      assert.equal(JSON.parse(response.content[0].text).errorCode, 'INVALID_ARGUMENT');
+    }
+  } finally {
+    await client.close(); await server.stop();
+    assert.equal(router.resources.childProcessCount(), 0);
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith('wincode-reference-limit-'));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 it('same-root confirmations preserve warm identity, reload state and perform a required restart only once', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-warm-中文 空格-'));

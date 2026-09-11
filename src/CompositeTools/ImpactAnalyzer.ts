@@ -27,6 +27,9 @@ export interface ImpactReport {
   targetFile: string;
   targetKind?: string;
   referencesCount: number;
+  /** Known total within the provider's query scope; null when unqueried or incompletely counted. */
+  totalReferences: number | null;
+  referencesTruncated: boolean | null;
   affected: string[];
   affectedComponents: AffectedComponent[];
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN';
@@ -229,6 +232,8 @@ export class ImpactAnalyzer {
     }
 
     let refs: SymbolReference[] = [];
+    let totalReferences: number | null = null;
+    let referencesTruncated: boolean | null = null;
     // 精确 Roslyn 定位允许收集局部引用；风险/置信度仍保留 queryComplete=false 的 UNKNOWN 限制。
     if (assessment.unique && (assessment.queryComplete || matchedSymbol?.location) && !assessment.truncated &&
         typeof this.queries.findReferencesDetailed === 'function') {
@@ -236,6 +241,9 @@ export class ImpactAnalyzer {
         matchedSymbol.name, matchedSymbol.file, operation, matchedSymbol.location
       ) : await this.queries.findReferencesDetailed(matchedSymbol?.namePath ?? symbolName, matchedSymbol?.file, operation));
       refs = refRes.references || [];
+      // Roslyn counts the snapshot before slicing; an incomplete text scan only knows its returned matches.
+      totalReferences = refRes.source === 'roslyn' || refRes.queryComplete ? refRes.totalReferences : null;
+      referencesTruncated = refRes.truncated;
       if (refRes.source) assessment.source = refRes.source;
       if (refRes.queryComplete === false) {
         assessment.queryComplete = false;
@@ -318,6 +326,8 @@ export class ImpactAnalyzer {
     const formattedReport = this.formatReport({
       targetFile,
       referencesCount,
+      totalReferences,
+      referencesTruncated,
       affected,
       riskLevel,
       recommendations,
@@ -335,6 +345,8 @@ export class ImpactAnalyzer {
       targetKind: matchedSymbol?.kind,
       ...(matchedSymbol?.location ? { symbolLocation: matchedSymbol.location } : {}),
       referencesCount,
+      totalReferences,
+      referencesTruncated,
       affected,
       affectedComponents,
       riskLevel,
@@ -377,6 +389,8 @@ export class ImpactAnalyzer {
     const formattedReport = this.formatReport({
       targetFile,
       referencesCount: 0,
+      totalReferences: null,
+      referencesTruncated: null,
       affected: [],
       riskLevel,
       recommendations,
@@ -393,6 +407,8 @@ export class ImpactAnalyzer {
       targetFile,
       targetKind: undefined,
       referencesCount: 0,
+      totalReferences: null,
+      referencesTruncated: null,
       affected: [],
       affectedComponents: [],
       riskLevel,
@@ -612,6 +628,8 @@ export class ImpactAnalyzer {
   private formatReport(data: {
     targetFile: string;
     referencesCount: number;
+    totalReferences: number | null;
+    referencesTruncated: boolean | null;
     affected: string[];
     riskLevel: string;
     recommendations: string[];
@@ -637,6 +655,13 @@ export class ImpactAnalyzer {
       ``,
       `References:`,
       `${data.referencesCount}`,
+      `(Returned references; affected components below are derived from these entries.)`,
+      ``,
+      `Known reference total in query scope:`,
+      `${data.totalReferences ?? 'Unknown'}`,
+      ``,
+      `Reference results truncated:`,
+      `${data.referencesTruncated ?? 'Unknown'}`,
       ``,
       `Affected:`,
       `${affectedLines}`,

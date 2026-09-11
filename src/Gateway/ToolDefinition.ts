@@ -15,6 +15,8 @@ export interface ToolDefinition {
   allowDuringWorkspaceRecovery?: boolean;
   requestLane?: 'status';
   requestBudget?: 'ui' | 'diagnostics' | 'workspace';
+  /** A completed mutation reports its actual outcome even if its request expired during finalization. */
+  preserveOutcomeOnInterruption?: boolean;
   invalidArguments?: (message: string) => CallToolResult;
   validate?: (args: Record<string, unknown>, context: ToolExecutionContext) => void;
   execute: (args: Record<string, unknown>, context: ToolExecutionContext) => Promise<CallToolResult>;
@@ -58,6 +60,7 @@ export function codeRecoveryAction(code: string): string {
     case 'PROJECT_LOAD_FAILED': return 'check_project';
     case 'INPUT_UNAVAILABLE': return 'repair_inputs';
     case 'INPUT_BUDGET_EXCEEDED': return 'reduce_scope';
+    case 'OUTPUT_BUDGET_EXCEEDED': return 'increase_output_budget';
     case 'OUTSIDE_WORKSPACE': case 'UNSUPPORTED_LINK': return 'correct_arguments';
     case 'CANCELLED': return 'none';
     default: return 'inspect_error';

@@ -1373,3 +1373,13 @@
 - 原报告确认 9 个受管进程全部退出，`survivors=[]`、场景成功；随后 finally 仍逐个启动 PowerShell 做兜底终止，其中一次 `spawnSync powershell.exe ETIMEDOUT`。这是测试收尾失败，不是本次报告中观察到进程泄漏。尚未确定该 PowerShell 调用为何超过 8 秒；Node 22 文档说明 spawnSync 的 timeout 限制子进程运行时间：https://nodejs.org/download/release/v22.23.2/docs/api/child_process.html#child_processspawnsynccommand-args-options。
 - 仅调整默认 owner-death 脚本：验收已确认全部退出后不再兜底终止；失败路径保留原有 PID/创建时间核验及清理。没有放宽超时、忽略清理错误或修改生产代码。
 - 真实正常路径通过，报告 `test-tmp/owner-death/run-HzZLg9/report.json`。另以临时脚本副本故意保留 Gateway，验证残留仍使验收失败、兜底清理实际执行、随后同身份进程全部消失；故障注入验证通过，报告 `test-tmp/owner-death/run-LTW9Qh/report.json`。未重复无关全量测试；新提交的远端检查尚待运行。
+
+## 2026-09-11 — 保留文件移动结果与引用计数，约束引用最终输出
+
+- 用户批准实现架构审查中的前两项修复，并同意增加引用输出字符预算；随后要求提交 PR 并合并。基于 main `4720bf8`，本轮只修改相关源码、测试和现有文档，没有增加依赖。
+- 修复 trash 已移动或元数据写入失败后，Gateway 的请求期限检查覆盖实际结果的问题。移动前传递取消并再次检查期限；移动后完成元数据收尾，保留 completed/partial、实际位置及中断计数。客户端取消或断线仍不能保证最终回复送达，没有增加事务日志或自动回滚。
+- 公开 Host 已有的 Roslyn limit（1–1000，默认 100，要求 symbolLocation）；影响报告保留已知 totalReferences、referencesTruncated 和实际聚合条数，未知总数仍为 null，UNKNOWN 规则不变。
+- 引用工具最终格式化 JSON 增加 maxOutputChars（2048–32768，默认 8000），两种提供方均适用，计入 UTF-16 字符、缩进、转义及元数据。保留实际返回数、输出省略项、候选和文件问题计数；必要身份及覆盖元数据放不下时明确返回 OUTPUT_BUDGET_EXCEEDED。输出裁剪不修改内部查询对象，不限制 Roslyn 查找阶段的计算成本。
+- 回归先确认旧实现会丢失移动结果/取消信号/引用总数，以及最终 JSON 超预算。实现后定向验证通过：真实临时文件移动与取消、真实 Roslyn Host 的 120 处引用、长路径和转义预览、候选身份及必要元数据边界。本轮累计新增 5 个测试，分属两次授权的局部任务（3 个及 2 个）；没有放宽原有超时或断言。
+- 最终完整 `npm run check` 460/460、0 失败、0 跳过，类型检查、Gateway/原生构建、生产 stdio 和交付核验通过。报告：`test-tmp/check/2026-09-11T13-13-40-686Z-core/report.json`；交付 contentId=`7d04eb319ef210868f25ece81496aaaad184e456a2ec3d302a8593e8923537f3`。错误契约 17/17：`test-tmp/error-contracts/run-bAbdGe/report.json`。
+- 自查及本地验证不等同于独立审查；最新 PR 提交仍须通过 Node 22/24 和三项 CodeQL 后再合并。未重新执行无关桌面验收，也未同步已安装 Skill 或重连当前 Codex MCP；本地构建完成不证明活动客户端已更新。

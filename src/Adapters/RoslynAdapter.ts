@@ -258,7 +258,9 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   findSymbolsInContent(content: string, file: string): CodeSymbol[] { return this.textDeclarations(content, file); }
 
   /** 精确引用只能使用本次搜索得到的定位；简单名结果保留候选，绝不选择第一个重载。 */
-  async findReferencesDetailed(symbolName: string, relativePath?: string, operation?: OperationContext, location?: SymbolLocation): Promise<FindReferencesResult> {
+  async findReferencesDetailed(symbolName: string, relativePath?: string, operation?: OperationContext, location?: SymbolLocation, limit?: number): Promise<FindReferencesResult> {
+    if (limit !== undefined && (!location || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000))
+      throw new CodeQueryError('INVALID_ARGUMENT', 'limit must be an integer from 1 to 1000 and requires a Roslyn symbolLocation.');
     if (relativePath) this.localPath(relativePath);
     if (symbolName.includes('/') || /\[\d+\]/.test(symbolName)) throw new CodeQueryError('LEGACY_SYMBOL_ID', 'Serena namePath cannot identify a Roslyn symbol; search again.');
     if (!location) {
@@ -274,8 +276,8 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
     return this.perform(operation, async () => {
       this.validateLocation(location);
       const reply = this.accept(await this.client!.request({ operation: 'references', snapshot: location.snapshotId, project: location.project,
-        file: location.file, position: location.position, symbolName }, this.options.queryTimeoutMs ?? 30000, operation));
-      if (!Array.isArray(reply.references) || reply.references.length > 1000 || typeof reply.truncated !== 'boolean' || !Number.isSafeInteger(reply.totalReferences))
+        file: location.file, position: location.position, symbolName, ...(limit === undefined ? {} : { limit }) }, this.options.queryTimeoutMs ?? 30000, operation));
+      if (!Array.isArray(reply.references) || reply.references.length > (limit ?? 100) || typeof reply.truncated !== 'boolean' || !Number.isSafeInteger(reply.totalReferences))
         throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid reference result.');
       const references: SymbolReference[] = reply.references.map((item: Record<string, unknown>) => {
         this.localPath(item.file as string); this.localPath(item.project as string);

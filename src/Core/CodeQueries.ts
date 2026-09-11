@@ -123,7 +123,7 @@ export interface CodeSymbolQuery {
 
 export interface CodeReferenceQuery extends CodeSymbolQuery {
   findReferences(symbolName: string, relativePath?: string, operation?: OperationContext): Promise<SymbolReference[]>;
-  findReferencesDetailed?(symbolName: string, relativePath?: string, operation?: OperationContext, location?: SymbolLocation): Promise<FindReferencesResult>;
+  findReferencesDetailed?(symbolName: string, relativePath?: string, operation?: OperationContext, location?: SymbolLocation, limit?: number): Promise<FindReferencesResult>;
 }
 
 export interface ContextCodeQuery extends CodeSymbolQuery {

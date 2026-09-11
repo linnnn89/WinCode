@@ -80,8 +80,8 @@ try {
   report.error = String(error);
   process.exitCode = 1;
 } finally {
-  // 清理不计入验收成功，PID/创建时间不匹配时绝不终止复用该 PID 的进程。
-  for (const old of [...observed].reverse()) {
+  // 已验证全部退出时无需再次启动清理进程；失败路径仍按 PID/创建时间兜底。
+  for (const old of (report.success ? [] : [...observed].reverse())) {
     try { if (terminateObserved(old)) report.cleanup.push({ pid: old.ProcessId, forced: true }); }
     catch (error) { report.cleanup.push({ pid: old.ProcessId, error: String(error) }); }
   }

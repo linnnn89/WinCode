@@ -176,10 +176,38 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   private limitations(reply: HostReply): string[] {
     if (reply.queryComplete !== false || !Array.isArray(reply.compilationErrors) || !Array.isArray(reply.loadDiagnostics) || !Number.isSafeInteger(reply.excludedAnalyzers))
       throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Missing Host completeness evidence.');
+    const summary = this.diagnostics(reply);
     return ['范围仅为当前入口加载的 C# 项目及单配置快照；不覆盖动态调用或仓外调用。',
       `排除 ${reply.excludedAnalyzers} 个分析器/生成器引用，生成源码覆盖未证明。`,
       '输入校验覆盖声明的文件集合，不保证任意外部 targets 输入或全磁盘原子一致。',
+      summary.countsComplete
+        ? `当前快照编译错误 ${summary.compilationErrorCount} 条，加载诊断 ${summary.loadDiagnosticCount} 条；展示 ${summary.samplesDisplayed} 条样例，省略 ${summary.samplesOmitted} 条。`
+        : `Host 未提供完整诊断统计；展示 ${summary.samplesDisplayed} 条样例，总数未知。`,
       ...[...reply.loadDiagnostics, ...reply.compilationErrors].slice(0, 5).map(value => String(value).slice(0, 1024))];
+  }
+
+  private diagnostics(reply: HostReply): NonNullable<SemanticContext['diagnosticSummary']> {
+    const samplesDisplayed = Math.min(5, (reply.loadDiagnostics as unknown[]).length + (reply.compilationErrors as unknown[]).length);
+    const raw = reply.diagnosticSummary as any;
+    if (raw === undefined) return { countsComplete: false, compilationErrorCount: null, loadDiagnosticCount: null,
+      samplesDisplayed, samplesOmitted: null, byCode: [], codesOmitted: null, byProject: [], projectsOmitted: null };
+    const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+    const groups = (values: any, total: number, omitted: number) => Array.isArray(values) && values.length <= 10 &&
+      values.every((v: any) => v && typeof v.key === 'string' && v.key.length > 0 && v.key.length <= 4096 && count(v.count)) &&
+      new Set(values.map((v: any) => v.key)).size === values.length &&
+      (omitted === 0 ? values.reduce((n: number, v: any) => n + v.count, 0) === total : values.reduce((n: number, v: any) => n + v.count, 0) <= total);
+    if (!raw || !count(raw.compilationErrorCount) || !count(raw.loadDiagnosticCount) ||
+        !count(raw.codesOmitted) || !count(raw.projectsOmitted) ||
+        !groups(raw.byCode, raw.compilationErrorCount, raw.codesOmitted) ||
+        !groups(raw.byProject, raw.compilationErrorCount, raw.projectsOmitted) ||
+        raw.loadDiagnosticCount !== (reply.loadDiagnostics as unknown[]).length ||
+        raw.compilationErrorCount < (reply.compilationErrors as unknown[]).length ||
+        !Number.isSafeInteger(raw.compilationErrorCount + raw.loadDiagnosticCount))
+      throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid diagnostic summary.');
+    for (const item of raw.byProject) this.localPath(item.key);
+    return { countsComplete: true, compilationErrorCount: raw.compilationErrorCount, loadDiagnosticCount: raw.loadDiagnosticCount,
+      samplesDisplayed, samplesOmitted: raw.compilationErrorCount + raw.loadDiagnosticCount - samplesDisplayed,
+      byCode: raw.byCode, codesOmitted: raw.codesOmitted, byProject: raw.byProject, projectsOmitted: raw.projectsOmitted };
   }
 
   /** 传递经校验的实际检查点，不把缺失的校验结果补写成 verified。 */
@@ -192,7 +220,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
         !Number.isSafeInteger(freshness.bytes) || freshness.bytes < 0 || freshness.bytes > 128 * 1024 * 1024)
       throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid semantic checkpoint evidence.');
     return { snapshotId: this.snapshot!, scope: 'loaded-solution-snapshot', diskFreshnessVerified: false,
-      excludedAnalyzers: reply.excludedAnalyzers as number, freshness };
+      excludedAnalyzers: reply.excludedAnalyzers as number, diagnosticSummary: this.diagnostics(reply), freshness };
   }
 
   /** 校验定位的坐标和范围；过期身份在启动或查询 Host 前拒绝。 */

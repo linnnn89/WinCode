@@ -184,6 +184,8 @@ bodyStatusScope 明确该字段描述 displayed-snippet 或 packed-file。symbol
 
 检查 source、queryComplete、uniqueResolution/uniqueTypeMatch 与 limitations。source=roslyn 是编译器语义来源，不是文本回退；queryComplete=false 可以表示生成器或加载图等覆盖缺口，不能直接解释为执行中断或要求原样重试。文本回退不保证语义引用完整；零引用、UNKNOWN 或未找到均不证明可安全删除。
 
+Roslyn 查询先读 `semanticContext.diagnosticSummary`，再读 limitations 中的诊断样例：`compilationErrorCount` 是当前加载快照的编译错误总数，`loadDiagnosticCount` 单列加载诊断；`samplesDisplayed/samplesOmitted` 区分展示与省略条数。`byCode/byProject` 各最多十组，`codesOmitted/projectsOmitted` 是未展示的组数；总数在裁剪前统计。`countsComplete=true` 只说明该快照的这两类诊断计数完整，不包括被排除的分析器、编译警告或未加载项目，也不提高 queryComplete。旧 Host 无统计时总数为 null、countsComplete=false，不从五条样例推断总数。诊断排查顺序见 [diagnostics.md](diagnostics.md)。
+
 影响分析用完整工作区文件路径及可用的项目身份区分组件，targetFile 和组件 name 仍是展示名称；不同目录同名组件可以分别出现，不要按 name 再合并。提供目录的 target 按工作区解析；只有纯文件名才用于候选匹配。Host 冻结源码沿用 Roslyn/MSBuild 的 CodePage 与 BOM 编码，返回位置仍按解码后的 UTF-16 文本计算，不按原始文件字节偏移定位。
 
 若已有影响报告，直接据此规划，不为获得通用清单再次调用 plan_refactoring。该工具仍会做影响分析；它返回的 evidence 保留歧义、降级和 UNKNOWN，不代表已经执行重构。

@@ -11,12 +11,14 @@ internal sealed class DesignTimeBuild
     private readonly List<(string Path, bool CustomCompile, IMSBuildGlob[] Globs, HashSet<string> Explicit)> outputs = [];
     internal readonly List<string> PrivateDirectories = [];
     internal string Hook { get; private set; } = "";
+    private string frameworkHook = "";
     private string intermediateOutputPath = "";
     internal static DesignTimeBuild? Current;
     internal static Dictionary<string, string> Properties(string configuration, string framework) => new() {
         ["Configuration"] = configuration, ["TargetFramework"] = framework,
         ["RunAnalyzers"] = "false", ["RunAnalyzersDuringBuild"] = "false",
         ["IntermediateOutputPath"] = Current!.intermediateOutputPath,
+        ["CustomBeforeDirectoryBuildProps"] = Current!.frameworkHook,
         ["CustomBeforeMicrosoftCommonTargets"] = Current!.Hook
     };
     internal static bool IsCandidate(string file)
@@ -41,10 +43,15 @@ internal sealed class DesignTimeBuild
         if (!Guid.TryParseExact(identity, "N", out _)) throw new ArgumentException("Invalid build output identity.");
         var result = new DesignTimeBuild { intermediateOutputPath = $".cache/wincode-msbuild/{identity}/{configuration}/{framework}/" };
         var xml = new XElement("Project");
+        var earlyImports = new XElement("Project");
+        var frameworkOverrides = new XElement("Project", new XAttribute("TreatAsLocalProperty", "TargetFramework"));
+        var storage = WorkspaceInputs.Inside(root, Path.Combine(root, ".cache/wincode-build", identity));
+        var overridesFile = Path.Combine(storage, "reference-frameworks.props");
         using var collection = new ProjectCollection(new Dictionary<string, string> {
-            ["Configuration"] = configuration, ["TargetFramework"] = framework,
+            ["Configuration"] = configuration,
             ["DesignTimeBuild"] = "true", ["BuildingInsideVisualStudio"] = "true"
         });
+        var selectedProperties = new Dictionary<string, string>(collection.GlobalProperties) { ["TargetFramework"] = framework };
         var pending = new Stack<string>(); pending.Push(projectPath);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         while (pending.TryPop(out var path))
@@ -53,7 +60,15 @@ internal sealed class DesignTimeBuild
             if (!seen.Add(path)) continue;
             if (seen.Count > 64) throw new HostFailure("INPUT_BUDGET_EXCEEDED", "More than 64 project layouts.");
             Project project;
-            try { project = collection.LoadProject(path); }
+            var entry = string.Equals(path, projectPath, StringComparison.OrdinalIgnoreCase);
+            try {
+                project = collection.LoadProject(path, entry ? selectedProperties : collection.GlobalProperties, null);
+                // A single-target reference owns its framework. Retain the existing explicit selection for multi-target projects.
+                if (!entry && string.IsNullOrWhiteSpace(project.GetPropertyValue("TargetFramework"))) {
+                    collection.UnloadProject(project);
+                    project = collection.LoadProject(path, selectedProperties, null);
+                }
+            }
             catch (InvalidProjectFileException error) { throw new HostFailure("PROJECT_LOAD_FAILED", error.Message); }
             var directory = Path.GetDirectoryName(path)!;
             var privateDirectory = WorkspaceInputs.Inside(root, Path.Combine(directory, ".cache/wincode-msbuild", identity));
@@ -75,6 +90,18 @@ internal sealed class DesignTimeBuild
             if (!string.Equals(baseIntermediate, directory, StringComparison.OrdinalIgnoreCase))
                 result.outputs.Add((baseIntermediate.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, customCompile, globs, explicitFiles));
             var condition = $"'$(MSBuildProjectFullPath)' == '{ProjectCollection.Escape(path)}'";
+            var projectFramework = project.GetPropertyValue("TargetFramework");
+            if (!entry && !string.Equals(projectFramework, framework, StringComparison.OrdinalIgnoreCase)) {
+                // Roslyn forwards workspace globals to every project. Scope this override before SDK/package props,
+                // without relaxing the entry's explicit framework or changing the target project's files.
+                earlyImports.Add(new XElement("Import", new XAttribute("Project", overridesFile), new XAttribute("Condition", condition)));
+                frameworkOverrides.Add(new XElement("PropertyGroup", new XAttribute("Condition", condition),
+                    new XElement("TargetFramework", ProjectCollection.Escape(projectFramework))));
+            }
+            var originalEarlyHook = project.Imports.FirstOrDefault(import =>
+                import.ImportingElement.Project == "$(CustomBeforeDirectoryBuildProps)").ImportedProject?.FullPath;
+            if (originalEarlyHook != null)
+                earlyImports.Add(new XElement("Import", new XAttribute("Project", originalEarlyHook), new XAttribute("Condition", condition)));
             var originalHook = project.Imports.FirstOrDefault(import =>
                 import.ImportingElement.Project == "$(CustomBeforeMicrosoftCommonTargets)").ImportedProject?.FullPath;
             if (originalHook != null)
@@ -85,9 +112,11 @@ internal sealed class DesignTimeBuild
             result.PrivateDirectories.Add(privateDirectory);
             foreach (var reference in project.GetItems("ProjectReference")) pending.Push(Path.GetFullPath(reference.EvaluatedInclude, directory));
         }
-        var storage = WorkspaceInputs.Inside(root, Path.Combine(root, ".cache/wincode-build", identity));
         OwnedBuildOutputs.Record(root, identity, result.PrivateDirectories);
         Directory.CreateDirectory(storage);
+        result.frameworkHook = Path.Combine(storage, "framework.props");
+        File.WriteAllText(result.frameworkHook, earlyImports.ToString(), new UTF8Encoding(false));
+        File.WriteAllText(overridesFile, frameworkOverrides.ToString(), new UTF8Encoding(false));
         result.Hook = Path.Combine(storage, "preserve.targets");
         File.WriteAllText(result.Hook, xml.ToString(), new UTF8Encoding(false));
         Current = result;

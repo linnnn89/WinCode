@@ -6,6 +6,8 @@
 
 N4 实现：`DesignTimeBuild` 使用已有 SDK 的 ProjectCollection 做原项目求值，保留原中间目录的 Compile 排除规则及自定义导入；目标运行仍交给 MSBuildWorkspace，使用每 Host UUID 的私有 IntermediateOutputPath。Configuration/TargetFramework 必须为字面目录段，规范化后的输出必须位于所属 UUID 内；原求值的无效项目异常保持 `PROJECT_LOAD_FAILED`。输入扫描仅过滤已判定不参与默认编译的原中间产物，实际文档/显式输入仍校验，自定义 Compile 保守处理。`OwnedBuildOutputs` 记录原生所有权清单，正常关闭回收；`RoslynHostClient` 在实际退出后调用 `DesignTimeArtifacts` 回收所属命名空间。内部 inputPolicy 为 2，缺失/旧策略 Host 的拒绝和进程回收已有专项测试。当前发布目录通过交付身份核验；复杂 target、任意动态项目图及断电后的孤儿产物仍不在本地通过范围内。
 
+项目引用加载：入口及多目标项目继续使用显式指定的框架；单目标引用项目先按自身声明求值，再通过所属 Host 目录中的 props 将框架覆盖限定到该引用项目。覆盖在 Directory.Build.props/SDK 包导入前生效，并保留原 CustomBeforeDirectoryBuildProps 导入，避免入口的全局 Windows 框架污染普通 .NET 类库的依赖解析。此策略不承诺为多目标引用自动挑选最近兼容框架。分析器/生成器仍被排除；queryComplete=false 和 incomplete 是保守契约，不能因编译诊断清零就改为全项目完整。
+
 ## 1. 整体定位与结构
 
 WinCode 是一个运行在本机的 **MCP 工具网关**：接收编码 Agent 的结构化请求，组织代码或桌面证据，再把正文与证据边界一起返回。Agent 的模型推理在客户端侧；WinCode 自身没有模型推理服务或向量数据库。

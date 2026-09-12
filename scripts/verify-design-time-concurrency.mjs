@@ -404,7 +404,7 @@ try {
   report.build = { ...delivery, buildId: gateway.buildId, revision: deliveryManifest.revision, host, assemblyHash: hash(await fs.readFile(host)) };
   await fs.copyFile(path.join(repo, 'global.json'), path.join(root, 'global.json'));
   await fs.writeFile(path.join(root, 'NuGet.Config'), '<configuration><packageSources><clear /></packageSources></configuration>');
-  if (phase === 'all' || phase === 'semantics') for (const type of ['basic', 'graph', 'wpf', 'custom']) {
+  if (phase === 'all' || phase === 'semantics') for (const type of ['basic', 'graph', 'wpf', 'custom', 'mixed']) {
     for (const mode of modes) {
     await trial(`semantics/${type}/${mode}`, async item => {
       const project = await fixture(root, sdk, type);

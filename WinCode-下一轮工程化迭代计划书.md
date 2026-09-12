@@ -9,7 +9,7 @@
 | 事项 | 已知情况 | 下一步 |
 | --- | --- | --- |
 | 已安装 Codex 的冷启动确认 | Skill 按需入口已通过真实终端连续 Roslyn 查询、关闭和所属进程退出；Node 22.23.2 与 24.19.0 本地核心回归均为 462 通过、1 项可选夹具跳过。Node 24 已在 I:/New-tarven 完成后台 UI 和真实图片附件验证，Node 22 补验了该项目的实际终端声明/引用流程。原生 wincode 已设 enabled=false，已安装 Skill 四文件一致 | 正常刷新/重新启动 Codex，确认未调用时没有新建 WinCode 进程。当前任务未重启宿主；保存配置不会清除旧连接。Node 22 证据见 test-tmp/node22-validation/report.json |
-| Tavern 的 Roslyn 语义覆盖 | 本地 App 项目 Release/net10.0-windows 快照正确返回导航声明及两处引用，并跨 UI 调用保持身份；同时排除 24 个分析器/生成器，报告 CS8795 和部分 Microsoft.Data/Microsoft.ML 的 CS0234。源码正常构建/隔离启动不能消除这些设计时诊断 | 如需扩大到完整项目语义，先核对设计时项目引用、TFM 和依赖解析，再区分生成器策略造成的缺口；当前维持 incomplete，不根据局部零引用判断删除安全。证据：test-tmp/tavern-skill-JNZ7Wu/report.json |
+| Tavern 的生成源码覆盖 | 单目标引用框架被入口覆盖的问题已在本地修复；实际 Host 不再报告 Microsoft.Data/Microsoft.ML 依赖缺失。当前 Codex 终端验证了 Tokenizer、SQLite 参数类型及具体引用，导航两处引用仍正确。完整 Host 诊断现为 11 项 CS8795，均涉及生成正则；24 个分析器/生成器引用仍排除 | 单独评估生成源码的受控支持、定位和快照失效，不直接启用全部生成器。queryComplete=false/incomplete 仍是保守契约，局部零引用不能证明删除安全。最新证据：test-tmp/roslyn-dependency-debug/tavern-report.json；原验收报告作为历史保留 |
 | UI 和托盘的间歇性失败 | PR #41 将真实端点启动检查移到顺序阶段，main 两个 Node 版本均通过，3000 ms 生产超时未变；隐藏/唤出、截图/提示窗及原生启动延迟的根因仍未全部定位 | 再现时保存错误码、原生日志和步骤耗时，再针对原因修复；不把调度修正及重跑通过称为已解决所有 UI/托盘问题 |
 | SDK 突发请求警告 | main 的 128 请求阶段仍记录 11 个 drain 监听器警告，阶段结束后为 0；此次实际客户端连续查询未出现调用失败，但未采集该客户端的监听器统计 | 若普通负载也出现问题，再检查发送背压及监听器释放。不提高监听器上限来隐藏警告，也不据此认定内存泄漏 |
 

@@ -65,7 +65,18 @@ export async function fixture(root, sdk, name, type = name) {
   const api = 'namespace Probe; public static class Api { public static void Save(int x) {} }';
   let project = 'App.csproj', framework = 'net10.0', projects = 1, references = 1;
   const use = 'namespace Probe; public class Use { public void Run() { Api.Save(1); } }';
-  if (type === 'graph') {
+  if (type === 'mixed') {
+    project = 'App/App.csproj'; framework = 'net10.0-windows'; projects = 2;
+    // Reuse a locked Host dependency from the local package cache; no new package or network restore.
+    const lock = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname, '../../tools/WinCode.Code.Host/packages.lock.json'), 'utf8'));
+    const version = lock.dependencies['net10.0']['System.Composition.AttributedModel'].resolved;
+    await write('Lib/early.props', '<Project><PropertyGroup><DefineConstants>$(DefineConstants);PRESERVED_EARLY_HOOK</DefineConstants></PropertyGroup></Project>');
+    await write('Lib/Lib.csproj', `<Project><PropertyGroup><CustomBeforeDirectoryBuildProps>$(MSBuildThisFileDirectory)early.props</CustomBeforeDirectoryBuildProps></PropertyGroup><Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" /><PropertyGroup>${props}</PropertyGroup><ItemGroup><PackageReference Include="System.Composition.AttributedModel" Version="${version}" /></ItemGroup><Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" /></Project>`);
+    await write('Lib/Api.cs', api.replace('public static void Save(int x) {}', 'public static void Save(int x) { _ = new System.Composition.ExportAttribute(); }'));
+    await write('Lib/Framework.cs', '#if WINDOWS\n#error The net10.0 library must not inherit the entry Windows framework.\n#endif\n#if !PRESERVED_EARLY_HOOK\n#error Preserve the original early props hook.\n#endif\n');
+    await write(project, `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>${props.replace('<TargetFramework>net10.0</TargetFramework>', '<TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>')}</PropertyGroup><ItemGroup><ProjectReference Include="../Lib/Lib.csproj" /></ItemGroup></Project>`);
+    await write('App/Use.cs', 'namespace Probe; public class Use { public void Run() {\n#if WINDOWS\nApi.Save(1);\n#endif\n} }');
+  } else if (type === 'graph') {
     project = 'App/App.csproj'; projects = 2;
     await write('Lib/Lib.csproj', `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>${props}</PropertyGroup></Project>`);
     await write('Lib/Api.cs', api);
@@ -91,7 +102,8 @@ export async function fixture(root, sdk, name, type = name) {
   if (type === 'graph') runDotnet(sdk, ['restore', path.join(directory, 'Peer/Peer.csproj'), '--configfile', path.join(root, 'NuGet.Config'), '--nologo'], root, 30000);
   await fs.writeFile(path.join(root, `${name}-restore.log`), restore);
   return { root: directory, project, framework, projects, references, type,
-    projectDirectories: type === 'graph' ? ['App', 'Lib', 'Peer'].map(p => path.join(directory, p)) : [directory] };
+    projectDirectories: type === 'graph' ? ['App', 'Lib', 'Peer'].map(p => path.join(directory, p))
+      : type === 'mixed' ? ['App', 'Lib'].map(p => path.join(directory, p)) : [directory] };
 }
 
 /** Real MSBuild Exec descendant, enabled only in the selected prototype child environment. */

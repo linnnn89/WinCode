@@ -31,6 +31,7 @@ internal sealed class WorkspaceSession : IDisposable
     private long configurationGeneration;
     private int excludedAnalyzers;
     private string[] loadDiagnostics = [], compilationErrors = [];
+    private object? diagnosticSummary;
 
     /// <summary>绑定固定根及配置并启动监听；不在构造时执行 MSBuild，求值由 ReloadAsync 显式启动。</summary>
     public WorkspaceSession(string root, string projectPath, string configuration, string framework, string[]? additionalInputs = null)
@@ -169,10 +170,15 @@ internal sealed class WorkspaceSession : IDisposable
                     candidate = candidate.WithDocumentText(document.Id, SourceText.From(content, loadedText.Encoding, throwIfBinaryDetected: true));
                 }
                 var errors = new List<string>();
+                var byCode = new Dictionary<string, int>();
+                var byProject = new Dictionary<string, int>();
                 foreach (var project in candidate.Projects)
                 {
                     var compilation = await project.GetCompilationAsync(token);
-                    errors.AddRange(compilation!.GetDiagnostics(token).Where(d => d.Severity == DiagnosticSeverity.Error).Take(20).Select(d => d.ToString()));
+                    var diagnostics = compilation!.GetDiagnostics(token).Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
+                    byProject[Path.GetRelativePath(root, project.FilePath!)] = diagnostics.Length;
+                    foreach (var diagnostic in diagnostics) byCode[diagnostic.Id] = byCode.GetValueOrDefault(diagnostic.Id) + 1;
+                    errors.AddRange(diagnostics.Take(20).Select(d => d.ToString()));
                 }
                 var after = await CaptureAsync(token, checkEvents: false);
                 if (captured.Fingerprint != after.Fingerprint)
@@ -186,12 +192,20 @@ internal sealed class WorkspaceSession : IDisposable
                 snapshot = Guid.NewGuid().ToString("N");
                 loadDiagnostics = completedDiagnostics;
                 compilationErrors = errors.ToArray();
+                // Counts precede sample limits; bounded breakdowns retain explicit omitted totals.
+                diagnosticSummary = new {
+                    compilationErrorCount = byCode.Values.Sum(), loadDiagnosticCount = loadDiagnostics.Length,
+                    byCode = byCode.OrderBy(p => p.Key, StringComparer.Ordinal).Take(10).Select(p => new { key = p.Key, count = p.Value }).ToArray(),
+                    codesOmitted = Math.Max(0, byCode.Count - 10),
+                    byProject = byProject.OrderBy(p => p.Key, StringComparer.Ordinal).Take(10).Select(p => new { key = p.Key, count = p.Value }).ToArray(),
+                    projectsOmitted = Math.Max(0, byProject.Count - 10)
+                };
                 invalidated = false;
                 return new { id, type = "ready", success = true, protocolVersion = 2, snapshot,
                     hostIdentity = HostBuildIdentity.Current,
                     projects = candidate.ProjectIds.Count, configuration, framework, loadMs = clock.ElapsedMilliseconds,
                     inputPolicy = new { version = 2, additionalInputs = additionalInputs.Select(file => Path.GetRelativePath(root, file)).ToArray() },
-                    loadDiagnostics, compilationErrors, excludedAnalyzers, scope = "loaded-solution-snapshot",
+                    loadDiagnostics, compilationErrors, diagnosticSummary, excludedAnalyzers, scope = "loaded-solution-snapshot",
                     processTreeGuard = OperatingSystem.IsWindows(), diskFreshnessVerified = false, freshness = Freshness(after) };
             }
             catch { ReleaseWorkspace(); throw; }
@@ -281,7 +295,7 @@ internal sealed class WorkspaceSession : IDisposable
         }
         await EnsureCurrentAsync(requestedSnapshot, token);
         return new { id = request.GetProperty("id").GetString(), success = true, snapshot, symbols, totalFound,
-            truncated = totalFound > symbols.Count, queryComplete = false, loadDiagnostics, compilationErrors, excludedAnalyzers,
+            truncated = totalFound > symbols.Count, queryComplete = false, loadDiagnostics, compilationErrors, diagnosticSummary, excludedAnalyzers,
             scope = "loaded-solution-snapshot", diskFreshnessVerified = false, freshness = Freshness(inputs!) };
     }
 
@@ -332,7 +346,7 @@ internal sealed class WorkspaceSession : IDisposable
         await EnsureCurrentAsync(requestedSnapshot, token);
         return new { id = request.GetProperty("id").GetString(), success = true, snapshot, symbol = symbol.ToDisplayString(), references,
             totalReferences = locations.Length, truncated = locations.Length > limit,
-            queryComplete = false, loadDiagnostics, compilationErrors, excludedAnalyzers,
+            queryComplete = false, loadDiagnostics, compilationErrors, diagnosticSummary, excludedAnalyzers,
             scope = "loaded-solution-snapshot", diskFreshnessVerified = false, freshness = Freshness(inputs!),
             queryMs = clock.ElapsedMilliseconds, workingSetBytes = Environment.WorkingSet };
     }

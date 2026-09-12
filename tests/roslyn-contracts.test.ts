@@ -38,7 +38,8 @@ it('MCP preserves 120 known Roslyn references and accepts bounded limits without
   try {
     await fs.writeFile(path.join(root, 'Probe.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableNETAnalyzers>false</EnableNETAnalyzers></PropertyGroup></Project>');
     const source = 'public static class Api { public static void Call() {} }\npublic class Consumer { public void Run() {\n' +
-      Array.from({ length: 120 }, () => 'Api.Call();').join('\n') + '\n} }\n';
+      Array.from({ length: 120 }, () => 'Api.Call();').join('\n') + '\n} }\n' +
+      Array.from({ length: 25 }, (_, i) => `#error diagnostic_${i}`).join('\n') + '\n#warning load_is_not_compilation_warning\n';
     await fs.writeFile(path.join(root, 'Probe.cs'), source);
     await fs.copyFile(path.join(repo, 'global.json'), path.join(root, 'global.json'));
     const packages = path.join(root, 'empty-package-source'); await fs.mkdir(packages);
@@ -49,9 +50,16 @@ it('MCP preserves 120 known Roslyn references and accepts bounded limits without
     const found = await call('wincode_find_code_symbol', { query: 'Call', kind: 'method' });
     const selected = found.symbols.find((symbol: any) => symbol.name === 'Call');
     assert.ok(selected?.location);
+    assert.deepEqual(found.semanticContext.diagnosticSummary, {
+      countsComplete: true, compilationErrorCount: 25, loadDiagnosticCount: 0,
+      samplesDisplayed: 5, samplesOmitted: 20,
+      byCode: [{ key: 'CS1029', count: 25 }], codesOmitted: 0,
+      byProject: [{ key: 'Probe.csproj', count: 25 }], projectsOmitted: 0,
+    });
     const args = { symbolName: 'Call', symbolLocation: selected.location };
     const defaults = await call('wincode_find_references', args);
     assert.equal(defaults.totalReferences, 120); assert.ok(defaults.references.length > 0 && defaults.references.length < 100);
+    assert.deepEqual(defaults.semanticContext.diagnosticSummary, found.semanticContext.diagnosticSummary);
     assert.equal(defaults.truncated, true);
     assert.deepEqual(defaults.outputOmissions, ['references']);
     assert.equal(defaults.returnedReferences, defaults.references.length);
@@ -81,6 +89,22 @@ it('MCP preserves 120 known Roslyn references and accepts bounded limits without
     assert.equal(path.dirname(root), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith('wincode-reference-limit-'));
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+it('diagnostic evidence keeps legacy totals unknown and rejects inconsistent Host counts', () => {
+  const adapter = Object.create(RoslynAdapter.prototype) as any;
+  adapter.localPath = (value: string) => value;
+  const reply = { queryComplete: false, excludedAnalyzers: 0, loadDiagnostics: [], compilationErrors: ['CS1029: example'] };
+  const legacy = adapter.diagnostics(reply);
+  assert.equal(legacy.countsComplete, false); assert.equal(legacy.compilationErrorCount, null);
+  assert.equal(legacy.samplesOmitted, null); assert.equal(legacy.samplesDisplayed, 1);
+  const valid = { compilationErrorCount: 11, loadDiagnosticCount: 0,
+    byCode: [{ key: 'CS1029', count: 1 }], codesOmitted: 10,
+    byProject: [{ key: 'App.csproj', count: 11 }], projectsOmitted: 0 };
+  assert.equal(adapter.diagnostics({ ...reply, diagnosticSummary: valid }).samplesOmitted, 10);
+  for (const invalid of [{ ...valid, codesOmitted: 0 }, { ...valid, compilationErrorCount: -1 },
+    { ...valid, byProject: [{ key: 'App.csproj', count: 12 }] }, { ...valid, loadDiagnosticCount: 1 }])
+    assert.throws(() => adapter.diagnostics({ ...reply, diagnosticSummary: invalid }), { errorCode: 'HOST_PROTOCOL_ERROR' });
 });
 
 it('same-root confirmations preserve warm identity, reload state and perform a required restart only once', async t => {

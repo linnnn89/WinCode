@@ -2,6 +2,9 @@
 
 ## 0.15.0 (unreleased)
 
+- Report Roslyn snapshot diagnostic totals before sample limits, bounded error-code/project counts and explicit sample omissions; preserve unknown totals for legacy Hosts and conservative semantic coverage. Update Skill guidance to distinguish dependency loading from excluded generator coverage.
+
+- Preserve single-target referenced projects' own framework during Roslyn design-time loading, preventing a Windows entry framework from hiding restored library dependencies. Keep explicit entry/multi-target selection, existing import hooks and per-Host output ownership; add a mixed-framework package-reference regression.
 - Add an optional Skill-managed session using the existing MCP client SDK and a persistent interactive terminal. Start the Gateway on the first tool call, validate workspace/build/provider, reuse the connection and Roslyn snapshot, preserve complete MCP results as local JSON/image attachments, and close owned resources explicitly or on owner exit. Disable the client's native WinCode MCP entry to prevent its automatic startup; no automatic retry/reconnection, new service or dependency is introduced.
 - Preserve completed/partial trash outcomes and actual file locations when the request deadline expires during metadata finalization. Propagate cancellation before the move and keep interruption accounting; client cancellation or disconnection still does not guarantee delivery of a final response.
 - Add optional Roslyn reference `limit` (1–1000, default 100, requires `symbolLocation`). Impact reports retain `totalReferences` and `referencesTruncated` alongside the existing returned `referencesCount`; unknown totals remain null and semantic risk/coverage rules stay unchanged.

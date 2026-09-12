@@ -17,6 +17,17 @@ export interface SemanticContext {
   scope: 'loaded-solution-snapshot';
   diskFreshnessVerified: false;
   excludedAnalyzers: number;
+  diagnosticSummary?: {
+    countsComplete: boolean;
+    compilationErrorCount: number | null;
+    loadDiagnosticCount: number | null;
+    samplesDisplayed: number;
+    samplesOmitted: number | null;
+    byCode: { key: string; count: number }[];
+    codesOmitted: number | null;
+    byProject: { key: string; count: number }[];
+    projectsOmitted: number | null;
+  };
   freshness: { status: 'checked'; scope: string; fingerprint: string; files: number; bytes: number; externalCustomInputsVerified: false };
 }
 

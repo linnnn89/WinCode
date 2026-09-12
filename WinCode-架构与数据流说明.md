@@ -41,9 +41,12 @@ flowchart TB
 
 图中箭头表示主要调用或数据联系，不表示每条请求都经过全部组件。原生 Host 的进程隔离用于故障与生命周期控制，**不等于操作系统安全沙盒**。
 
+Codex 可选择 Skill 按需入口：首次使用才创建交互执行会话，`SkillSessionCli` 使用现有 MCP SDK 连接上图中的 Gateway，后续查询复用同一连接。入口启动或读取本地状态不会创建 Gateway；首次工具请求完成工作区、构建和提供方核验后才派发业务。完整 MCP 结果和原始图片作为本地附件交付，入口不重写工具契约或自动重放请求。关闭/所属入口死亡沿用 Gateway 与原生 Host 的清理链路。该模式需禁用客户端自动启动的 WinCode 条目，不能通过 Gateway 内部延迟初始化实现客户端侧零进程；使用方法见 [Skill 会话手册](skills/wincode/references/diagnostics.md#skill-按需会话)。
+
 | 层 / 模块 | 负责什么 | 设计边界与源码入口 |
 |---|---|---|
 | 启动层 | 解析 workspace/development 参数，创建 Router 和 MCP Server，处理退出 | [index.ts](src/index.ts)；当前入口以默认配置和 CLI 参数启动，不是通用配置中心 |
+| 可选 Skill 客户端 | 按需连接、任务内复用、附件交付与显式关闭 | [SkillSession](src/Client/SkillSession.ts)、[SkillSessionCli](src/Client/SkillSessionCli.ts)；运行于持久执行会话，不注册第二个 MCP 服务器或常驻服务 |
 | Gateway | 列举工具、校验输入、执行工具、封装结果 | [McpServer](src/Gateway/McpServer.ts)、[ToolRegistry](src/Gateway/ToolRegistry.ts)；不直接调用适配器字段 |
 | ToolRouter | 创建并组合组件，提供用例入口，协调请求与工作区生命周期 | [ToolRouter](src/Core/ToolRouter.ts)；这是装配与协调中心，不只是名称路由表 |
 | 核心能力契约 | 定义符号、引用、打包、UI、操作取消等数据类型 | [CodeQueries](src/Core/CodeQueries.ts)、[ContextPacking](src/Core/ContextPacking.ts)、[UiContracts](src/Core/UiContracts.ts)、[OperationContext](src/Core/OperationContext.ts) |

@@ -1391,3 +1391,42 @@
 - 调整中文语序、动宾搭配和链接间距，同步英文。依据微软文档使用“MSBuild 项目评估”，将 rollForward=disable 解释为 SDK 版本须完全匹配；字符串搜索和 Skill 同步说明保持现有接口含义。Computer Use 比较保留为日常开发体验，222 节点窗口的 62 KB/1.6 KB 数据来自既有测试记录。
 - 文档验证通过：10 个本地链接、6 个 JSON 示例、4 个工具调用示例的当前源码 Schema 校验、7 个 npm 命令和 16 个工具名称；中英文工具列表与对应配置一致，git diff --check 通过。未发现文档验证失败；没有修改生产代码、依赖或受管 Skill，也没有新增测试或重新运行运行时测试。
 - 本条按 CONTRIBUTING 的合并要求追加。最新提交的 Node 22/24 与三项 CodeQL 仍待远端检查；本地自查不等于独立审查或活动客户端验收。
+
+## 2026-09-12 08:57 — 同步云端 main、本地构建及已安装 Skill（北京时间）
+
+- 用户要求以较新的云端版本对齐本地，并同步 Skill、评估是否需要更新设计。同步前无未提交修改；获取 origin 后确认 PR #37 已于 2026-09-11 合并。保留原检查点分支，切换 main 并快进到 `af9c1b6a7284cf8fa909badedcc1c05a34cc7ee1`，与 origin/main 一致。该提交远端 CI、Push on main 和 Scheduled 均已成功，分别见运行 34615593278、34615592254、34618221513。
+- 本地原 dist 仍为 2026-09-10 构建，不能仅以同为 0.15.0 判断已更新。使用现有依赖和 SDK 10.0.303 完成 typecheck、Gateway 及 UIA/Code Host/Tray 的标准 Release 发布（--no-restore），未安装或升级依赖。新 buildId=`6fa5431f5e5903928848bc48abb02ac97f9cab259bf8f5b8c3efc958c428f370`；生成交付清单并验证 matched=true，contentId=`081048e0f13e3ea31c24accf1f965d3dc5950f85bf2d2cf672d41258f44b7da0`。
+- 已安装 Skill `C:/Users/40218/.agents/skills/wincode` 从 0.13.1 同步至仓库 0.15.0；使用既有 sync-skill 脚本，先检查、完成备份，再覆盖四份受管文档。备份为 `C:/Users/40218/.agents/skills/.wincode-backup-ba6f56a7-1d51-448b-a837-e2d50fd5d872`；同步后二次检查及四文件 SHA-256 均一致。未发现 `.codex/skills/wincode` 安装副本，没有新建重复安装或改动 MCP 配置。
+- Skill 设计判断：云端已更新固定工作区、限定范围搜索/文件概览、context 续读、UI compact/展开、引用条数与最终字符预算、移动结果及错误恢复规则。继续采用短 SKILL.md 入口加三份按需手册，无需本轮额外改结构或加入抽象层；安装同步已经覆盖旧版指令差异。
+- 实际验证：Skill 同步测试 2/2；工具契约、运行时契约及交付契约测试 30/30；生产 stdio 新连接通过，17 个工具，schemaHash=`6db24ea89d53ad793d7e63e72df418ab0dc031ec651fd93f4dd56708a90e5efb`，覆盖新搜索/概览/精确上下文及边界响应。本地回执为 `test-tmp/sync-20260912/stdio.json`。未重复完整 460 项、桌面或真实 Roslyn 语义验收，构建通过不代替这些流程。
+- 反证检查：当前 Codex 已连接实例 `605af938-fa1c-49d3-b8fc-fbe165a5fd1d` 实际仍为旧 buildId `be08ba26...`、15 工具，并固定在历史 client-roslyn 测试根；磁盘重建和 Skill 同步不会热替换它。需客户端刷新/重启连接后核对新 buildId 与目标工作区；本轮未强杀该进程或擅自改变绑定项目。源码与远端提交已对齐，只有本条本地工作记录为额外修改，未提交或推送。
+
+## 2026-09-12 16:54 — 实现 Skill 按需会话并切换本机启动配置（北京时间）
+
+- 用户批准开始实现首次使用前不随 Codex 启动的方案。基于 `af9c1b6` 新建 `codex/skill-on-demand-session`，保留本文件此前的同步记录；未提交或推送。新增 `src/Client/SkillSession.ts` 和 `SkillSessionCli.ts`，使用已安装的 MCP SDK 2.0.0；没有新依赖、常驻服务、监听端口、Gateway/Host 生命周期重构或公共 MCP 参数变化。
+- 入口由 Skill 首次需要时通过持久交互终端启动；对象构造、入口 ready 和本地 status 不创建 Gateway。首次工具调用连接并核验工作区、buildId 和 provider，多次调用共享连接、Host 与有效 Roslyn 快照。任务收尾显式关闭；连接失败不自动重连或重放。沿用 Gateway EOF 与原生所属进程清理，SDK 发出终止后额外等待实际传输退出。
+- 原计划使用 Node REPL 承载 SDK，实际导入被该工具禁止的 `node:process` 拒绝，因此改用现有 `exec_command(tty:true)`/`write_stdin`；没有绕过限制。普通执行管道会立即 EOF，TTY 输出又可能折行，所以完整 MCP 结果写入 `test-tmp/skill-sessions/run-*/`，图片保留原始数据和解码文件，终端仅返回路径回执。读取结果增加一次文件读取；附件不自动删除。传输失败与已收到结果后的附件交付失败分别报告，均不自动重放业务。
+- 新增恰好 3 个自动测试：未调用状态与连接/结果保持、真实 Roslyn 快照复用和修改后的旧定位拒绝、真实 MSBuild 阻塞时取消并结束入口的所属进程回收。首次进程数量断言把 Windows 创建的 conhost 当成 Gateway，多出的进程经实际命令行核对后修正断言；仍禁止未调用时创建任何 Gateway/业务子进程。三项在最终完整回归中全部通过。
+- 使用当前 Codex 真实交互终端，在隔离 C# 夹具完成搜索声明与后续引用查询。Gateway PID=12376、instanceId=`0da9d0dd-f978-4071-88bc-6c894471969e` 在两次调用间一致，snapshotId=`b32ac81643384f98ad24872d5460e4d9` 直接复用，返回 1 处已知引用。显式关闭后，按 PID/创建时间核对的 5 个所属进程均退出；报告 `test-tmp/skill-session-live/report.json`。这是实际执行工具路径验证，未冒充刷新后的 Codex 原生连接验收。
+- Node 24.19.0 完整 `npm run check` 通过：463 项中 462 通过、0 失败、1 项按原规则跳过（可选 TavernDesk 固定夹具不存在）；包含类型检查、锁定还原、Gateway/三个原生组件发布、生产 stdio 和交付校验。报告 `test-tmp/check/2026-09-12T08-51-11-904Z-core/report.json`。buildId=`7491337da2426a3ccc4f2df4a11a5f28982fc86852ae5485305ffeb78bceec7e`，17 工具、Schema 不变；交付 contentId=`66567fe4521c917d27922e3181a5fd4dba99fec9adfe4c537cfafcb71a43fcd0`。未重复全量测试，未运行 Node 22 或真实桌面图片流程。
+- Skill 入口保持短路由，仅在既有 diagnostics 手册首节加入会话流程；同步 README、配置指南、架构说明、贡献指南和 changelog。`quick_validate.py` 以 Python UTF-8 模式通过；默认 Windows GBK 解码曾失败，未改校验器。四份安装文件经既有同步脚本备份/同步/哈希核验一致，备份为 `C:/Users/40218/.agents/skills/.wincode-backup-95536b4a-f736-4d58-8588-e6ea88547904`。
+- 新入口和完整回归通过后，仅将 `C:/Users/40218/.codex/config.toml` 的 `[mcp_servers.wincode] enabled` 从 true 改为 false，其他字节保留；原配置备份 `config.toml.before-wincode-on-demand-20260912-165236.bak`。`codex mcp get wincode --json` 已读回 enabled=false。修改前建立的 4 个 Gateway 仍在，未终止其他任务连接或重启当前 Codex；正常刷新后“未首次调用无新 WinCode 进程”的宿主冷启动观察保留到现有待验表中。
+
+## 2026-09-12 — 使用本地 Tavern 验证 Skill 按需会话
+
+- 用户要求改用本地 Tavern 项目验证。目标为 `I:/New-tarven`，HEAD=`6eee26031ffe7d01cd676edd5fafc0af1e14dd3d`；开始和结束时 Git 状态均仅有原有 `.publish-verify/` 未跟踪目录。未修改 Tavern 源码、依赖或正常启动配置，也未提交/推送本轮 WinCode 改动。
+- 按当前隔离入口做 Release `--no-restore` 构建。首次 `-Fresh` 已在新建 `work/isolated-test-20260912-165839-478bbf71ef4643dbb290a7784643ae44` 初始化 schema 24 数据库，但停在语言选择对话框，脚本按 30 秒预算终止自有进程。核对代码/回执后，仅对本轮新建且具有专用标记的目录使用既有 `--test-reuse` 参数，选择默认语言并启动窗口。数据库、配置、日志和 API 测试输出路径均由实际启动回执确认在测试根内；未调用 Provider 或使用个人资料库。
+- 通过当前 Codex 的 `exec_command(tty:true)` 和同一 `write_stdin` 会话执行 9 次显式工具请求。首次请求前仅有入口 PID=33064，没有 Gateway 子进程；随后固定到 `I:/New-tarven`，显式配置 App 项目的 Release/net10.0-windows Roslyn。Gateway PID=34856，instanceId=`d014e125-472c-47a7-9207-705c986b383c`，buildId=`7491337da2426a3ccc4f2df4a11a5f28982fc86852ae5485305ffeb78bceec7e`。
+- 文本搜索返回 `ShowCharactersAsync` 的三处匹配；Roslyn 声明位于 MainWindowViewModel.cs 第 315 行，精确引用位于 127、130 行，与实际源码一致。两次上下文响应的所有正文行均与磁盘独立读取一致。UI 取证前后，引用仍使用同一 snapshotId=`2d27e127260b413694440f9b71e7a77b`，重复引用结果相同，Gateway 实例和构建身份保持一致。
+- 在隔离窗口 PID=29192、HWND=0x120B9C 上后台查询 NavCharacters，结果 unique、searchComplete=true，返回启用的“角色”按钮及三节点子树。实际截图 2160×1350、81461 字节，已查看，内容为新资料库的空角色书架；附件与 MCP 原始 image 数据逐字节一致，SHA-256=`e094f01e3b5be5cff85462b1e7f809fcc6732f1f3efdc6e32286253fdb3ffc3f`。XAML 第 116 行与 C# 第 127/197 行候选成功返回，按 nextRequest 续读赋值行；候选文件哈希已核对，runtimeSourceVerified=false 仍保留。
+- 显式关闭 Skill 会话后，按 PID/创建时间记录的 5 个所属进程均退出，survivors=[]；Tavern 目标窗口仍存活，随后单独正常关闭该测试窗口并观察到进程退出。第一次收尾身份比较因 PowerShell 将 JSON ISO 时间自动解析为 DateTime 而拒绝执行；实际时间和命令行确认一致后按 UTC ticks 比较，未放宽进程身份检查。
+- 实际项目揭示语义边界：快照排除 24 个分析器/生成器，返回两项 CS8795 及部分 Microsoft.Data/Microsoft.ML 的 CS0234，queryComplete=false、analysisCompleteness=incomplete。上述具体导航和引用查询通过，不代表全项目语义完整；没有通过安装依赖、改项目 TFM 或忽略诊断掩盖缺口。未重复完整回归或新增自动测试；本轮补齐真实按需入口的图片附件验证，但仍未重启 Codex 或运行 Node 22。
+- 完整本地报告：`test-tmp/tavern-skill-JNZ7Wu/report.json`，包含隔离启动、未调用进程状态、查询/快照、图片校验及退出证据；原始 MCP 响应与截图在 `test-tmp/skill-sessions/run-NCIlEv/`。这些源码/图片附件只保存在忽略的本地目录，现有待验表已同步本轮结果和覆盖限制。
+
+## 2026-09-12 — Node 22 本地兼容性验证
+
+- 用户要求 Node 22 验证，并在确认本机只有 Node 24 后批准下载便携运行时。官方 Node 22.23.2 Windows x64 ZIP 保存到 `.deps/node-v22.23.2-win-x64.zip`（35683585 字节），SHA-256=`1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97`，与官方该版本 SHASUMS256.txt 一致；校验归档路径后解压到 `.deps/node-v22.23.2-win-x64/`。没有全局安装、修改系统 PATH 或切换默认 Node，运行时和归档均由既有 `.deps/` 规则排除 Git。
+- 使用便携版绝对路径先运行既有 `tests/skill-session.test.ts`，3/3 通过、0 跳过，包括未调用状态、真实 Roslyn 快照复用/失效，以及取消后所属进程清理。日志 `test-tmp/node22-validation/skill-session.log`。没有新增测试或修改生产代码。
+- 随后仅在检查子进程环境中前置便携版 PATH，并以同一 Node 执行 `scripts/check.mjs`；父进程和通过 PATH 启动的子 Node 均读回 v22.23.2。完整核心检查通过：463 项中 462 通过、0 失败、1 项跳过（原有可选 Tavern 固定路径不存在），类型检查、Gateway/原生构建、生产 stdio 和交付核验全部成功。报告 `test-tmp/check/2026-09-12T09-20-46-120Z-core/report.json`。Gateway buildId 与 Node 24 构建一致，仍为 `7491337da2426a3ccc4f2df4a11a5f28982fc86852ae5485305ffeb78bceec7e`；记录 Node 22 工具链的新交付 contentId=`7592124791ab0b901a432405cbcdb4b87f2c7312bfe093c4ebca2a553576e1a0`，matched=true。
+- 在当前 Codex 交互终端使用便携版启动真实 Skill 入口，绑定 `I:/New-tarven` 和上一轮显式授权的 Roslyn 配置。4 次显式请求覆盖 hello、声明搜索、精确引用和再次 hello；Gateway 两次自报 v22.23.2，实际入口 PID=26740、Gateway PID=9412 的命令行均指向便携版 Node 22。instanceId=`87e949f7-776c-4380-86ed-3623bcc09f42` 保持一致，snapshotId=`6c1db72b22ea42ec85a3a87959ffdda1` 从声明传到引用；第 127、130 行两处引用按实际源码 UTF-16 位置核验成功。Tavern 已知设计时语义缺口仍返回 incomplete，没有把版本兼容性通过解释为全项目语义完整。
+- 会话显式关闭并退出；记录的 5 个所属进程全部消失，survivors=[]。新执行环境读回系统默认 Node 仍为 v24.19.0。汇总报告 `test-tmp/node22-validation/report.json`，原始 MCP 响应位于 `test-tmp/skill-sessions/run-lRbqki/`。本轮未重启 Codex、未复跑桌面或 CI 的全部附加专项，未提交/推送；现有待验表移除 Node 22 未验状态，保留宿主冷启动观察。

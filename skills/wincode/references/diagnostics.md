@@ -1,5 +1,43 @@
 # 诊断与审计
 
+## Skill 按需会话
+
+适用于能保留交互终端会话的 Codex。首次确实需要 WinCode 才启动入口；不要因加载 Skill、开始聊天或查看配置而预热。目标工作区取当前任务的绝对目录，安装目录取已核实的本机交付位置（已有 MCP 配置中的 `dist/index.js` 路径也可用于定位）；不照抄其他机器或历史测试项目的路径。
+
+按需模式要求客户端不再自动连接同一个 WinCode：安装切换时将其原生 MCP 配置禁用，并让客户端刷新连接。保留原配置以便恢复；日常调用不自行修改客户端配置。有可用且工作区正确的原生连接时直接使用，不同时再启动按需入口。没有持久执行工具时使用已配置的原生 MCP；不要每次调用都临时启动、关闭服务器。
+
+**启动一次。** 通过 `exec_command` 执行以下命令，必须设置 `tty:true`（普通管道会立即 EOF），保留返回的 `session_id`。PowerShell 路径用正确引号转义，不把不可信文本拼成命令：
+
+```powershell
+node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标工作区绝对路径>"
+```
+
+仅目标项目已有明确授权的 Roslyn 配置时追加 `--roslyn-config "<配置文件绝对路径>"`；不沿用其他项目的配置，也不从工作区自动发现并执行配置。默认 local-text 不执行 MSBuild。`ready` 回执包含入口 `ownerPid`；此时 `status.state="unused"`、Gateway `pid=null`。首次工具请求才创建 Gateway，并校验工作区、构建和提供方；随后复用同一 Gateway、Host 和有效快照。
+
+**连续调用。** 使用 `write_stdin` 向同一个 `session_id` 发送单行 JSON；Windows 交互终端的 `chars` 以 `\r` 结束。请求 `id` 使用本会话内不同的 1–64 位字母、数字、点、下划线或连字符。示例请求体：
+
+```json
+{"id":"q1","tool":"wincode_search_text","arguments":{"query":"Save","scopePaths":["src"]},"timeoutMs":120000}
+```
+
+一次只发一个工具请求，等待该 `id` 的回执再继续；若执行工具先返回正在运行，继续轮询同一个执行会话，不重新发送请求。`timeoutMs` 默认 120000，范围 1–180000，包含本次调用的连接等待；单独握手有 30 秒限制。请求行最多 64 KiB。终端回显或折行不是第二个响应，不能当作完整 MCP JSON。
+
+**读取结果。** 回执提供 `resultFile`、`isError` 和 `imageFiles`。用文件/执行工具读取 `resultFile` 中的完整 MCP `CallToolResult`，包括 text、structuredContent、image 等内容块；有图片时按需使用本地图片查看工具读取 `imageFiles[].path`。不要把 `isError:true` 当成成功，也不要只读短回执就推断业务结果。原始 JSON 和图片保存到安装目录的 `test-tmp/skill-sessions/run-*/`，关闭不会自动删除，按本地附件管理；不要提交这些文件。文本结果至少需要一次额外文件读取，这是按需模式的调用成本。
+
+**观察、取消、关闭。** 同样发送单行 JSON：
+
+```json
+{"id":"s1","action":"status"}
+{"id":"c1","action":"cancel","targetId":"q1"}
+{"id":"end","action":"close"}
+```
+
+`status` 只读本地连接状态，不启动 Gateway。取消必须对应当前活动请求；`cancellationRequested` 只证明信号已发送，不能解释为 Host 已退出。任务结束、放弃或准备换工作区时发送 `close`，等 `closed:true` 和入口退出；一轮内仍需后续查询时保留连接。调用异常时也在收尾中关闭。EOF/入口死亡会关闭 Gateway 输入，原有 Gateway/Host 所属进程清理继续生效；当前终端工具持续保留入口时不会自动到期释放。
+
+`requestError` 是入口拒绝，`transportError` 是连接/协议/取消失败，不能据此认定业务没有执行；`resultDeliveryError` 且 `toolResponded:true` 表示已收到工具结果、但附件交付失败。出现这些错误先核对实际状态，尤其文件移动，不自动重放。关闭或失联后要显式建新会话并重新搜索声明，不能复用旧 `location`。不要使用 Node REPL 绕过模块限制：当前 SDK 需要 `node:process`，本机 REPL 不允许该导入；支持的入口是上述交互终端。
+
+## 原生 MCP 连接与故障诊断
+
 跨项目入口：新构建的 `WORKSPACE_MISMATCH` 响应包含 `connectionGuide`，其中 `configuration.command/args` 是独立 STDIO 连接配置，`verification` 给出连接后检查工作区的调用。也可运行 `node <WinCode安装目录>/dist/index.js --print-connection --workspace <目标绝对路径>` 输出同一配置；不创建缓存、不注册或重启客户端、不启动项目 Host。配置默认 local-text，不复制已有 Roslyn、开发或托盘选项；目录存在性在实际连接启动时校验。选择已有正确连接优先，建立新连接仍遵守用户授权。刷新连接后再使用新增导航工具或 UI 精简参数，磁盘重建和 Skill 同步不会热替换旧 MCP Schema。
 
 0.15.0 的 WORKSPACE_MISMATCH 是固定工作区拒绝：检查 activeWorkspace/requestedWorkspace，选择对应项目连接。错误发生在工作区资源变更之前，不表示旧根已切换或需要清空缓存。hello.health.workspaceBinding 给出固定根及启动来源；argument 是显式 CLI 参数，cwd 是启动目录回退，configuration 是嵌入式配置。显式 --workspace 必须有绝对目录值；已有连接不会因磁盘重建或配置保存自行更新。
@@ -30,7 +68,7 @@ hello.health.cache 仅读取内存及最近显式磁盘观察：diskObservation=
 
 仅遇到故障或用户要求时调用 wincode_hello_world({}) 查看适配器、工作区及 runtime；环境问题再用 wincode_diagnose_project({})。本地文本健康成功不证明 Roslyn 已配置或项目已加载；watcher 停止、最近超时和清理错误如实报告，不自动安装依赖或循环重启。
 
-工具不可用：先确认客户端是否启用了 wincode MCP；已保存配置通常需重新加载客户端/会话。Skill 不负责注册 MCP。安装路径取实际客户端配置，不沿用历史机器的 I:/WinCode。STDIO 配置结构（占位路径需替换）：
+原生模式工具不可用：先确认客户端是否启用了 wincode MCP；已保存配置通常需重新加载客户端/会话。按需模式按本手册首节使用执行会话，不要求注册 MCP。安装路径取实际客户端配置，不沿用历史机器的 I:/WinCode。STDIO 配置结构（占位路径需替换）：
 - 命令：node
 - 独立参数：<WinCode安装目录>/dist/index.js、--workspace、<目标工作区绝对路径>
 

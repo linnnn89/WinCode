@@ -5,15 +5,17 @@ description: 使用 WinCode MCP 读取 Windows/.NET 项目源码、引用和变�
 
 # WinCode
 
-适用于 WinCode 0.15.0。使用已连接的 MCP 工具，名称和参数以该连接实际暴露的 Schema 为准。
+适用于 WinCode 0.15.0。已有正确工作区的 MCP 连接时直接使用；采用按需模式时，首次需要 WinCode 才按[诊断手册的会话入口](references/diagnostics.md#skill-按需会话)启动。Skill 被发现或读取不需要预启动任何进程。
 
 只读取与当前任务有关的手册：
 
 - [代码与工作区](references/code.md)：源码搜索、上下文、引用、影响分析和 Roslyn 配置。
 - [窗口与 UI](references/ui.md)：窗口选择、截图、控件读取和源码候选。
-- [诊断与恢复](references/diagnostics.md)：工具不可用、版本、运行状态及错误恢复。
+- [诊断与恢复](references/diagnostics.md)：按需会话的启动、复用、结果读取和关闭，以及版本和故障恢复。按需模式先只读该手册首节。
 
 连接固定到启动工作区；已知根一致时直接查询，不例行重复打开。`WORKSPACE_MISMATCH` 时选择目标项目的连接，可参考 `connectionGuide`；`workspace_open` 只能确认或恢复原工作区。
+
+按需模式在一次任务内保留执行会话 ID，多次查询复用同一连接；读取回执中的完整结果文件，保留所有 MCP 内容块与 `isError`。任务结束或放弃时显式关闭；断线后不自动重放，旧符号定位不能跨新连接使用。工具名和参数以运行实例的 Schema 为准，疑问时使用 `wincode_hello_world({toolName:"具体工具名"})`。
 
 默认 `local-text` 提供文本线索；显式启用 Roslyn 才有 C# 语义证据。需要精确引用时先搜索声明，再传回完整 `location`，不猜定位或复用过期快照。
 

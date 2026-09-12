@@ -1,10 +1,10 @@
 # WinCode Skill 安装、维护与 MCP 配置指南
 
-适用于 **0.15.0**，核对日期 2026-09-10（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
+适用于 **0.15.0**，核对日期 2026-09-12（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
 
 ## 1. 三个独立对象
 
-- **Skill 手册**指导 Agent 选择工具和使用规范字段，不启动服务器。
+- **Skill 手册**指导 Agent 选择工具和使用规范字段；被发现或读取不启动服务器。按需模式由 Agent 首次需要时执行随产品交付的会话入口。
 - **磁盘交付物**包含 Gateway、原生 UIA/Code Host 及可选 Tray 的完整发布目录、构建身份和交付清单。
 - **MCP 连接实例**是客户端已经启动的进程；更新源码、构建或复制 Skill 都不会自动更新这个进程。
 
@@ -42,7 +42,17 @@ npm run skill:check -- C:/Users/40218/.agents/skills/wincode
 
 **未知字段保持容忍，但不会生效。** 参数名称、大小写、类型和范围以手册字段表为准。例如 `automationId` 是规范字段，`automationID` 不会成为筛选条件；仅含未知字段的 query 仍缺少必需条件。适配器配置字段不能伪装成 MCP 请求参数。
 
-## 4. 注册 stdio MCP
+## 4. 选择启动方式
+
+### Codex 按需模式
+
+先构建并同步 Skill，再按[会话手册](skills/wincode/references/diagnostics.md#skill-按需会话)用持久交互终端验收连续查询和关闭。通过后，在 Codex `config.toml` 原有 `[mcp_servers.wincode]` 段内设 `enabled = false`，保留 `command/args` 等配置，刷新客户端连接；已运行进程不会因保存配置自行消失。禁用原生条目后，Codex 启动不再因该条目创建 WinCode。
+
+Skill 首次使用启动 `dist/Client/SkillSessionCli.js --workspace <当前项目绝对路径>`；终端须保留 stdin（Codex `exec_command` 使用 `tty:true`）。任务内复用返回的执行会话 ID，工具参数不变，完整结果通过回执中的文件读取。任务收尾显式关闭；不会每次查询重启 Host，也没有额外常驻服务或自动重连。Roslyn 配置须明确匹配目标项目。恢复原生模式时关闭按需会话，把原配置的 `enabled` 恢复为 `true` 后刷新客户端。
+
+此模式依赖客户端执行工具能保留交互会话；不支持时使用下方原生配置。结果文件包含实际源码/截图，保存在安装目录 `test-tmp/skill-sessions/`，不会随连接关闭自动删除。Skill 同步脚本不会替用户切换模式。
+
+### 原生 stdio MCP
 
 在客户端添加 stdio 服务器，分别填写：
 

@@ -76,6 +76,8 @@ Running `npm run check` builds the Gateway and native components, runs core regr
 
 **2. Configure the MCP connection**
 
+For Codex with persistent terminal support, the [Skill on-demand mode](skills/wincode/references/diagnostics.md#skill-按需会话) starts WinCode only when needed and reuses one connection throughout the task. Install the Skill, disable the native WinCode MCP entry, and refresh the client connection before using this mode. The Skill starts `dist/Client/SkillSessionCli.js` in an interactive execution session; results remain available as full JSON and image files. It requires an extra file read per result. Other clients can use the native stdio configuration below.
+
 For clients that support `mcpServers`, add the following stdio configuration. Explicitly setting `--workspace` is recommended:
 
 ```json
@@ -241,6 +243,8 @@ npm run delivery:verify
 运行 `npm run check` 会构建 Gateway 和原生组件，执行核心回归测试与 stdio 集成测试，并验证交付清单。桌面测试单独执行。
 
 **2. 配置 MCP 连接**
+
+支持持久终端的 Codex 可使用 [Skill 按需模式](skills/wincode/references/diagnostics.md#skill-按需会话)：首次需要时才启动 WinCode，任务内复用同一连接。先安装 Skill、禁用原生 WinCode MCP 条目，并刷新客户端连接。Skill 通过交互执行会话启动 `dist/Client/SkillSessionCli.js`，完整结果保存为 JSON 和图片文件，每次结果需要额外读取文件。其他客户端可使用下列原生 stdio 配置。
 
 对于支持 `mcpServers` 的客户端，添加以下 stdio 配置。建议显式设置 `--workspace`：
 

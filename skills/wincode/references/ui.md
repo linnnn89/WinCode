@@ -2,7 +2,7 @@
 
 UI 工具同样占用每实例 32 个业务受理槽；既有 UI/健康探测互斥保留，排队消耗请求预算。SERVER_BUSY 不表示已启动 Helper，不自动重试。hwnd 最长 32 字符；原始参数合计受 64 KiB UTF-8 JSON 预算限制。
 
-0.15.0 中，每个 Gateway 的源码范围固定于启动根；换项目选择对应连接。目标 PID/HWND 不是工作区身份，UI 源码候选仍按所选连接解释。可选托盘与 UIA 取证 Host 独立，退出托盘不终止 MCP 或卸载正在使用的 Roslyn；手动释放仅影响选定实例的 Code Host。源码缓存修复不证明 UI 候选对应同一运行时状态，多实例窗口隔离仍需单独验收。
+0.16.0 中，每个 Gateway 的源码范围固定于启动根；换项目选择对应连接。目标 PID/HWND 不是工作区身份，UI 源码候选仍按所选连接解释。可选托盘与 UIA 取证 Host 独立，退出托盘不终止 MCP 或卸载正在使用的 Roslyn；手动释放仅影响选定实例的 Code Host。源码缓存修复不证明 UI 候选对应同一运行时状态，多实例窗口隔离仍需单独验收。
 
 ## 规范字段
 
@@ -19,6 +19,8 @@ UI 工具同样占用每实例 32 个业务受理槽；既有 UI/健康探测互
 | `backgroundOnly` | 可选布尔值，默认 `false`；为 `true` 时必须同时提供 `pid` 和 `hwnd` |
 | `readStates` | 可选布尔值，默认 `false`；只读状态，不执行动作或读取输入值 |
 | `query` | 可选对象；至少有一个规范定位字段 `automationId/name/controlType`，每个为非空白字符串、最长 256；可选 `maxSearchNodes` 整数 1–5000、默认 1000，`maxMatches` 整数 1–20、默认 10。仅有未知字段不构成有效查询 |
+| `wincode_ui_click` | `pid`/`hwnd` 至少一个；`targetAutomationId`/`targetName`/`targetControlType` 至少一个，每个为非空白字符串、最长 256 |
+| `wincode_ui_type` | 具备上述 click 的全部字段，另必填 `inputText`（最长 4096；mode=type 必须非空，mode=setValue 允许空字符串以清空值）；可选 `clearBefore`（布尔，默认 false，仅 mode=type 有效）、`mode`（`type`/`setValue`，默认 `type`） |
 | `wincode_ui_review` | 接受上述 inspect 的全部规范字段，另必填 `candidateFiles`：1–16 个相对 `.xaml` 路径、每项最长 512；可选 `candidateCodeFiles`：1–8 个相对 `.cs` 路径、每项最长 512；可选 `textQueries`：最多 5 个非空字面字符串、每项最长 80 |
 
 候选路径必须在工作区内，不得包含通配符或父目录逃逸；参数合法不保证文件存在或运行窗口与源码对应，仍检查结果中的缺口。`query:{automationId:"SaveButton",maxSearchNodes:1000}` 是规范示例；`query:{automationID:"SaveButton"}` 缺少规范定位条件，仍会报错。没有未列出的 UI 工具别名。
@@ -58,4 +60,50 @@ captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-
 
 多个控件若指向同一文件、相邻赋值，可在确认文件未变化后复用当前会话已展示的精确行；有缺口时合并为一次有界 lineRanges 请求。不要因为每个候选都带 nextRequest 就机械重复读取。复用仅限已经核对的正文，不代表这些运行时 UI 证据获得了跨调用有效期保证，也不扩大运行时绑定结论。
 
-内置 Host 强制显示半透明 REC/WinCoding 标志并记录极简审计，不绕过。审计提示按诊断手册处理。取证不授权点击、输入或读取其他窗口。启动测试应用时使用专用隔离数据模式；已有明确的固定测试 profile 时复用它，避免每次重复初始化，禁止使用个人数据库。
+## 操作方式与授权
+
+先按任务选定模式，再调用。
+
+| 任务 | 用法 |
+| --- | --- |
+| 查看界面、定位控件 | `wincode_ui_inspect` |
+| 后台点击、勾选、选择条目 | `wincode_ui_click`：Invoke/Toggle/SelectionItem，不需要前台 |
+| 后台写入或清空输入框 | `wincode_ui_type` 且**显式**传 `mode:"setValue"`：ValuePattern，不需要前台 |
+| 验证逐键输入、快捷键、IME 行为 | `wincode_ui_type` 的 `mode:"type"`：需要前台授权 |
+| 控件不支持 ValuePattern 的后台写入 | 报告该步骤无法后台完成，不自动改走键盘输入 |
+
+用户要求执行或测试明确的界面流程时，自主完成定位、点击、输入与结果检查，不为每个常规步骤重复确认；用户只要求评估、查看或审查时保持只读。动作会改变目标应用状态，按影响判断是否需要额外确认：超出任务范围的发布、发送、删除或真实业务提交，先说明再执行。
+
+`mode:"type"` 会向目标控件索取键盘焦点（UIA SetFocus），可能把该窗口带到前台并中断用户当前输入，因此只在用户授权前台交互时使用：
+
+- 用户只授权后台测试时固定用 `setValue`，不因为 `type` 更接近真实输入而擅自切换。
+- 授权前确认用户当前没有正在使用该应用。用户正在游戏、聊天（QQ/微信）、会议或演示中时，不索取焦点，也不建议用户为此切走；说明需要前台键盘输入并询问何时方便，由用户决定。
+- 授权后由用户把目标窗口切到前台，工具只做一次焦点确认。`FOCUS_FAILED` 表示当时没有确认到焦点：报告它并等用户处理，不重复重试，也不用脚本、快捷键模拟或窗口置顶代替用户切换。
+- 前台路径只为验证键盘相关行为；业务结果仍用后台 `inspect` 复核。
+
+## 语义操作
+
+`wincode_ui_click` 与 `wincode_ui_type` 只操作同一次有界搜索证明唯一的控件，命中 0 个或多个时不做任何操作。选择器沿用取证时的 `targetAutomationId`/`targetName`/`targetControlType`（区分大小写的精确 AND 条件）与同一个 PID/HWND。
+
+执行一个动作：
+
+1. 用当前 UI 证据确定目标与预期结果；已有可靠 PID/HWND 就直接用，窗口关闭或句柄失效才重新列窗。
+2. 动作后检查预先确定的结果：控件状态、页面变化、新窗口或提示文本。需要等待时做有界只读检查，不重发原动作。
+3. 结果符合预期才继续；验收条件满足后停止。观察不到就报告未验证，不把 `success:true` 当成测试通过。
+
+只用 UIA 控件模式与键盘输入：不做坐标鼠标模拟，不以 Shell 方式激活、还原或置顶窗口。结果回报 `actionMethod`（`InvokePattern`/`TogglePattern`/`SelectionItemPattern`/`ValuePattern`/`keyboard:type`/`keyboard:clear+type`）、`actionTarget` 与 `inputLength`；**不回显输入文本**。`clearBefore` 仅 `type` 有效，`setValue` 传空字符串即可清空值。
+
+| 情况 | 处理 |
+| --- | --- |
+| `TARGET_NOT_FOUND` / `TARGET_AMBIGUOUS` | 重新观察并收紧选择器，有新证据后再试；不逐个试点 |
+| `TARGET_SEARCH_INCOMPLETE` | 扩大预算或收窄范围，不把已有的单个匹配当成唯一 |
+| `TARGET_DISABLED` / `NO_CLICK_PATTERN` / `NO_VALUE_PATTERN` / `VALUE_READONLY` | 检查流程前提，或改用受支持的路径 |
+| `FOCUS_FAILED` | 保持后台约束；只有已授权前台交互时才考虑前台路径 |
+| `ACTION_FAILED`、执行中超时或取消 | **可能已经部分完成**：`type` 的 `clearBefore` 可能已清空旧内容，`click` 的调用方也可能已执行一部分；先只读观察实际状态，再决定继续、修正或报告 |
+| `SERVER_BUSY` 等繁忙拒绝 | `workStarted:false`，未启动 Helper；按诊断手册处理，不自动重放 |
+
+只有 `TARGET_*`、`TARGET_DISABLED`、`NO_*_PATTERN`、`VALUE_READONLY` 与 `FOCUS_FAILED` 发生在实际调用之前；`ACTION_FAILED` 不等于未执行。常见失败不必都交还用户：勾选失败后先读勾选状态，已达到目标就不再 toggle。
+
+操作与只读取证共用受理槽、互斥、超时与 Helper 回收；请求在收尾阶段过期时仍返回已完成动作的真实结果。审计 `op` 记为 `click`/`type`/`setValue`。旧 Helper 不具备该能力时按 `VERSION_MISMATCH` 拒绝，不把参数改成普通 inspect 冒充成功。
+
+内置 Host 强制显示半透明 REC/WinCoding 标志并记录极简审计，不绕过。审计提示按诊断手册处理。启动测试应用时使用专用隔离数据模式；已有固定测试 profile 时复用它，禁止使用个人数据库。

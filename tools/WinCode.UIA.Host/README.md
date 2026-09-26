@@ -1,12 +1,12 @@
 # WinCode.UIA.Host
 
-0.15.0 的 Windows UI Automation（FlaUI.UIA3）一次性取证进程。实现入口为 [Program.cs](Program.cs)，面向 Agent 的规范参数见 [UI 手册](../../skills/wincode/references/ui.md)，整体数据流见 [架构说明](../../WinCode-架构与数据流说明.md)。
+0.16.0 的 Windows UI Automation（FlaUI.UIA3）一次性进程：执行有界取证，并在调用方显式请求时执行一个语义 UI 操作。实现入口为 [Program.cs](Program.cs)，面向 Agent 的规范参数见 [UI 手册](../../skills/wincode/references/ui.md)，整体数据流见 [架构说明](../../WinCode-架构与数据流说明.md)。
 
 ## 职责和边界
 
-接收 stdin JSON，执行有界窗口发现或 UIA 取证，输出 stdout JSON 后退出。Gateway 的 FlaUIAdapter 管理自有 Host 的超时、取消和进程回收；被检查的应用不属于其进程所有权。原生 Helper 在开始工作前验证所属 Gateway 的进程身份；所属进程退出时取消并按既有宽限清理自身。Gateway 启动保留配置/交付检查，实际 UIA 健康探测延后到显式诊断或首次操作。
+接收 stdin JSON，执行有界窗口发现、UIA 取证或一个语义 UI 操作，输出 stdout JSON 后退出。Gateway 的 FlaUIAdapter 管理自有 Host 的超时、取消和进程回收；被检查的应用不属于其进程所有权。原生 Helper 在开始工作前验证所属 Gateway 的进程身份；所属进程退出时取消并按既有宽限清理自身。Gateway 启动保留配置/交付检查，实际 UIA 健康探测延后到显式诊断或首次操作。
 
-Host 不点击、不输入、不写目标控件属性，不主动启动或终止目标应用。它会产生自身进程、审计日志及按策略显示的取证提示，因此不应描述为“零副作用”。审计和内容哈希是诊断证据，不是防篡改或来源签名。
+Host 默认只读：不点击、不输入、不写目标控件属性，也不主动启动或终止目标应用。仅当请求显式指定 `click`/`type`/`setValue` 且定位唯一时才操作控件；此时只用 UIA 控件模式（Invoke/Toggle/SelectionItem/Value）与键盘输入，不做坐标鼠标模拟，不以 Shell 方式激活、还原或置顶目标窗口；`type` 会向目标控件索取键盘焦点（可能把该窗口带到前台），无法确认时拒绝输入（`FOCUS_FAILED`）。它会产生自身进程、审计日志及按策略显示的取证提示，因此不应描述为“零副作用”。
 
 ## 请求与结果
 
@@ -29,7 +29,26 @@ Host 不点击、不输入、不写目标控件属性，不主动启动或终止
 }
 ```
 
-协议版本 `1.0`、取证结构 `inspectionVersion: 2` 和程序集产品版本是不同概念。实际 Host 的 `hostIdentity` 用于核对版本、构建配置和框架，不能从请求或磁盘文件名推断响应身份。
+语义操作使用同一协议，用 `action` 选择动作，并以 `targetAutomationId`/`targetName`/`targetControlType` 唯一定位控件：
+
+```json
+{
+  "schemaVersion": "1.0",
+  "requestId": "example-click",
+  "action": "click",
+  "pid": 12345,
+  "hwnd": "0x123ABC",
+  "targetAutomationId": "btnSave",
+  "timeoutMs": 10000
+}
+```
+
+`type` 另有必填 `inputText` 与可选 `clearBefore`（仅 `type` 有效）；`setValue` 通过 ValuePattern 写入，不依赖键盘焦点，并允许空字符串用于清空值（`mode:"type"` 则要求非空）。
+这三个取值下 `query`/`readStates`/`capture` 都不参与。结果中的 `actionMethod` 是实际使用的模式，`actionTarget` 是目标控件身份证据，
+`inputLength` 是接受的字符数（输入文本不回显）；`success:true` 只代表调用被接受，不代表应用已产生预期副作用，需要证据时另发一次 `inspect`。
+目标缺失、歧义、搜索不完整、控件禁用、无可用模式、只读值或焦点未确认都会以明确错误码拒绝，并发生在实际调用之前。`ACTION_FAILED` 不属于这一类：`type` 的 `clearBefore` 可能已清空旧内容，操作也可能由提供程序部分完成，因此它不是“未执行”，需要先只读观察实际状态。
+
+协议版本 `1.0`、取证结构版本（当前为 `inspectionVersion: 3`：2 增加 query/readStates，3 增加语义操作）和程序集产品版本是不同概念。实际 Host 的 `hostIdentity` 用于核对版本、构建配置和框架，不能从请求或磁盘文件名推断响应身份。
 
 结果应结合 `success/errorCode`、目标窗口、搜索完整性与匹配数量、截断原因、状态证据、截图信息和审计状态解释。查询字段按大小写精确 AND 匹配；只有遍历完整且唯一才展开命中子树。截断后的单个候选不能认定唯一，未知状态不等于 false，多窗口歧义不能自动挑第一个。
 

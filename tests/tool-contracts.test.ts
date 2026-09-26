@@ -130,6 +130,8 @@ const examples: Record<string, Record<string, unknown>> = {
   wincode_diagnose_project: {}, wincode_plan_refactoring: { target: 'Target', goal: 'Improve reliability' },
   wincode_safe_move_to_trash: { filePath: 'Target.ts', reason: 'fixture' },
   wincode_ui_list_windows: { pid: 5 }, wincode_ui_inspect: { pid: 5, query: { name: 'Save' } },
+  wincode_ui_click: { pid: 5, targetAutomationId: 'btnSave' },
+  wincode_ui_type: { pid: 5, targetAutomationId: 'txtUser', inputText: 'fixture text', mode: 'setValue' },
   wincode_ui_review: { pid: 5, candidateFiles: ['View.xaml'], candidateCodeFiles: ['View.cs'], textQueries: ['Save'] },
 };
 
@@ -152,6 +154,8 @@ const expectedCalls: Record<string, { method: string; args: unknown[] }> = {
   wincode_safe_move_to_trash: { method: 'moveToTrash', args: ['Target.ts', 'fixture', '<signal>'] },
   wincode_ui_list_windows: { method: 'listUiWindows', args: [{ pid: 5 }, '<signal>'] },
   wincode_ui_inspect: { method: 'inspectUi', args: [{ pid: 5, query: { name: 'Save' }, hwnd: undefined }, '<signal>'] },
+  wincode_ui_click: { method: 'performUiAction', args: [{ pid: 5, targetAutomationId: 'btnSave', hwnd: undefined, action: 'click' }, '<signal>'] },
+  wincode_ui_type: { method: 'performUiAction', args: [{ pid: 5, targetAutomationId: 'txtUser', inputText: 'fixture text', hwnd: undefined, action: 'setValue' }, '<signal>'] },
   wincode_ui_review: { method: 'reviewUi', args: [{ pid: 5, hwnd: undefined }, ['View.xaml'], '<signal>', ['Save'], ['View.cs']] },
 };
 
@@ -173,8 +177,9 @@ it('calls all published tools and the hidden alias; unknown fields do not reach 
   stub('listUiWindows', { success: true, windows: [] });
   stub('inspectUi', { success: true });
   stub('reviewUi', { success: true });
+  stub('performUiAction', { success: true });
   const published = (await client.listTools()).tools;
-  assert.equal(published.length, 17);
+  assert.equal(published.length, 19);
   assert.ok(!published.some(tool => tool.name === 'wincode_workspace_open'));
   assert.deepEqual(new Set([...published.map(tool => tool.name), 'wincode_workspace_open']), new Set(Object.keys(examples)));
   const responses = new Map<string, unknown>();
@@ -204,7 +209,7 @@ it('calls all published tools and the hidden alias; unknown fields do not reach 
 it('validates every declared top-level argument without coercion before admission', async () => fixture(async (client, router, admissions) => {
   let calls = 0;
   for (const method of ['openWorkspace', 'listDirectory', 'analyzeWorkspace', 'findCodeSymbols', 'findCodeReferences', 'diagnoseProject',
-    'planRefactoring', 'prepareContext', 'moveToTrash', 'analyzeChangeImpact', 'getRuntimeHealth', 'listUiWindows', 'inspectUi', 'reviewUi'])
+    'planRefactoring', 'prepareContext', 'moveToTrash', 'analyzeChangeImpact', 'getRuntimeHealth', 'listUiWindows', 'inspectUi', 'performUiAction', 'reviewUi'])
     (router as any)[method] = async () => { calls++; return {}; };
   const tools = (await client.listTools()).tools;
   const workspace = tools.find(tool => tool.name === 'workspace_open')!;

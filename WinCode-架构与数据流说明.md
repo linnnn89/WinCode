@@ -1,6 +1,6 @@
 # WinCode 架构与数据流
 
-**适用版本：0.15.0；更新：2026-09-11（北京时间）。已验证的 main 基线 `631f8ba` 包含 PR #40/#41，Node 22/24 和 CodeQL 检查通过，尚未发布 GitHub Release。本机已完成双连接 UI 及实际 Codex 连接中的单项目 Roslyn 验收，范围和结果见 [README](README.md)。**
+**适用版本：0.16.0；更新：2026-09-11（北京时间）。已验证的 main 基线 `631f8ba` 包含 PR #40/#41，Node 22/24 和 CodeQL 检查通过，尚未发布 GitHub Release。本机已完成双连接 UI 及实际 Codex 连接中的单项目 Roslyn 验收，范围和结果见 [README](README.md)。**
 
 本说明描述当前源码中已实现的结构。GitHub 分支保护的历史只读核查日期为 2026-09-08；本轮核对 PR 检查状态，不把它等同重新审计全部保护设置。历史实测结果见[工作记录](docs/codex_worklog.md)。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
 
@@ -57,7 +57,7 @@ Codex 可选择 Skill 按需入口：首次使用才创建交互执行会话，`
 | 原生 Host | 按 PID/HWND 取证，执行有界 UIA 搜索及截图 | [Program.cs](tools/WinCode.UIA.Host/Program.cs)、[BoundedUiSearch](tools/WinCode.UIA.Host/BoundedUiSearch.cs)、[UiAudit](tools/WinCode.UIA.Host/UiAudit.cs) |
 | 构建交付层 | 锁定构建、回归、stdio 验证、产物身份、Skill 一致性 | [check.mjs](scripts/check.mjs)、[delivery-manifest](scripts/delivery-manifest.mjs)、[sync-skill](scripts/sync-skill.mjs) |
 
-`ExtensionManager` 目前保留兼容接口，没有内置注册项，不承担实际插件生态或工具发现职责。Gateway 当前列出 17 个工具名称，其中包含影响分析别名；工具名称数量不等于独立业务能力数量。
+`ExtensionManager` 目前保留兼容接口，没有内置注册项，不承担实际插件生态或工具发现职责。Gateway 当前列出 19 个工具名称，其中包含影响分析别名；工具名称数量不等于独立业务能力数量。
 
 ## 2. 一次请求怎样通过系统
 

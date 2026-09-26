@@ -609,6 +609,11 @@ export class ToolRouter {
     return this.flaui.inspect(request, signal, this.admission.operation(signal));
   }
 
+  /** 破坏性动作共用 inspect 的受理、互斥与超时；动作语义由 request.action 决定。 */
+  async performUiAction(request: UiInspectRequest, signal?: AbortSignal): Promise<UiInspectResult> {
+    return this.flaui.performUiAction(request, signal, this.admission.operation(signal));
+  }
+
   async listUiWindows(request: import('./UiContracts.js').UiListWindowsRequest, signal?: AbortSignal): Promise<UiInspectResult> {
     return this.flaui.listWindows(request, signal, this.admission.operation(signal));
   }

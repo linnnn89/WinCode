@@ -48,7 +48,9 @@ internal sealed class UiAudit : IDisposable
             var bytes = Measure(audit.directory);
             var start = Encode(new { v = 1, t = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), id = audit.id,
                 phase = "start", helper = Environment.ProcessId, target = pid, hwnd = CanonicalHandle(hwnd),
-                op = operation == "listWindows" ? "windows" : "inspect",
+                // 操作名必须如实记录：破坏性动作绝不能被记成 "inspect"。
+                op = operation switch { "listWindows" => "windows", "click" => "click", "type" => "type",
+                    "setValue" => "setValue", _ => "inspect" },
                 capture = capture is "original" or "annotated" ? capture : "none" });
             var statePath = Path.Combine(audit.directory, StateName);
             int stateReserve = File.Exists(statePath) ? 0 : 32;

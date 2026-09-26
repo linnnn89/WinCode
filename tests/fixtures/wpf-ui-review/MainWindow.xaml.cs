@@ -91,6 +91,69 @@ public partial class MainWindow : Window
             }
             Content = panel;
         }
+        if (Environment.GetCommandLineArgs().Contains("--action-fixture"))
+        {
+            // 语义操作夹具：在 code-behind 中替换内容，不改 XAML，避免移动源码审查断言的 XAML 行号。
+            // actionEcho 是 TextBlock，其 UIA Name 就是文本，因此"点击/输入是否真的到达应用"
+            // 可以由独立的只读取证观察到，而不是只看操作工具自己报告的 success。
+            var panel = new StackPanel { Margin = new Thickness(16) };
+            void Add(FrameworkElement control, string id)
+            {
+                System.Windows.Automation.AutomationProperties.SetAutomationId(control, id);
+                panel.Children.Add(control);
+            }
+            var echo = new TextBlock { Text = "idle" };
+            Add(echo, "actionEcho");
+
+            // 键盘输入要求目标控件持有键盘焦点。夹具在自己的测试模式下提供一次显式获取焦点的机会，
+            // 让"目标应用本来就持有键盘焦点"这一前提在测试中可复现；产品 Host 绝不激活目标窗口，
+            // 无法确认焦点时直接拒绝输入。
+            var focusGate = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            var focusAttempts = 0;
+            focusGate.Tick += (_, _) =>
+            {
+                if (IsActive || ++focusAttempts > 25) { focusGate.Stop(); return; }
+                Activate();
+            };
+            var focusButton = new Button { Content = "Focus Window", Height = 30 };
+            focusButton.Click += (_, _) => { Activate(); focusGate.Start(); };
+            Add(focusButton, "actionFocus");
+
+            var clicks = 0;
+            var increment = new Button { Content = "Increment", Height = 30 };
+            increment.Click += (_, _) => echo.Text = $"clicked:{++clicks}";
+            Add(increment, "actionIncrement");
+
+            // 两个控件共用同一 AutomationId：语义操作必须拒绝歧义，而不是挑第一个。
+            var duplicateFirst = new Button { Content = "Duplicate", Height = 30 };
+            duplicateFirst.Click += (_, _) => echo.Text = "ambiguous-click";
+            Add(duplicateFirst, "actionDuplicate");
+            var duplicateSecond = new Button { Content = "Duplicate", Height = 30 };
+            duplicateSecond.Click += (_, _) => echo.Text = "ambiguous-click";
+            Add(duplicateSecond, "actionDuplicate");
+
+            var toggle = new CheckBox { Content = "Toggle" };
+            toggle.Checked += (_, _) => echo.Text = "toggled:true";
+            toggle.Unchecked += (_, _) => echo.Text = "toggled:false";
+            Add(toggle, "actionToggle");
+
+            var disabled = new Button { Content = "Disabled", IsEnabled = false, Height = 30 };
+            disabled.Click += (_, _) => echo.Text = "disabled-click";
+            Add(disabled, "actionDisabled");
+
+            var readOnly = new TextBox { Text = "read-only", IsReadOnly = true, Height = 28 };
+            Add(readOnly, "actionReadOnly");
+
+            var input = new TextBox { Text = "initial", Height = 28 };
+            input.TextChanged += (_, _) => echo.Text = "text:" + input.Text;
+            Add(input, "actionInput");
+
+            var valueTarget = new TextBox { Text = "initial", Height = 28 };
+            valueTarget.TextChanged += (_, _) => echo.Text = "value:" + valueTarget.Text;
+            Add(valueTarget, "actionValue");
+
+            Content = panel;
+        }
         if (Environment.GetCommandLineArgs().Contains("--query-fixture")) {
             var panel = new StackPanel();
             void Add(FrameworkElement control, string id) {

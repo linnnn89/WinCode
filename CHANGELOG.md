@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.16.0 (unreleased)
+
+- Add semantic Windows UI actions as `wincode_ui_click` and `wincode_ui_type` (keyboard `type` or `setValue`). A control is acted on only when one bounded search proves the exact selector unique inside the target window; disabled controls, unconfirmed keyboard focus, read-only values, unsupported patterns and ambiguous or incomplete searches are refused with explicit codes. Only UI Automation patterns and keyboard input are used — no coordinate mouse simulation, no activation, restore or z-order change of the target window. The helper inspection structure is now version 3, so an older helper can no longer report a requested action as a successful inspection. Results report the pattern used, the target identity and the accepted input length without echoing the input text; actions are audited as `click`/`type`/`setValue` rather than `inspect`.
+- Keep UI action requests on the existing admission, mutex, timeout, cancellation and helper-reaping path, and preserve completed action outcomes when the request deadline expires during finalization instead of reporting an action that already happened as unexecuted.
+
 ## 0.15.0 (unreleased)
 
 - Report Roslyn snapshot diagnostic totals before sample limits, bounded error-code/project counts and explicit sample omissions; preserve unknown totals for legacy Hosts and conservative semantic coverage. Update Skill guidance to distinguish dependency loading from excluded generator coverage.

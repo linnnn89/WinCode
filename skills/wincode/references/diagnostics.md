@@ -48,9 +48,9 @@ node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标
 
 跨项目入口：新构建的 `WORKSPACE_MISMATCH` 响应包含 `connectionGuide`，其中 `configuration.command/args` 是独立 STDIO 连接配置，`verification` 给出连接后检查工作区的调用。也可运行 `node <WinCode安装目录>/dist/index.js --print-connection --workspace <目标绝对路径>` 输出同一配置；不创建缓存、不注册或重启客户端、不启动项目 Host。配置默认 local-text，不复制已有 Roslyn、开发或托盘选项；目录存在性在实际连接启动时校验。选择已有正确连接优先，建立新连接仍遵守用户授权。刷新连接后再使用新增导航工具或 UI 精简参数，磁盘重建和 Skill 同步不会热替换旧 MCP Schema。
 
-0.15.0 的 WORKSPACE_MISMATCH 是固定工作区拒绝：检查 activeWorkspace/requestedWorkspace，选择对应项目连接。错误发生在工作区资源变更之前，不表示旧根已切换或需要清空缓存。hello.health.workspaceBinding 给出固定根及启动来源；argument 是显式 CLI 参数，cwd 是启动目录回退，configuration 是嵌入式配置。显式 --workspace 必须有绝对目录值；已有连接不会因磁盘重建或配置保存自行更新。
+0.16.0 的 WORKSPACE_MISMATCH 是固定工作区拒绝：检查 activeWorkspace/requestedWorkspace，选择对应项目连接。错误发生在工作区资源变更之前，不表示旧根已切换或需要清空缓存。hello.health.workspaceBinding 给出固定根及启动来源；argument 是显式 CLI 参数，cwd 是启动目录回退，configuration 是嵌入式配置。显式 --workspace 必须有绝对目录值；已有连接不会因磁盘重建或配置保存自行更新。
 
-0.15.0 的 health.admission 返回 business/status 的 active、executing、waiting、accepted、completed、rejected、cancelled、timedOut、peakActive，以及累计 waitMs/executionMs 和 maxWaitMs。每实例最多 32 个未完成业务请求、4 个共享轻量状态请求；内层互斥保持 FIFO，运行中取消须在实际清理后归还容量。workspace_open 占用业务容量，但不计入它自己等待排空的 inFlight。状态不等待慢查询或同根恢复；tools/list 满额以协议错误 data.errorCode=SERVER_BUSY 表达。
+0.16.0 的 health.admission 返回 business/status 的 active、executing、waiting、accepted、completed、rejected、cancelled、timedOut、peakActive，以及累计 waitMs/executionMs 和 maxWaitMs。每实例最多 32 个未完成业务请求、4 个共享轻量状态请求；内层互斥保持 FIFO，运行中取消须在实际清理后归还容量。workspace_open 占用业务容量，但不计入它自己等待排空的 inFlight。状态不等待慢查询或同根恢复；tools/list 满额以协议错误 data.errorCode=SERVER_BUSY 表达。
 
 计时口径：waitMs/maxWaitMs 按已结束请求累计其显式队列等待；executionMs 是队列以外的墙钟耗时，包含 I/O 和取消清理，不是 CPU 用时。active/executing/waiting 为当前请求数；取消/超时计数是 completed 的子集。
 
@@ -135,7 +135,7 @@ Gateway 通过子进程私有环境传递所属 PID；两个 .NET Host 在项目
 
 ## 手动 Roslyn 释放与可选托盘（0.14.0）
 
-自动释放关闭，本版不创建 idle timer。用户可按 README 手动启动独立 Tray，并给希望管理的 Gateway 启动参数添加 --tray 后刷新连接。托盘只管理已注册的实例，不扫描/终止外部客户端或目标应用；当前新增两个只读导航工具后共 17 个公开工具名称，仍没有让 Agent 自动代替用户释放的管理工具。默认不启用托盘连接、不设置自启动。
+自动释放关闭，本版不创建 idle timer。用户可按 README 手动启动独立 Tray，并给希望管理的 Gateway 启动参数添加 --tray 后刷新连接。托盘只管理已注册的实例，不扫描/终止外部客户端或目标应用；公开工具名称以当前连接实际暴露的 Schema 为准，不在文档里写死数量；没有让 Agent 自动代替用户释放的管理工具。默认不启用托盘连接、不设置自启动。
 
 手动释放遇到业务在途、语义排队/收尾、工作区确认或恢复门时拒绝，不自动延后执行。释放完成后新请求继续；旧 symbolLocation 返回 SNAPSHOT_STALE，显式重新搜索取得当前定位。保留 Gateway、watcher、缓存与最后诊断。清理失败进入 restart_gateway 恢复门，不能靠反复点击清除错误。local-text 没有可释放的 Roslyn。
 

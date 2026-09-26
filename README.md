@@ -26,6 +26,7 @@ WinCode is a local server implementing the Model Context Protocol (MCP) for AI c
 - **UI inspection with source navigation:** Inspect a control, find candidate XAML declarations and related C# code, then read the relevant source lines. File paths, line numbers and content hashes make the findings traceable.
 - **Faster, more accurate inspection in everyday use:** In our day-to-day Windows/.NET development, WinCode makes UI inspection and source navigation faster and more accurate than screenshot-based Computer Use workflows. Direct access to structured control properties and source locations reduces reliance on image interpretation and repeated interaction. Targeted queries and compact responses also reduce the amount of data the model needs to process.
 - **Project and code analysis:** Explore declared solution and project references, search text and symbols, read selected code, and assess change impact. Built-in text analysis works by default; optional Roslyn integration provides compiler-backed C# symbol and reference analysis.
+- **Semantic UI actions:** `wincode_ui_click` and `wincode_ui_type` act on exactly one control that a single bounded search proves unique. They use UI Automation patterns and keyboard input only—never coordinate mouse simulation—and never activate, restore or raise the target window. Disabled controls, ambiguous or incomplete matches, read-only values and unconfirmed keyboard focus are refused rather than guessed.
 
 A recorded test with a 222-node window reduced response text from approximately **62 KB to 1.6 KB** by querying a specific control instead of returning the full tree. See the [test record](docs/codex_worklog.md).
 
@@ -140,6 +141,8 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 | `wincode_safe_move_to_trash` | Move validated workspace files to `trash/` and record the actual completed or partial outcome. |
 | `wincode_ui_list_windows` | List visible top-level windows with process and title filters. |
 | `wincode_ui_inspect` | Read controls and optional states or screenshots. |
+| `wincode_ui_click` | Click one uniquely matched control through UI Automation patterns. |
+| `wincode_ui_type` | Type text into, or set the value of, one uniquely matched control. |
 | `wincode_ui_review` | Inspect UI and return candidate XAML/C# source locations. |
 | `wincode_hello_world` | Read instance identity, workspace binding, capabilities and known status. |
 | `wincode_diagnose_project` | Actively check SDKs, Git and the local environment. |
@@ -155,16 +158,16 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 
 ### Scope and limitations
 
-- **Desktop access:** UI inspection is read-only. It does not click controls, type text or read input-field values. Background mode requires both PID and HWND, supports non-minimized windows, and does not activate or restore the target. UI inspection requires an interactive Windows desktop session and does not support headless operation.
+- **Desktop access:** UI inspection is read-only: it does not click controls, type text or read input-field values. The separate `wincode_ui_click` and `wincode_ui_type` tools are destructive: they act on one uniquely matched control through UI Automation patterns or keyboard input, never mouse simulation, and never activate or restore the target window. They refuse disabled controls, ambiguous or incomplete matches, read-only values and unconfirmed keyboard focus: `type` requests keyboard focus on the control (which may bring its window to the front), so use it only when the user has approved foreground interaction, and prefer `mode:"setValue"` for background work. Background mode requires both PID and HWND, supports non-minimized windows, and does not activate or restore the target. UI inspection requires an interactive Windows desktop session and does not support headless operation.
 - **UIA and visual rendering:** Available properties depend on the application's UIA provider. WPF is covered by the project's desktop tests; other frameworks and custom-rendered controls may expose less information. Colors, icons and rendering quality require visual review. Background screenshots use `PrintWindow` without screen-capture fallback; check the returned capture-quality indicators.
 - **Source mapping:** XAML and C# matches identify candidate source locations, with `runtimeSourceVerified: false`. The tool does not verify that the running build matches the source, resolve dynamic bindings or runtime templates, or determine the active `DataContext`.
 - **Analysis coverage:** Project structure analysis reads `.sln` and `.csproj` declarations without MSBuild evaluation. Text-based references are heuristic. Review completeness, omissions and diagnostics before drawing conclusions; no matches in a limited scan do not establish absence across the project.
 - **Resource limits:** Requests, traversal and response size have explicit limits. Overload returns `SERVER_BUSY`; queue time counts toward the timeout. Output limits do not represent process memory limits. Full concurrency, cache and process-lifecycle details are in the [architecture guide](WinCode-架构与数据流说明.md).
-- **Inspection notice:** During inspection, a semi-transparent `REC / WinCoding` status overlay is displayed without taking focus, and minimal local audit metadata is recorded under `%LOCALAPPDATA%/WinCode/logs/ui-audit`. See the [diagnostics guide](skills/wincode/references/diagnostics.md) for audit-log maintenance.
+- **Inspection notice:** During UI inspection and UI actions, a semi-transparent `REC / WinCoding` status overlay is displayed without taking focus, and minimal local audit metadata is recorded under `%LOCALAPPDATA%/WinCode/logs/ui-audit`, including the action name for actions. See the [diagnostics guide](skills/wincode/references/diagnostics.md) for audit-log maintenance.
 
 ### Development and documentation
 
-Current source version: **0.15.0**. See [CHANGELOG](CHANGELOG.md) for version history and migration notes. Windows 11 x64 is the reference platform; ports to other operating systems require adaptation and separate validation.
+Current source version: **0.16.0**. See [CHANGELOG](CHANGELOG.md) for version history and migration notes. Windows 11 x64 is the reference platform; ports to other operating systems require adaptation and separate validation.
 
 ```powershell
 npm run check            # Builds, core regression, stdio integration and delivery verification
@@ -192,6 +195,7 @@ WinCode 是面向 AI 编程智能体的本地模型上下文协议（Model Conte
 - **后台 UI 检查：**无需激活目标窗口或切换键盘焦点，即可读取运行中应用的控件信息。智能体检查目标窗口时，用户可以继续使用其他应用。
 - **支持纯文本大语言模型：**以结构化 JSON 返回控件名称、层级、属性和状态。通过支持 MCP 的智能体客户端，DeepSeek 等以纯文本方式使用的模型也能检查桌面界面，无需输入图像；截图为可选功能。
 - **结合源码分析 UI：**检查运行时控件，查找可能对应的 XAML 声明和相关 C# 代码，再读取具体源码。结果包含文件路径、行号和内容哈希，便于核查。
+- **语义化 UI 操作：**`wincode_ui_click` 与 `wincode_ui_type` 只操作同一次有界搜索证明唯一的控件；仅使用 UI Automation 模式与键盘输入，不做坐标鼠标模拟，也不激活、还原或置顶目标窗口。禁用控件、歧义或不完整的匹配、只读值以及无法确认的键盘焦点都会被拒绝，而不是靠猜测继续。
 - **实际使用中更快、更准确：**在日常 Windows/.NET 开发中，使用 WinCode 检查 UI 和定位源码，比基于截图的 Computer Use 工作流更快、更准确。通过直接获取结构化的控件属性和源码位置，可以减少对图像识别的依赖和反复交互；配合定向查询与精简响应，还能减少模型需要处理的数据量。
 - **项目与代码分析：**查看解决方案和项目中声明的引用关系，搜索文本与符号，按需读取代码，并评估变更影响。默认提供内置文本分析，可选的 Roslyn 集成支持基于编译器语义的 C# 符号与引用分析。
 
@@ -308,6 +312,8 @@ npm run delivery:verify
 | `wincode_safe_move_to_trash` | 将通过路径校验的工作区文件移至 `trash/`，记录实际完成或部分完成的结果。 |
 | `wincode_ui_list_windows` | 列出可见顶层窗口，支持按进程和标题筛选。 |
 | `wincode_ui_inspect` | 读取控件信息，以及可选的状态或截图。 |
+| `wincode_ui_click` | 通过 UI Automation 模式点击唯一命中的控件。 |
+| `wincode_ui_type` | 向唯一命中的控件输入文本，或直接写入其值。 |
 | `wincode_ui_review` | 检查 UI 并返回 XAML/C# 源码候选位置。 |
 | `wincode_hello_world` | 读取实例身份、工作区绑定、能力及已知状态。 |
 | `wincode_diagnose_project` | 主动检查 SDK、Git 和本地环境。 |
@@ -323,16 +329,16 @@ npm run delivery:verify
 
 ### 适用范围与限制
 
-- **桌面访问：**UI 检查为只读操作，不点击控件、不输入文本，也不读取输入框的值。后台模式需同时指定 PID 和 HWND，仅支持未最小化的窗口，检查过程中不激活或还原目标窗口。该功能需要交互式 Windows 桌面会话，不支持在无头环境（Headless）中运行。
+- **桌面访问：**UI 检查为只读操作，不点击控件、不输入文本，也不读取输入框的值。单独的 `wincode_ui_click` 与 `wincode_ui_type` 是破坏性操作：只通过 UI Automation 模式或键盘输入操作唯一命中的控件，不使用鼠标坐标模拟，也不激活或还原目标窗口。禁用控件、歧义或不完整的匹配、只读值以及无法确认的键盘焦点都会被拒绝；`type` 会向目标控件索取键盘焦点（可能把该窗口带到前台），因此只在用户授权前台交互时使用，后台写入优先 `mode:"setValue"`。后台模式需同时指定 PID 和 HWND，仅支持未最小化的窗口，检查过程中不激活或还原目标窗口。该功能需要交互式 Windows 桌面会话，不支持在无头环境（Headless）中运行。
 - **UIA 与视觉效果：**可读取的属性取决于目标应用的 UIA 提供程序。项目的桌面测试覆盖 WPF，其他框架和自绘控件可能提供较少的信息。颜色、图标和渲染质量需要结合图像检查。后台截图使用 `PrintWindow`，不回退到屏幕截图；应检查返回的截图质量提示。
 - **源码映射：**XAML 和 C# 的匹配结果提供了可能相关的源码位置，`runtimeSourceVerified` 为 `false`。工具不验证运行版本与源码是否一致，不解析动态绑定或运行时模板，也不确定当前的 `DataContext`。
 - **分析范围：**项目结构分析仅静态读取 `.sln` 和 `.csproj` 中的声明，不进行 MSBuild 项目评估。文本引用搜索采用启发式方法。应结合完整性、省略项和诊断信息判断结果；在有限范围内未找到匹配，并不代表整个项目中不存在匹配内容。
 - **资源限制：**请求数量、遍历范围和响应大小均有限制。超过处理容量时返回 `SERVER_BUSY`，排队时间计入超时。输出限制不等于进程内存上限。并发、缓存与进程生命周期的详细说明见 [架构文档](WinCode-架构与数据流说明.md)。
-- **检查提示：**检查期间会显示半透明的 `REC / WinCoding` 状态浮层（Overlay），不会获取键盘焦点。同时，将最小必要的审计元数据记录到本地目录 `%LOCALAPPDATA%/WinCode/logs/ui-audit`。审计日志维护方式见 [诊断手册](skills/wincode/references/diagnostics.md)。
+- **检查提示：**UI 检查与 UI 操作期间都会显示半透明的 `REC / WinCoding` 状态浮层（Overlay），不会获取键盘焦点。同时，将最小必要的审计元数据记录到本地目录 `%LOCALAPPDATA%/WinCode/logs/ui-audit`，操作类请求会记录动作名。审计日志维护方式见 [诊断手册](skills/wincode/references/diagnostics.md)。
 
 ### 开发与文档
 
-当前源码版本为 **0.15.0**。版本历史和迁移说明见 [CHANGELOG](CHANGELOG.md)。项目以 Windows 11 x64 为基准平台，移植至其他操作系统需要适配并单独验证。
+当前源码版本为 **0.16.0**。版本历史和迁移说明见 [CHANGELOG](CHANGELOG.md)。项目以 Windows 11 x64 为基准平台，移植至其他操作系统需要适配并单独验证。
 
 ```powershell
 npm run check            # 构建、核心回归、stdio 集成和交付校验

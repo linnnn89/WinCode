@@ -17,6 +17,9 @@ import {
 import {
   UiInspectRequest,
   validateUiQuery,
+  validateUiAction,
+  isUiAction,
+  UI_INSPECTION_VERSIONS,
   UiInspectResult,
   UiErrorCodes,
   UI_INSPECT_DEFAULTS,
@@ -252,6 +255,17 @@ export class FlaUiAdapter implements IAdapter {
     return this.inspect({ ...request, action: 'listWindows', timeoutMs: 3000 }, signal, operation);
   }
 
+  /**
+   * 语义操作与只读取证共享同一互斥、超时、取消与进程回收路径；
+   * 差异只在请求校验与结果形状，避免出现第二套 Helper 生命周期。
+   */
+  async performUiAction(
+    request: UiInspectRequest, signal?: AbortSignal, operation?: OperationContext
+  ): Promise<UiInspectResult> {
+    const result = await this.inspect(request, signal, operation);
+    return result;
+  }
+
   async inspect(
     request: UiInspectRequest, signal?: AbortSignal, operation?: OperationContext
   ): Promise<UiInspectResult> {
@@ -277,6 +291,11 @@ export class FlaUiAdapter implements IAdapter {
     const requestId = request.requestId || randomUUID();
     try { validateUiQuery(request.query, request.readStates); }
     catch (error) { return {schemaVersion: "1.0", protocolVersion: "1.0", requestId, success: false, errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message}; }
+    if (isUiAction(request.action)) {
+      // 拒绝必须发生在启动 Helper 之前：破坏性动作没有"参数不对但仍先执行"的余地。
+      try { validateUiAction(request); }
+      catch (error) { return {schemaVersion: "1.0", protocolVersion: "1.0", requestId, success: false, errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message}; }
+    }
     const normRequest: UiInspectRequest & { requestId: string } = {
       ...request,
       requestId,
@@ -410,10 +429,18 @@ export class FlaUiAdapter implements IAdapter {
         };
       }
       // Old/custom helpers must not silently ignore a scoped query and return a whole window.
-      if ((request.query || request.readStates) && parsed.success && parsed.inspectionVersion !== 2) {
+      if ((request.query || request.readStates) && parsed.success && (parsed.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.QUERY_AND_STATES) {
         return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
           success: false, errorCode: UiErrorCodes.VERSION_MISMATCH,
           errorMessage: 'Query/state inspection requires a v0.9 helper (inspectionVersion 2).', auditNotice: parsed.auditNotice };
+      }
+      // 旧 Helper 不认得 action 字段，会退化成一次只读取证并返回 success=true。
+      // 那种结果不能当作操作已执行，必须在协议层按版本拒绝。
+      if (isUiAction(request.action) && parsed.success && (parsed.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.ACTIONS) {
+        return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
+          success: false, errorCode: UiErrorCodes.VERSION_MISMATCH,
+          errorMessage: `The ${request.action} action requires an inspectionVersion ${UI_INSPECTION_VERSIONS.ACTIONS} helper; this helper ignored the requested action.`,
+          auditNotice: parsed.auditNotice };
       }
       return parsed;
     } catch (jsonErr) {
@@ -481,6 +508,12 @@ export class FlaUiAdapter implements IAdapter {
       maxDepth: request.maxDepth ?? this.config.adapters.flaui?.maxDepth ?? UI_INSPECT_DEFAULTS.MAX_DEPTH,
       maxNodes: request.maxNodes ?? this.config.adapters.flaui?.maxNodes ?? UI_INSPECT_DEFAULTS.MAX_NODES,
       timeoutMs: timeoutMs,
+      // 语义操作字段按 action 透传；未提供的字段不写入 payload，避免被下游当成显式条件。
+      targetAutomationId: request.targetAutomationId,
+      targetName: request.targetName,
+      targetControlType: request.targetControlType,
+      inputText: request.inputText,
+      clearBefore: request.clearBefore,
     });
 
     let stdoutData = '';

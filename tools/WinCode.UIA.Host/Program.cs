@@ -91,6 +91,26 @@ public static class Program
                 return;
             }
 
+            if (UiActionExecutor.IsAction(request.Action))
+            {
+                // 破坏性操作：定位条件必须先成立，且审计记录在任何目标读写之前落盘。
+                if (!UiActionExecutor.ValidActionRequest(request))
+                {
+                    WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT",
+                        "Action requires at least one target selector (targetAutomationId/targetName/targetControlType), " +
+                        "a resolvable pid or hwnd, and an inputText of at most 4096 characters.");
+                    return;
+                }
+                var actionTimeoutMs = request.TimeoutMs is > 0 ? request.TimeoutMs.Value : 10000;
+                currentAudit = UiAudit.Start(request.Pid, request.Hwnd, "none", request.Action!);
+                using var actionCts = CancellationTokenSource.CreateLinkedTokenSource(owner?.Token ?? CancellationToken.None);
+                actionCts.CancelAfter(actionTimeoutMs);
+                using var actionNotice = RecordingIndicator.Show();
+                indicatorDisplayed = true;
+                WriteSuccessResponse(request.RequestId, UiActionExecutor.Execute(request, actionCts.Token));
+                return;
+            }
+
             if (request.Pid <= 0 && string.IsNullOrWhiteSpace(request.Hwnd))
             {
                 WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "Either 'pid' or 'hwnd' must be provided.");

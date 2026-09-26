@@ -57,7 +57,7 @@ Codex 可选择 Skill 按需入口：首次使用才创建交互执行会话，`
 | 原生 Host | 按 PID/HWND 取证，执行有界 UIA 搜索及截图 | [Program.cs](tools/WinCode.UIA.Host/Program.cs)、[BoundedUiSearch](tools/WinCode.UIA.Host/BoundedUiSearch.cs)、[UiAudit](tools/WinCode.UIA.Host/UiAudit.cs) |
 | 构建交付层 | 锁定构建、回归、stdio 验证、产物身份、Skill 一致性 | [check.mjs](scripts/check.mjs)、[delivery-manifest](scripts/delivery-manifest.mjs)、[sync-skill](scripts/sync-skill.mjs) |
 
-`ExtensionManager` 目前保留兼容接口，没有内置注册项，不承担实际插件生态或工具发现职责。Gateway 当前列出 17 个工具名称，其中包含影响分析别名；工具名称数量不等于独立业务能力数量。
+`ExtensionManager` 目前保留兼容接口，没有内置注册项，不承担实际插件生态或工具发现职责。Gateway 当前列出 19 个工具名称，其中包含影响分析别名；工具名称数量不等于独立业务能力数量。
 
 ## 2. 一次请求怎样通过系统
 

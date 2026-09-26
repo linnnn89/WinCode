@@ -1,6 +1,7 @@
 import { defineTool, jsonResult } from './ToolDefinition.js';
 import { uiResponse } from './UiResponse.js';
-import { UI_INSPECT_DEFAULTS, validateUiQuery, validateWindowQuery, type UiInspectRequest, type UiListWindowsRequest } from '../Core/UiContracts.js';
+import { UI_INSPECT_DEFAULTS, validateUiQuery, validateWindowQuery, validateUiAction,
+  type UiAction, type UiInspectRequest, type UiListWindowsRequest } from '../Core/UiContracts.js';
 import { validateCandidateFiles } from '../Core/UiSourceMapper.js';
 import { validateCandidateCodeFiles } from '../Core/UiCodeMapper.js';
 import { validateTextQueries } from '../Core/UiTextSearch.js';
@@ -12,8 +13,39 @@ function validateInspect(args: UiInspectRequest): void {
   if (args.hwnd !== undefined && !args.hwnd.trim()) throw new Error('hwnd must be non-empty.');
 }
 
+/** 动作工具在任何受理与进程启动之前先做完整契约校验。 */
+function validateActionRequest(args: UiActionArgs, action: UiAction): void {
+  if (args.hwnd !== undefined && (typeof args.hwnd !== 'string' || !args.hwnd.trim())) throw new Error('hwnd must be non-empty.');
+  validateUiAction({
+    action, pid: args.pid, hwnd: args.hwnd,
+    targetAutomationId: args.targetAutomationId, targetName: args.targetName,
+    targetControlType: args.targetControlType, inputText: args.inputText, clearBefore: args.clearBefore,
+  });
+}
+
 type UiInspectArgs = UiInspectRequest & { responseFormat?: 'full' | 'compact' };
 type UiReviewArgs = UiInspectArgs & { candidateFiles: string[]; candidateCodeFiles?: string[]; textQueries?: string[] };
+
+/** 动作参数：定位与输入字段与取证参数分开声明，避免把 query/readStates 误当成动作范围。 */
+type UiActionArgs = {
+  pid?: number; hwnd?: string;
+  targetAutomationId?: string; targetName?: string; targetControlType?: string;
+  inputText?: string; clearBefore?: boolean;
+};
+type UiTypeArgs = UiActionArgs & { inputText: string; mode?: 'type' | 'setValue' };
+
+const actionTargetProperties = {
+  pid: { type: 'integer', minimum: 1,
+    description: 'Process ID of the target Windows desktop application.' },
+  hwnd: { type: 'string', maxLength: 32,
+    description: 'Window handle of the target window (hex e.g. "0x00120ABC" or decimal string).' },
+  targetAutomationId: { type: 'string', minLength: 1, maxLength: 256,
+    description: 'Exact case-sensitive AutomationId of the single control to act on.' },
+  targetName: { type: 'string', minLength: 1, maxLength: 256,
+    description: 'Exact case-sensitive Name of the single control to act on.' },
+  targetControlType: { type: 'string', minLength: 1, maxLength: 256,
+    description: 'Exact case-sensitive control type (for example "Button"); combine with other fields to stay unique.' },
+} as const;
 
 const invalidArguments = (errorMessage: string) => jsonResult({ schemaVersion: '1.0', protocolVersion: '1.0',
   success: false, errorCode: 'INVALID_ARGUMENT', errorMessage }, false, true);
@@ -88,6 +120,58 @@ const inspectDefinition = defineTool<UiInspectArgs>({
 });
 const uiInspectTool = inspectDefinition.tool;
 
+const clickDefinition = defineTool<UiActionArgs>({
+  name: 'wincode_ui_click',
+  description: 'Clicks exactly one Windows UI Automation control identified by an exact selector. Only UI Automation Invoke/Toggle/SelectionItem patterns are used: no mouse simulation, no window activation. The selector must match one control inside the target window, otherwise nothing is clicked. Requires either pid or hwnd.',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  inputSchema: {
+    type: 'object', additionalProperties: true,
+    properties: actionTargetProperties,
+    anyOf: [{ required: ['pid'] }, { required: ['hwnd'] }],
+  },
+}, {
+  invalidArguments,
+  validate: args => validateActionRequest(args, 'click'),
+  requestBudget: 'ui',
+  // 点击可能已经发生：请求在收尾阶段过期也不能把副作用报告成未执行。
+  preserveOutcomeOnInterruption: true,
+  execute: async (args, { router, signal }) => {
+    const result = await router.performUiAction({ ...args, hwnd: args.hwnd?.trim(), action: 'click' }, signal);
+    return jsonResult(result, false, !result.success);
+  },
+});
+
+const typeDefinition = defineTool<UiTypeArgs>({
+  name: 'wincode_ui_type',
+  description: 'Writes text into exactly one Windows UI Automation control identified by an exact selector. Prefer mode="setValue" for background work: it writes through ValuePattern, needs no keyboard focus, and accepts an empty string to clear the value. mode="type" requests keyboard focus on the control, which may bring its window to the front: use it only when the user approved foreground interaction. Text is never echoed back. Requires either pid or hwnd.',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  inputSchema: {
+    type: 'object', additionalProperties: true,
+    properties: {
+      ...actionTargetProperties,
+      inputText: { type: 'string', maxLength: 4096,
+        description: 'Text to write. mode="type" requires at least one character; mode="setValue" also accepts an empty string, which clears the value. It is never returned in the result.' },
+      clearBefore: { type: 'boolean', default: false,
+        description: 'mode="type" only: select and delete the existing content before typing.' },
+      mode: { type: 'string', enum: ['type', 'setValue'], default: 'type',
+        description: 'type (default) sends keyboard input and needs confirmed focus; setValue writes the value through ValuePattern without keyboard focus.' },
+    },
+    required: ['inputText'],
+    anyOf: [{ required: ['pid'] }, { required: ['hwnd'] }],
+  },
+}, {
+  invalidArguments,
+  validate: args => validateActionRequest(args, args.mode === 'setValue' ? 'setValue' : 'type'),
+  requestBudget: 'ui',
+  preserveOutcomeOnInterruption: true,
+  execute: async (args, { router, signal }) => {
+    const { mode, ...rest } = args;
+    const action = mode === 'setValue' ? 'setValue' : 'type';
+    const result = await router.performUiAction({ ...rest, hwnd: rest.hwnd?.trim(), action }, signal);
+    return jsonResult(result, false, !result.success);
+  },
+});
+
 export const UI_TOOLS = [
   defineTool<UiListWindowsRequest>({
     name: 'wincode_ui_list_windows',
@@ -113,6 +197,8 @@ export const UI_TOOLS = [
     },
   }),
   inspectDefinition,
+  clickDefinition,
+  typeDefinition,
   defineTool<UiReviewArgs>({
     name: 'wincode_ui_review',
     description: 'Collects one UI snapshot and literal AutomationId candidates in supplied WPF XAML files. Optional C# files provide Click/simple Binding candidates and scoped next requests. Reports ambiguity; runtime/source identity and binding causality remain unverified.',

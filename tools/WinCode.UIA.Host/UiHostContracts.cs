@@ -35,13 +35,33 @@ public class InspectRequest
     public int? MaxWindows { get; set; }
     public string? SchemaVersion { get; set; }
     public string? RequestId { get; set; }
-    public string? Action { get; set; } // "inspect" | "health" | "ping"
+    /// <summary>"inspect" | "health" | "ping" | "listWindows" | "click" | "type" | "setValue"</summary>
+    public string? Action { get; set; }
     public int Pid { get; set; }
     public string? Hwnd { get; set; }
     public string? Capture { get; set; } // "none" | "original" | "annotated"
     public int? MaxDepth { get; set; }
     public int? MaxNodes { get; set; }
     public int? TimeoutMs { get; set; }
+    // 语义操作（action != inspect）的定位条件与输入；至少提供一个定位字段。
+    public string? TargetAutomationId { get; set; }
+    public string? TargetName { get; set; }
+    public string? TargetControlType { get; set; }
+    public string? InputText { get; set; }
+    public bool ClearBefore { get; set; }
+}
+
+/// <summary>被操作控件的身份证据；不包含输入文本，避免在结果中回显敏感内容。</summary>
+public class UiTargetDto
+{
+    public List<string>? PropertyIssues { get; set; }
+    public string? AutomationId { get; set; }
+    public string? Name { get; set; }
+    public string? ControlType { get; set; }
+    public string? ClassName { get; set; }
+    public RectDto? Bounds { get; set; }
+    public bool? IsEnabled { get; set; }
+    public bool? IsOffscreen { get; set; }
 }
 
 public sealed record HostBuildIdentity(string Version, string? InformationalVersion, string? Configuration, string Framework)
@@ -56,7 +76,8 @@ public sealed record HostBuildIdentity(string Version, string? InformationalVers
 public class InspectResponse
 {
     public HostBuildIdentity HostIdentity { get; } = HostBuildIdentity.Current;
-    public int InspectionVersion { get; set; } = 2;
+    /// <summary>取证结构版本：2 增加 query/readStates，3 增加语义操作（click/type/setValue）。</summary>
+    public int InspectionVersion { get; set; } = 3;
     public long? HelperPeakWorkingSetBytes { get; set; }
     public QueryResultDto? QueryResult { get; set; }
     public bool? TreeComplete { get; set; }
@@ -73,6 +94,11 @@ public class InspectResponse
     public bool Success { get; set; }
     public string? Action { get; set; }
     public string? Status { get; set; }
+    /// <summary>实际使用的 UIA 模式或输入方式；只描述执行方式，不声明应用已做出反应。</summary>
+    public string? ActionMethod { get; set; }
+    public UiTargetDto? ActionTarget { get; set; }
+    /// <summary>接受的输入字符数；不回显输入文本。</summary>
+    public int? InputLength { get; set; }
     public string? ErrorCode { get; set; }
     public string? ErrorMessage { get; set; }
     public int? Pid { get; set; }

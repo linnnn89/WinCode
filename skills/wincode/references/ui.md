@@ -67,12 +67,14 @@ captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-
 | 任务 | 用法 |
 | --- | --- |
 | 查看界面、定位控件 | `wincode_ui_inspect` |
-| 后台点击、勾选、选择条目 | `wincode_ui_click`：Invoke/Toggle/SelectionItem，不需要前台 |
-| 后台写入或清空输入框 | `wincode_ui_type` 且**显式**传 `mode:"setValue"`：ValuePattern，不需要前台 |
+| 语义点击、勾选、选择条目 | `wincode_ui_click`：Invoke/Toggle/SelectionItem，不先请求焦点；应用响应仍可能激活窗口 |
+| 后台写入或清空输入框 | `wincode_ui_type` 且**显式**传 `mode:"setValue"`：ValuePattern，不请求键盘焦点；应用事件仍需验证 |
 | 验证逐键输入、快捷键、IME 行为 | `wincode_ui_type` 的 `mode:"type"`：需要前台授权 |
 | 控件不支持 ValuePattern 的后台写入 | 报告该步骤无法后台完成，不自动改走键盘输入 |
 
 用户要求执行或测试明确的界面流程时，自主完成定位、点击、输入与结果检查，不为每个常规步骤重复确认；用户只要求评估、查看或审查时保持只读。动作会改变目标应用状态，按影响判断是否需要额外确认：超出任务范围的发布、发送、删除或真实业务提交，先说明再执行。
+
+后台与前台的判断先遵循 [SKILL.md](../SKILL.md) 的独立注意事项：`backgroundOnly` 仅约束 inspect/review 的取证方式，不是动作的禁止激活开关；工具不先请求焦点，不代表目标应用的导航、事件或弹窗不会激活窗口。只授权后台时，不以启动、恢复窗口或聚焦补救失败；已知会激活的动作没有前台授权就停止该步骤。
 
 `mode:"type"` 会向目标控件索取键盘焦点（UIA SetFocus），可能把该窗口带到前台并中断用户当前输入，因此只在用户授权前台交互时使用：
 

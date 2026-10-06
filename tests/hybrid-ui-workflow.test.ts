@@ -13,6 +13,80 @@ const observation = (requestId = 'read-1'): UiInspectResult => ({ schemaVersion:
     states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] } });
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
 
+test('selected expanded parents resume with local evidence instead of rediscovering unrelated groups', async () => {
+  for (const hidden of [false, true]) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push(tool);
+      const value = observation();
+      if (calls.length === 1) {
+        delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] };
+      } else if (calls.length === 2 || calls.length === 3) {
+        assert.deepEqual(args.query, { automationId: 'outer', controlType: 'Group' });
+        const child = { ...observation().tree!, id: 2, parentId: 1, controlType: hidden ? 'Group' : 'CheckBox',
+          automationId: hidden ? 'inner' : 'check', isEnabled: true,
+          states: { toggle: hidden ? 'unsupported' : 'On', selection: 'unsupported', expandCollapse: hidden ? 'Collapsed' : 'unsupported' } };
+        value.tree = { ...observation().tree!, automationId: 'outer', controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Expanded' },
+          children: calls.length === 3 ? [child] : [] };
+        value.queryResult!.matches = [value.tree];
+      } else value.queryResult!.matches = [value.tree!];
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' }, candidateQuery: { automationId: 'outer', controlType: 'Group' } });
+    assert.equal(checked.report.actionAttempted, false);
+    assert.equal(checked.report.diagnosis.parentState, 'Expanded');
+    assert.equal(checked.report.success, !hidden, JSON.stringify(checked.report));
+    assert.equal(checked.report.diagnosis.cause, hidden ? 'observed-inner-collapsed-candidates' : 'parent-already-expanded');
+    assert.equal(checked.report.findings?.state, hidden ? undefined : 'On');
+    assert.equal(calls.length, hidden ? 3 : 4);
+  }
+});
+
+test('post-expansion diagnostics preserve local candidates, absence, ambiguity and incomplete evidence without another action', async () => {
+  for (const scenario of ['inner', 'absent', 'ambiguous', 'truncated', 'traversal']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push(tool);
+      const value = observation();
+      if (calls.length === 1) {
+        delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] };
+      } else {
+        const child = { ...observation().tree!, id: 2, parentId: 1, automationId: 'check', controlType: 'CheckBox' };
+        const inner = { ...child, automationId: 'inner', name: 'More options', controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } };
+        value.tree = { ...child, id: 1, parentId: null, automationId: 'outer', controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: calls.length >= 4 ? 'Expanded' : 'Collapsed' },
+          children: calls.length < 4 || scenario === 'absent' ? [] : scenario === 'ambiguous'
+            ? [child, { ...child, id: 3 }] : [inner] };
+        value.queryResult!.matches = [value.tree];
+        if (calls.length >= 4 && scenario === 'truncated') { value.treeComplete = false; value.truncated = true; value.truncateReason = 'maxDepth'; }
+        if (calls.length >= 4 && scenario === 'traversal') { value.treeComplete = false; value.traversalErrors = 1; }
+      }
+      return result(value);
+    }, target, { parentQuery: { automationId: 'outer' }, childQuery: { automationId: 'check' } });
+    const diagnostic = checked.report.diagnosis as any;
+    const incomplete = ['truncated', 'traversal'].includes(scenario);
+    assert.equal(checked.report.status, 'stopped');
+    assert.equal(checked.report.findings, undefined);
+    assert.equal(checked.report.errorCode, incomplete ? 'INCOMPLETE_OBSERVATION' : 'CHILD_RELATIONSHIP_UNCONFIRMED');
+    assert.equal(diagnostic.parentState, 'Expanded');
+    assert.equal(diagnostic.localObservation.treeComplete, !incomplete);
+    assert.deepEqual(diagnostic.localObservation.query, { automationId: 'outer' });
+    assert.equal(diagnostic.localObservation.matchCount, scenario === 'ambiguous' ? 2 : 0);
+    assert.equal(diagnostic.localObservation.candidates.length, ['inner', 'truncated', 'traversal'].includes(scenario) ? 1 : 0);
+    if (diagnostic.localObservation.candidates.length) {
+      const candidate = diagnostic.localObservation.candidates[0];
+      assert.equal(candidate.automationId, 'inner'); assert.equal(candidate.parentId, 1);
+      assert.equal(candidate.state, 'Collapsed'); assert.equal(candidate.nextRequest, undefined);
+    }
+    assert.equal(diagnostic.cause, incomplete ? 'local-observation-incomplete' : scenario === 'inner'
+      ? 'observed-inner-collapsed-candidates' : scenario === 'ambiguous' ? 'child-ambiguous-in-parent' : 'child-not-found-in-parent');
+    assert.notEqual(diagnostic.nextAction, 'Stop. Inspect the actual state before deciding on further work; no automatic action replay.');
+    assert.equal(calls.filter(tool => tool === 'wincode_ui_set_expanded').length, 1);
+    assert.equal(calls.length, 4);
+  }
+});
+
 test('navigation retains auxiliary property gaps while proving the parent and actual child state', async () => {
   const calls: string[] = [];
   const checked = await runExpandUiWorkflow(async tool => {
@@ -117,19 +191,21 @@ test('automatic expansion reports multiple or absent candidates without performi
 test('candidate selection is checked against fresh discovery before any action', async () => {
   for (const scenario of ['disappeared', 'renamed', 'disabled', 'incomplete', 'duplicate']) {
     const calls: string[] = [];
-    const checked = await runExpandUiWorkflow(async tool => {
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
       calls.push(tool);
       const value = observation(); delete value.tree;
       const group = { ...observation().tree!, automationId: 'speech', name: scenario === 'renamed' ? 'Other' : 'Speech',
         controlType: 'Group', isEnabled: scenario !== 'disabled',
         states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } };
-      const groups = scenario === 'disappeared' ? [] : scenario === 'duplicate' ? [group, structuredClone(group)] : [group];
+      const groups = ['disappeared', 'renamed'].includes(scenario) ? [] : scenario === 'duplicate' ? [group, structuredClone(group)] : [group];
       value.queryResult = calls.length === 1 ? { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] }
         : { status: scenario === 'incomplete' ? 'incomplete' : groups.length > 1 ? 'ambiguous' : groups.length ? 'unique' : 'not-found',
           searchComplete: scenario !== 'incomplete', visitedNodes: 8, matches: groups };
+      if (calls.length > 1) { assert.deepEqual(args.query, { automationId: 'speech', name: 'Speech', controlType: 'Group' }); value.tree = group; }
       return result(value);
     }, target, { childQuery: { automationId: 'check' }, candidateQuery: { automationId: 'speech', name: 'Speech', controlType: 'Group' } });
-    assert.equal(checked.report.errorCode, scenario === 'incomplete' ? 'NAVIGATION_DISCOVERY_INCOMPLETE' : 'NAVIGATION_SELECTION_STALE', scenario);
+    assert.equal(checked.report.errorCode, scenario === 'incomplete' ? 'QUERY_INCOMPLETE' : scenario === 'disabled'
+      ? 'TARGET_DISABLED' : 'NAVIGATION_SELECTION_STALE', scenario);
     assert.equal(checked.report.actionAttempted, false);
     assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect']);
   }
@@ -142,7 +218,7 @@ test('selected navigation preserves failed actions and missing child evidence wi
       calls.push(tool);
       const value = observation();
       const group = { ...value.tree!, automationId: 'speech', controlType: 'Group', isEnabled: true,
-        states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: calls.length >= 5 ? 'Expanded' : 'Collapsed' } };
+        states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: calls.length >= 4 ? 'Expanded' : 'Collapsed' } };
       if (calls.length === 1) { delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] }; }
       else { value.tree = group; value.queryResult!.matches = [group]; }
       if (tool === 'wincode_ui_set_expanded' && scenario === 'action-failed') {
@@ -154,7 +230,7 @@ test('selected navigation preserves failed actions and missing child evidence wi
     assert.equal(checked.report.actionAttempted, true);
     assert.equal(checked.report.findings, undefined);
     assert.equal(calls.filter(tool => tool === 'wincode_ui_set_expanded').length, 1);
-    assert.equal(calls.length, scenario === 'action-failed' ? 4 : 5);
+    assert.equal(calls.length, scenario === 'action-failed' ? 3 : 4);
   }
 });
 

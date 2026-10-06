@@ -4,7 +4,7 @@
 
 本文记录本分支迭代中实际观察到的问题、修复证据和未解决限制。实验方法、接口和原始测量表见 [只读编排实验说明](hybrid-readonly-orchestration.md)。前七轮实现提交包括 `ce8b517`、`a47b6b3`、`7929cb9`、`e798f99`、`5003ad6`、`a27c7b3`、`ccac194`；第八轮为 `e7350fa`，第九轮为 `ef98cb6`／`91e074b`，均在实验分支，main 未合入。
 
-**当前接手请先读 [当前状态与未完成清单](hybrid-next-iteration-plan.md#当前未实现与待验证事项)。** 下文“仍未解决”等标题描述该轮结束时的状态，后续结果按时间追加，不抹去旧失败。最新实现为第十四轮辅助属性门槛与错误分类修正；此前 New-tavern 单候选与独立 WPF 多候选已分别验收，本轮属性故障使用独立真实 WPF 窗口，尚未证明任意导航发现或非 fixture 多候选。
+**当前接手请先读 [第十五轮结果与原方案](hybrid-next-iteration-plan.md#第十五轮计划已展开状态续接与局部诊断)和[未完成清单](hybrid-next-iteration-plan.md#当前未实现与待验证事项)。** 第十五轮已完成有效 Expanded 续接与局部诊断，并通过嵌套 WPF 和 New-tavern 实际客户端验收。下文“仍未解决”等标题描述该轮结束时的状态，后续结果按时间追加，不抹去旧失败。最新实际方法、失败及范围见本文末节，尚未证明任意导航发现或非 fixture 多候选。
 
 ## 已确认并修复的缺陷
 
@@ -374,3 +374,54 @@ CLI 显式 close 并实际退出，独立检查入口与 Gateway 均无残留；
 专用识别会话显式 close 后自有 CLI／Gateway 和该窗口 7 次 helper 启动均无残留；用户打开的桌宠保持运行。记录在 `test-tmp/hybrid-fourteenth-checks/non-wpf*.json` 及 `test-tmp/skill-sessions/run-41JWsi/`。
 
 原始记录在上述忽略目录及 `test-tmp/skill-sessions/run-aHsY38/`，可能含本机路径、进程身份和控件内容，不作为匿名附件。只提交实现、三个测试及现有手册／记录的脱敏更新；main 和无关文件保持原状。最终检查五份 MD 的相对链接文件／代码围栏、全部公开新增行的绝对路径／邮箱／密钥形状以及 git diff --check 通过。十个公开变更文件、本轮记录及两个实际 CLI 会话附件共 58 个文件，已知配置 DeepSeek 凭据及 JSON／URL／Base64 变体匹配为零；只在本机内存中比对，未请求模型 API。结论限于已知凭据和所列文件，不延伸为所有未知秘密或全机隐私保证。
+
+## 第十五轮前的设计分析与文档整理（仅文档）
+
+核对基线：本地 HEAD 与远端实验分支均为 `dc3eec3bdc52c3e1754b776ce257eb2cf4717ffd`，远端 main 仍为 `038c0ccc7372948da405546cc7ec0add56eea9de`。本次检查 ExpandUiWorkflow、UiContracts、CLI／会话入口及相关工作流测试；复用第十四轮实际窗口记录，没有重新打开应用、运行代码测试或请求外部模型。
+
+源码确认两处待改路径：candidateQuery 经过 Collapsed 过滤后才匹配，正常变为 Expanded 的所选区域可能误报选择失效；展开后的归属不成立统一停止，catch 又覆盖 nextAction，未将已有父树中的候选／歧义／截断整理为下一步。它们是当前源码分析结论，第十五轮的独立复现和修复验收尚未进行。
+
+本次建议先做“已展开状态续接与局部诊断”，原因是它直接减少已打开区域的重复处理，并让 AI 使用已经取得的证据；完整方案只维护在[第十五轮计划](hybrid-next-iteration-plan.md#第十五轮计划已展开状态续接与局部诊断)。同时核对到 UiQuery 没有父范围搜索字段，故局部候选不能自动变成有归属保证的递归操作。第十四轮 Electron 记录支持优先收窄实际区域，但不证明已实现非 WPF 导航或任意多层路径。官方 ExpandCollapseState 的直接子级语义及相对元素搜索说明已在计划中注明来源。
+
+文档整理限于三份现有 hybrid MD：规划负责当前状态、优先级和下一轮验收；实验说明负责接口及历史方法；本文负责事实、失败和验证边界。规划中的第十四轮前复核、第十至十三轮验收及第六至九轮计划折叠保留，修正旧“当前状态以第十三轮为准”的指引，不删除历史失败，不另建重复计划文件。生产源码、测试和 Skill 手册未修改，尚未实现的行为不写入操作指南。无关未跟踪 UI 计划未读取或改动。
+
+本次文档检查：三份 MD 共 44 个相对链接的文件存在性、其中 15 个锚点、代码围栏和折叠标签配对通过；git diff --check 通过。公开新增行仅检查本机绝对路径、邮箱和常见凭据形状，不读取凭据配置或实验原始窗口内容，也不将第十四轮已知密钥扫描的结论延伸到本轮。未启动代码测试，未将历史通过数计作本次验证。
+
+## 第十五轮已展开续接与局部诊断（2026-10-07）
+
+### 交付行为与兼容范围
+
+实现前基线 `dc3eec3`。candidateQuery 改为直接重新定位当前 Group，不再枚举所有 Group 或要求所选区域仍 Collapsed。唯一有效的 Expanded 区域继续观察，不关闭、不再次展开；Collapsed 仍只展开一次。完整搜索无匹配或多义才是 NAVIGATION_SELECTION_STALE；搜索不完整、真实禁用及启用证据未知分别沿用 QUERY_INCOMPLETE／TARGET_DISABLED／TARGET_EVIDENCE_INCOMPLETE。
+
+动作后复用已有父树，diagnosis.localObservation 增补区域 query、结构完整性、截断／遍历／属性计数、匹配及实际内层 Collapsed Group；列表各最多 20 项，超出数量显式报告。节点身份字段和 propertyIssues 保留，id／parentId 仅说明本次关系，不生成内层可执行 nextRequest。缺失、局部歧义和不完整读取分别给针对性 cause／nextAction；catch 不再覆盖这些诊断。parentState 表示最新父级观察，展开前状态仍在 steps 中；旧测试的 Collapsed 断言已改为 Expanded。
+
+completed／selection-required／stopped、success 和 findings 的完成含义不变。父级已展开而任务未完成仍 stopped，不凭候选产生 findings；未知动作结果不重放。客户端新增诊断字段，UiQuery、标准 MCP schema、原生读取器／动作器、普通 readonly-ui 和统计配方均未修改，没有新增依赖、框架、累计预算或授权步骤。
+
+### 测试先行与失败记录
+
+新增三项自动化测试：两项核心场景、一项真实 WPF 嵌套场景。两项核心测试先 RED：已展开候选拿不到有效父状态，动作后的诊断仍保留旧 Collapsed；实现后 GREEN。相关核心 13/13；测试覆盖可读目标、内层折叠、完整区域无目标、局部同名歧义、截断／遍历失败，以及既有失效选择、禁用和未知动作不重放。
+
+真实 WPF 新场景 1/1：专门的外层 Expanded／内层 Collapsed 区域同时存在无关启用未知 Group，所选目标续接仍取得完整局部诊断，3 次调用／0 次动作；依据返回的实际内层 ID 独立定位后，读到 On，只有一次内层展开，外层保持 Expanded。目标随后可见时只读取一次。夹具仅在 --nested-navigation 模式增加这一结构。
+
+既有六项桌面场景首次 4/6：一项仍期待旧 parentState=Collapsed，另一项 AUDIT_BUSY。核查原生 UiAudit 发现不同 helper 共用审计目录互斥锁；本轮把桌面回归与人工 New-tavern 验收并行，导致忙锁，不是展开功能的新缺陷。串行桌面回归后 5/6，忙锁未复现，剩余仍为旧断言；更新该断言后仅重跑受影响场景 1/1。首次和中间失败日志均保留，没有把它们改写成一次 6/6。
+
+类型检查、Gateway 构建与 WPF fixture 发布通过；原生 Host 未修改，沿用已验证的 Release 构建。完整核心回归运行一次，文件并发 4、项目既有 SDK 下 491/491，通过后未重复完整回归。没有外部模型 API 调用或性能实验。
+
+### 当前 Codex 客户端实际验收
+
+两次 PTY CLI 会话核对并使用当前分支构建，buildId 为 `e71d12975c2f4d3d3b28fb89e0ad583d10b4fb7fc84de0e55b4ae4f2f369176f`，hello 报 verified，源码／产物摘要匹配磁盘。revision 为实现前 `dc3eec3`，验收期间尚未提交的实现由 sourceHash／artifactHash 识别，不将 revision 当唯一版本证明。
+
+- **真实嵌套 WPF**：当前 AI 提交 candidateQuery 续接外层，完整结果为 stopped／CHILD_RELATIONSHIP_UNCONFIRMED；父级 Expanded，实际内层候选 Collapsed，3 次只读调用、零动作。AI 读取完整候选后，按实际 ID 发起独立 parentQuery；5 次调用、1 次内层展开，验证归属并独立读取 On。再次只读观察确认外层仍 Expanded。此处的后续请求由调用方依据实际结果决定，不是工作流内部递归。
+- **真实 New-tavern**：未发现运行实例后，从用户指定项目的现有 app EXE 启动，先实际定位并点击设置／语音导航，再观察高级区域唯一、启用、Collapsed，明确展开一次。没有读取密钥值、聊天正文或调用测试连通性／保存。高级已展开后，candidateQuery 路径读到 SpeechNormalize=On，只调用 1 次、零展开；明确 parentQuery 路径完整验证父树归属并独立读回 On，共 4 次、零额外展开。
+- New-tavern 首次读取被同时进行的桌面回归拒为 AUDIT_BUSY，actionAttempted=false、没有有效 findings；保留该失败。桌面测试全部结束后重新安排只读验证，上述两条路径通过，没有重放展开动作。
+- 两次 CLI 均显式 close 并观察入口退出；自有嵌套 fixture 清理退出，创建身份核查为 0 残留；两个目标的实际客户端审计 helper start 共 20 次，检查为 0 残留。本轮自行启动的 New-tavern 通过正常 CloseMainWindow 退出，没有结束用户既有进程。fixture 清理退出码 1 来自测试进程终止，不算自然关闭。
+
+### 文档、Skill 与剩余限制
+
+将前一轮规划与整理变更一并保留；更新三份 hybrid 文档的当前入口、完成状态和剩余清单，原方案折叠作为历史。更新仓库 SKILL.md、UI 与诊断手册，说明最新状态续接、局部字段、准确错误分类，以及实验构建／旧连接差异。按用户本次要求，使用现有 sync-skill 脚本先备份旧安装文档、再同步；4 个受管文件校验一致，无关额外文件保留，备份目录不暴露第二个 SKILL.md。MCP 配置、默认连接和 main 没有切换。
+
+仍未实现父范围查询、自动递归导航、其他导航控件及虚拟化／滚动。首次自动发现仍可能被其他 Group 的关键状态问题阻断；本轮仅解决已选父级的续接。嵌套交互证明 WPF 局部诊断及调用方后续独立定位，New-tavern 证明实际单层读取；不等于非 fixture 嵌套／多候选或非 WPF 导航已验收。已有 Electron 只读识别记录保持原范围，没有为本轮人为制造展开目标。
+
+原始测试与验收记录留在 Git 忽略的 `test-tmp/hybrid-fifteenth-checks/` 和两次 CLI 附件目录；公开只记录方法、失败、状态与数量。没有将原始窗口树或截图提交，也未读取凭据配置或请求外部模型。
+
+收尾检查：六份修改 MD 的 51 个相对链接、18 个锚点、代码围栏与折叠标签配对通过；十个公开变更文件新增行的本机绝对路径、邮箱及常见凭据形状为 0。本轮已生成的 40 个本地 JSON／日志文件常见凭据形状为 0。该检查不是已知密钥精确比对，不保证所有未知秘密均已排除；本地附件仍含窗口和进程信息，不作为匿名公开文件。安装 Skill 最终 check 为 matched=true。git diff --check 通过，提交范围仅这十个文件，原始记录及无关未跟踪文件不提交。

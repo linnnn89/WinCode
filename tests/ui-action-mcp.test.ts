@@ -154,6 +154,39 @@ describe('semantic UI actions against the real WPF fixture', () => {
       { pid, hwnd }, { parentQuery: parent, childQuery: { automationId: 'actionNormalize' } }, { timeoutMs: 15000 });
   };
 
+  it('resumes an expanded selected group and reports a real nested candidate without changing either region',
+    { timeout: 45000 }, async () => {
+      const nested = await startFixture(['--background-fixture', '--navigation-evidence', '--nested-navigation']);
+      try {
+        const { runExpandUiWorkflow } = await import('../src/Client/ExpandUiWorkflow.js');
+        const caller = (name: string, args: Record<string, unknown>, options: any) => client.callTool({ name, arguments: args }, options);
+        const pending = await runExpandUiWorkflow(caller, nested.target, {
+          candidateQuery: { automationId: 'actionOuterOptions', controlType: 'Group' },
+          childQuery: { automationId: 'actionNestedNormalize' } });
+        assert.equal(pending.report.errorCode, 'CHILD_RELATIONSHIP_UNCONFIRMED', JSON.stringify(pending.report));
+        assert.equal(pending.report.diagnosis.cause, 'observed-inner-collapsed-candidates');
+        assert.equal(pending.report.diagnosis.parentState, 'Expanded');
+        assert.equal(pending.report.actionAttempted, false);
+        assert.equal(pending.report.metrics.dispatchedCalls, 3);
+        const candidate = pending.report.diagnosis.localObservation?.candidates.find(n => n.automationId === 'actionInnerOptions');
+        assert.ok(candidate); assert.equal(candidate.isEnabled, true); assert.equal(candidate.state, 'Collapsed');
+        const resumed = await runExpandUiWorkflow(caller, nested.target, {
+          parentQuery: { automationId: candidate.automationId, controlType: candidate.controlType },
+          childQuery: { automationId: 'actionNestedNormalize' } });
+        assert.equal(resumed.report.success, true, JSON.stringify(resumed.report));
+        assert.equal(resumed.report.findings?.state, 'On');
+        assert.equal(resumed.report.steps.filter(step => step.tool === 'wincode_ui_set_expanded').length, 1);
+        const readBack = await call('wincode_ui_inspect', { ...nested.target,
+          query: { automationId: 'actionOuterOptions' }, readStates: true, maxDepth: 8, maxNodes: 64, capture: 'none' });
+        assert.equal(readBack.body.tree.states.expandCollapse, 'Expanded');
+        const alreadyVisible = await runExpandUiWorkflow(caller, nested.target, {
+          candidateQuery: { automationId: 'actionOuterOptions' }, childQuery: { automationId: 'actionNestedNormalize' } });
+        assert.equal(alreadyVisible.report.success, true);
+        assert.equal(alreadyVisible.report.actionAttempted, false);
+        assert.equal(alreadyVisible.report.metrics.dispatchedCalls, 1);
+      } finally { await killProcessTree(nested.child); }
+    });
+
   it('real property failures allow auxiliary gaps but distinguish unknown enabled evidence from disabled targets',
     { timeout: 45000 }, async () => {
       // Separate fault window keeps unknown-enabled nodes out of the normal discovery scenarios.
@@ -194,7 +227,7 @@ describe('semantic UI actions against the real WPF fixture', () => {
     const result = await navigate();
     assert.equal(result.report.success, true, JSON.stringify(result.report));
     assert.equal(result.report.steps[0].value.queryResult?.status, 'not-found');
-    assert.equal(result.report.diagnosis.parentState, 'Collapsed');
+    assert.equal(result.report.diagnosis.parentState, 'Expanded');
     assert.equal(result.report.actionAttempted, true);
     assert.equal(result.report.findings?.state, 'On');
   });

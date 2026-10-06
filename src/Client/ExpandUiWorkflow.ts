@@ -5,6 +5,10 @@ import type { UiReadCaller, UiTarget } from './ReadonlyUiWorkflow.js';
 export type ExpandUiParameters = { parentQuery?: UiQuery; childQuery: UiQuery; candidateQuery?: UiQuery };
 type NavigationCandidate = { query: UiQuery; state: string;
   nextRequest?: { action: 'expand-ui'; target: UiTarget; parameters: ExpandUiParameters; timeoutMs: number } };
+type LocalNode = Pick<UiNode, 'id' | 'parentId' | 'automationId' | 'name' | 'controlType' | 'isEnabled' | 'propertyIssues'> & { state?: string };
+type LocalObservation = { query: UiQuery; treeComplete: boolean; truncated: boolean; truncateReason?: string;
+  traversalErrors: number; propertyIssueCount: number; matchCount: number; matches: LocalNode[];
+  candidates: LocalNode[]; candidatesOmitted: number; matchesOmitted: number };
 
 class NavigationStop extends Error {
   constructor(readonly code: string, message: string) { super(message); }
@@ -32,9 +36,10 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
   const started = performance.now(), deadline = Date.now() + timeoutMs;
   const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(options.signal ? [options.signal] : [])]);
   const steps: Array<{ tool: string; value: UiInspectResult }> = [];
-  let actionAttempted = false, bytes = 0, dispatchedCalls = 0;
+  let actionAttempted = false, bytes = 0, dispatchedCalls = 0, preserveLocalDiagnosis = false;
   const diagnosis: { initialQuery?: string; parentState?: string; cause: string; nextAction: string; relationshipVerified?: boolean;
-    candidateSource?: 'supplied-parent' | 'discovered-group' | 'selected-group'; candidates?: NavigationCandidate[] } =
+    candidateSource?: 'supplied-parent' | 'discovered-group' | 'selected-group'; candidates?: NavigationCandidate[];
+    localObservation?: LocalObservation } =
     { cause: 'unknown', nextAction: 'Inspect the authorized parent candidate; do not infer a collapsed parent from a missing child.' };
   let findings: { automationId?: string; state: string; states: UiNode['states'] } | undefined;
   let failure: NavigationStop | undefined;
@@ -102,7 +107,7 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
     diagnosis.nextAction = 'Use the observed child state. No further navigation is needed.';
   };
   const discoverParent = async (): Promise<UiQuery> => {
-    diagnosis.candidateSource = input.candidateQuery ? 'selected-group' : 'discovered-group';
+    diagnosis.candidateSource = 'discovered-group';
     const value = await inspect({ controlType: 'Group', maxSearchNodes: 1000, maxMatches: 20 }, true);
     const query = value.queryResult;
     // This is match-set evidence: root-only tree truncation does not truncate the query search.
@@ -116,11 +121,6 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
     for (const candidate of diagnosis.candidates) {
       if (candidate.query.automationId || candidate.query.name) candidate.nextRequest = { action: 'expand-ui', target: { ...fixed },
         parameters: { childQuery: structuredClone(input.childQuery), candidateQuery: { ...candidate.query } }, timeoutMs };
-    }
-    if (input.candidateQuery) {
-      const selected = candidates.filter(node => matches(node, input.candidateQuery!));
-      if (selected.length !== 1) return stop('NAVIGATION_SELECTION_STALE', 'The selected Group is no longer a unique enabled collapsed candidate. Reassess the current candidates; no action was taken.');
-      return { ...diagnosis.candidates[candidates.indexOf(selected[0])].query };
     }
     if (!candidates.length) return stop('NAVIGATION_CANDIDATE_NOT_FOUND', 'No enabled collapsed Group was observed. Other control types and recursive discovery are outside this workflow.');
     if (candidates.length !== 1) return stop('NAVIGATION_CANDIDATE_AMBIGUOUS', 'Multiple collapsed Groups were observed. Select a relevant returned nextRequest using task and page evidence; no action was taken.');
@@ -139,8 +139,14 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
       diagnosis.cause = 'target-already-visible';
     } else {
       if (input.parentQuery) diagnosis.candidateSource = 'supplied-parent';
-      const parentQuery = input.parentQuery ?? await discoverParent();
+      if (input.candidateQuery) diagnosis.candidateSource = 'selected-group';
+      // A selected target needs its own unique search, not a new census of unrelated Groups.
+      const parentQuery = input.parentQuery ?? (input.candidateQuery
+        ? { ...input.candidateQuery, controlType: 'Group' } : await discoverParent());
       const parent = await inspect(parentQuery, true);
+      if (input.candidateQuery && parent.queryResult?.searchComplete &&
+        ['not-found', 'ambiguous'].includes(parent.queryResult.status))
+        stop('NAVIGATION_SELECTION_STALE', 'The selected Group no longer matches a unique current target. Inspect the selector and page; no action was taken.');
       const node = unique(parent);
       if (typeof node.isEnabled !== 'boolean') stop('TARGET_EVIDENCE_INCOMPLETE', 'Parent enabled state is unavailable; inspect enabled-state evidence before navigation. No action was attempted.');
       if (node.isEnabled === false) stop('TARGET_DISABLED', 'Parent is disabled; no navigation was attempted.');
@@ -154,23 +160,54 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
         diagnosis.nextAction = 'Set this unique parent to Expanded once, then verify the parent and child relationship.';
         await invoke('wincode_ui_set_expanded', { targetAutomationId: parentQuery.automationId,
           targetName: parentQuery.name, targetControlType: parentQuery.controlType, expanded: true });
-      }
+      } else diagnosis.cause = 'parent-already-expanded';
       const verified = await inspect(parentQuery);
       const expanded = unique(verified);
-      complete(verified);
+      diagnosis.parentState = expanded.states?.expandCollapse;
       if (expanded.states?.expandCollapse !== 'Expanded') stop('EXPANSION_UNCONFIRMED', 'Parent was not observed Expanded. Stop; do not repeat the action.');
-      const children: UiNode[] = [];
-      const visit = (n: UiNode) => { for (const child of n.children) { if (matches(child, input.childQuery)) children.push(child); visit(child); } };
+      const children: UiNode[] = [], innerCandidates: UiNode[] = [];
+      const visit = (n: UiNode) => { for (const child of n.children) {
+        if (matches(child, input.childQuery)) children.push(child);
+        if (child.controlType === 'Group' && child.states?.expandCollapse === 'Collapsed') innerCandidates.push(child);
+        visit(child);
+      } };
       visit(expanded);
-      if (children.length !== 1) stop('CHILD_RELATIONSHIP_UNCONFIRMED', 'Expanded parent does not contain exactly one matching child; check the navigation candidate.');
+      const describeLocal = (n: UiNode): LocalNode => ({ id: n.id, parentId: n.parentId, automationId: n.automationId,
+        name: n.name, controlType: n.controlType, isEnabled: n.isEnabled, propertyIssues: n.propertyIssues,
+        state: n.states?.expandCollapse });
+      // Observation IDs describe this tree only. Do not turn local matches into global action selectors.
+      diagnosis.localObservation = { query: { ...parentQuery }, treeComplete: verified.treeComplete === true,
+        truncated: verified.truncated === true, truncateReason: verified.truncateReason,
+        traversalErrors: verified.traversalErrors ?? 0, propertyIssueCount: verified.propertyIssueCount ?? 0,
+        matchCount: children.length, matches: children.slice(0, 20).map(describeLocal),
+        candidates: innerCandidates.slice(0, 20).map(describeLocal), candidatesOmitted: Math.max(0, innerCandidates.length - 20),
+        matchesOmitted: Math.max(0, children.length - 20) };
+      if (verified.treeComplete !== true || verified.truncated || verified.traversalErrors || blockingPropertyEvidence(verified)) {
+        preserveLocalDiagnosis = true;
+        diagnosis.cause = 'local-observation-incomplete';
+        diagnosis.nextAction = 'Parent is observed Expanded, but local evidence is incomplete. Inspect a narrower observed region or adjust the reported truncation limit; retain gaps and do not repeat expansion.';
+      }
+      complete(verified);
+      if (children.length !== 1) {
+        preserveLocalDiagnosis = true;
+        diagnosis.cause = children.length > 1 ? 'child-ambiguous-in-parent' : innerCandidates.length
+          ? 'observed-inner-collapsed-candidates' : 'child-not-found-in-parent';
+        diagnosis.nextAction = children.length > 1
+          ? 'Parent is Expanded. Use the observed local matches to refine the child selector; do not choose the first match.'
+          : innerCandidates.length
+            ? 'Parent is Expanded. Inspect the observed inner collapsed candidates and their relationship to this task. These local nodes are not proven global action targets; do not replay the parent expansion.'
+            : 'Parent is Expanded and the complete local tree contains no matching child or inner collapsed Group. Check the child selector or page scope; the missing-target cause remains unknown. Do not repeat expansion.';
+        stop('CHILD_RELATIONSHIP_UNCONFIRMED', 'Expanded parent does not contain exactly one matching child; see the local observation and diagnosis.');
+      }
       diagnosis.relationshipVerified = true;
       readChild(await inspect(input.childQuery));
     }
   } catch (error) {
     failure = error instanceof NavigationStop ? error : new NavigationStop('NAVIGATION_ERROR',
       (error instanceof Error ? error.message : String(error)).slice(0, 2048));
-    diagnosis.nextAction = actionAttempted ? 'Stop. Inspect the actual state before deciding on further work; no automatic action replay.' :
-      'Correct the reported selector, search or parent evidence before proposing an action.';
+    if (!preserveLocalDiagnosis) diagnosis.nextAction = actionAttempted
+      ? 'Stop. Inspect the actual state before deciding on further work; no automatic action replay.'
+      : 'Correct the reported selector, search or parent evidence before proposing an action.';
   }
   const selectionRequired = failure?.code === 'NAVIGATION_CANDIDATE_AMBIGUOUS' && !actionAttempted &&
     diagnosis.candidates?.some(candidate => candidate.nextRequest) === true;

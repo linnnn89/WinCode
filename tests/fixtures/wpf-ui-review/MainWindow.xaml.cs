@@ -177,6 +177,14 @@ public partial class MainWindow : Window
                 System.Windows.Automation.AutomationProperties.SetAutomationId(displayCheck, "actionDarkTheme");
                 Add(new Expander { Header = "Display advanced", Content = displayCheck, IsExpanded = true }, "actionDisplayAdvanced");
             }
+            if (Environment.GetCommandLineArgs().Contains("--nested-navigation"))
+            {
+                var nestedCheck = new CheckBox { Content = "Nested normalize", IsChecked = true };
+                System.Windows.Automation.AutomationProperties.SetAutomationId(nestedCheck, "actionNestedNormalize");
+                var inner = new Expander { Header = "Inner options", Content = nestedCheck };
+                System.Windows.Automation.AutomationProperties.SetAutomationId(inner, "actionInnerOptions");
+                Add(new Expander { Header = "Outer options", IsExpanded = true, Content = inner }, "actionOuterOptions");
+            }
 
             var disabled = new Button { Content = "Disabled", IsEnabled = false, Height = 30 };
             disabled.Click += (_, _) => echo.Text = "disabled-click";

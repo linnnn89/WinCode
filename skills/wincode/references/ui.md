@@ -72,11 +72,15 @@ captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-
 
 **省略父级的有限发现。** 目标已唯一可见且取证完整时，直接读取，只有 1 次调用。完整搜索未找到目标时，在同一窗口搜索 `Group`（最多搜索 1000 个节点、20 个匹配）；搜索完整、状态已知且唯一启用的 Collapsed Group 可自动重新定位并尝试展开。候选唯一不能证明目标在其中，仍须后续归属验证。零候选、搜索不完整、状态未知或候选无可用标识均停止，不执行点击回退。这个试点只覆盖 Group，不遍历菜单、Tab、TreeItem，不证明任意导航发现能力。
 
-**多个候选交给当前 AI 选择。** 多候选且有可定位项时返回 `status:"selection-required"`、`success:false`、`isError:false`，保留诊断码 `NAVIGATION_CANDIDATE_AMBIGUOUS`；这是待决策结果，不是任务完成。`diagnosis.candidates` 每项包含实际 query/state；可定位项附 `nextRequest`（action、target、parameters、timeoutMs）。依据目标任务和当前页面证据选择一个相关项，补一个新 id 后原样提交其请求；不要默认选第一项、编造候选或展开全部。证据不足时追加相关只读观察或澄清。本轮一次选择，最多一次展开，不自行循环探索其他候选。
+**多个候选交给当前 AI 选择。** 多候选且有可定位项时返回 `status:"selection-required"`、`success:false`、`isError:false`，保留诊断码 `NAVIGATION_CANDIDATE_AMBIGUOUS`；这是待决策结果，不是任务完成。`diagnosis.candidates` 每项包含实际 query/state；可定位项附 `nextRequest`（action、target、parameters、timeoutMs）。依据目标任务和当前页面证据选择一个相关项，补一个新 id 后原样提交其请求；不要默认选第一项、编造候选或展开全部。证据不足时追加相关只读观察或澄清。每个请求最多一次展开；后续定位依据实际新观察，不默认遍历其余候选。
 
-后续 `candidateQuery` 必须含实际名称或 AutomationId，可带 Group 类型，不能带搜索预算。它会重新搜索当前窗口并要求选择仍对应唯一、启用的折叠候选，再重新定位、操作并验证。候选消失、改名、禁用或重复时返回 `NAVIGATION_SELECTION_STALE`，不操作；动作失败或子控件归属不成立也停止，不自动重放。目标已经可见时仍直接读取，没有必要再执行选择。程序校验选择的当前有效性；相关性的语义判断由调用方 AI 完成，没有内部评分模型。
+后续 `candidateQuery` 必须含实际名称或 AutomationId，可带 Group 类型，不能带搜索预算。第十五轮直接按该选择器重新定位 Group，不重新枚举无关 Group：完整搜索无匹配或不唯一为 `NAVIGATION_SELECTION_STALE`，搜索不完整为 `QUERY_INCOMPLETE`，实际禁用为 `TARGET_DISABLED`，启用证据未知为 `TARGET_EVIDENCE_INCOMPLETE`。唯一有效父级仍 Collapsed 才展开一次，已经 Expanded 就继续局部观察，不切换、不再次展开。目标已经可见时仍直接读取。程序校验选择的当前有效性；相关性的语义判断由调用方 AI 完成，没有内部评分模型。
 
-上述调用数和 deadline 由代码按单请求限制；发现与选择是两次请求，未共享累计预算，也未建立强制关联上一请求 target／childQuery 的状态。当前试点的 nextRequest 原样续接、一次选择与不循环探索不能宣称为服务已执行的跨请求约束，也不是任意导航的通用设计标准。跨请求累计预算当前不要求补齐。沿用用户选定窗口和任务；新的实际观察可用于合法查询修正，不能把范围约束理解为永久锁死查询字符串。已授权的导航不要求逐步重复确认。候选目前没有祖先／邻近上下文；任一返回 Group 的必要状态／非辅助属性缺口仍会阻止发现，候选已展开但目标仍隐藏也可能被判失效。展开后目标仍在内层折叠时会停止，不能当作支持递归导航。辅助属性分类已局部实现；任意任务的证据拆分与良性状态续接仍未实现。
+**展开后的局部诊断。** 第十五轮的 `diagnosis.localObservation` 记录实际父区域 query、treeComplete／截断／遍历／属性缺口、匹配数、最多 20 个匹配及 20 个内层 Collapsed Group，超出数量分别用 matchesOmitted／candidatesOmitted 表示。局部项含本次 id／parentId、实际名称／ID／类型、isEnabled、展开 state 和 propertyIssues；id 仅用于解释本次树结构，不能跨请求定位。父级已观察 Expanded、但目标缺失／多义时仍 stopped／success:false、没有 findings；cause 区分 `observed-inner-collapsed-candidates`、`child-not-found-in-parent`、`child-ambiguous-in-parent`，不完整证据为 `local-observation-incomplete`。parentState 表示最新父级观察，原始状态仍保留在 steps。读取相应 nextAction 继续同一任务的观察，不把已确认展开描述成动作结果未知，也不重放外层动作。
+
+这些内层候选不附可执行 nextRequest：观察到局部节点不证明其选择器在全窗唯一，当前 UiQuery 没有父范围搜索参数。根据实际候选安排后续唯一定位，歧义时先修正查询；不默认首项或递归展开全部。该诊断复用本次父树，不额外轮询或扫描窗口。缺口保留，即使已看到候选，也不能在树不完整时宣称候选唯一或目标不存在。
+
+上述调用数和 deadline 由代码按单请求限制；发现与选择是两次请求，未共享累计预算，也未建立强制关联上一请求 target／childQuery 的状态。跨请求累计预算当前不要求补齐。沿用用户选定窗口和任务；新的实际观察可用于合法查询修正，已授权导航不要求逐步重复确认。首次 Group 发现仍可能被其他 Group 的必要状态／非辅助属性缺口阻断，所选父级的直接续接已消除这一耦合。初始候选没有祖先／邻近上下文，局部诊断仅解释观察到的树关系；内层操作仍须独立定位。尚未实现任意任务的证据拆分、父范围查询或递归导航。
 
 先按任务选定模式，再调用。
 

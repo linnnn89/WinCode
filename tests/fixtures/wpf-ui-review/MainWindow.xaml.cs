@@ -169,6 +169,7 @@ public partial class MainWindow : Window
             for (int i = 0; i < 100; i++) Add(new Button { Content = "Unrelated " + i }, "unrelated" + i);
             Content = panel;
         }
+        if (Environment.GetCommandLineArgs().Contains("--hybrid-fixture")) BuildHybridFixture();
         Loaded += MainWindow_Loaded;
     }
 

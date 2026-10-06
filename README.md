@@ -15,6 +15,8 @@
 
 [Setup / 配置指南](WinCode-Skill制作与MCP配置指南.md) · [Code / 代码分析](skills/wincode/references/code.md) · [UI inspection / UI 检查](skills/wincode/references/ui.md) · [Changelog / 版本记录](CHANGELOG.md)
 
+Experimental branch `codex/hybrid-readonly-orchestration`: [client-side read-only workflows and Windows benchmark / 客户端只读编排与 Windows 基准](docs/hybrid-readonly-orchestration.md). Opt-in testing; standard MCP tools remain available. 此分支独立测试，暂不合并到 main。
+
 ## English
 
 WinCode is a local server implementing the Model Context Protocol (MCP) for AI coding agents. It combines Windows UI Automation (UIA), code navigation and .NET project analysis, so an agent can inspect a running application and investigate its source code through the same connection.

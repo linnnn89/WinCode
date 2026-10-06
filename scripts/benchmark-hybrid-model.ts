@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { WinCodeSession } from '../src/Client/SkillSession.js';
 import { killProcessTree, withTimeout } from '../src/Core/ResourceManager.js';
 import type { UiTarget } from '../src/Client/ReadonlyUiWorkflow.js';
-import { httpCompletion, createModelTasks, createParameterizedTasks, modelTools, runModelUiTask } from './lib/hybrid-model.js';
+import { httpCompletion, createModelTasks, createParameterizedTasks, parameterizedPromptPolicy, modelTools, runModelUiTask } from './lib/hybrid-model.js';
 import { summarizeModelExperiment } from './lib/hybrid-report.js';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -113,7 +113,8 @@ finally {
   if (!sourcesUnchanged) failure ??= 'HARNESS_CHANGED_DURING_MEASUREMENT';
   const summary = summarizeModelExperiment({ tasks: modelTasks.map(task => task.id), repetitions, samples,
     integrity: { sourcesUnchanged, gatewayExited, fixtureExited, measurementValid: !failure } });
-  const report = { ...summary, experiment: 'real-model-preinstalled-readonly-recipes', scenario, formatPolicy, taskSelection, revision, workingTreeDirty, harnessSources, model,
+  const promptPolicy = taskSelection === 'parameterized' ? parameterizedPromptPolicy : 'legacy-tasks-v1';
+  const report = { ...summary, experiment: 'real-model-preinstalled-readonly-recipes', scenario, formatPolicy, taskSelection, promptPolicy, revision, workingTreeDirty, harnessSources, model,
     settings: { temperature: 0, thinking: 'disabled', maxOutputTokens: 2048, maxModelRequestsPerTask: 8, maxTaskTimeMs: 120000,
       transportRetries: 0, maxParameterCorrections: taskSelection === 'parameterized' ? 1 : 0, maxFinalFormatCorrections: formatPolicy === 'repair-on' ? 1 : 0 },
     formalSampleSize: repetitions >= 20, failure,
@@ -122,7 +123,7 @@ finally {
     samples, observedAuditHelperStarts, gatewayExited, fixtureExited, foregroundSamples: foreground.length,
     observedFixtureForeground: target ? foreground.some(line => line.split(' ').at(-1)?.toLowerCase() === target!.hwnd.toLowerCase()) : null };
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
-  await fs.writeFile(path.join(output, 'public-summary.json'), JSON.stringify({ ...summary, scenario, formatPolicy, taskSelection }, null, 2));
+  await fs.writeFile(path.join(output, 'public-summary.json'), JSON.stringify({ ...summary, scenario, formatPolicy, taskSelection, promptPolicy }, null, 2));
   console.log(JSON.stringify({ report: path.join(output, 'report.json'), success: report.success, failure, gatewayExited, fixtureExited }));
   if (!report.success) process.exitCode = 1;
 }

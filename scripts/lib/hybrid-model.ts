@@ -4,6 +4,7 @@ import { runReadonlyUiWorkflow, type UiReader, type UiTarget, type UiReadCaller 
 import { createReadonlyUiRecipe, RecipeInputError, type CheckboxAuditParameters } from '../../src/Client/ReadonlyUiRecipes.js';
 
 export const sourceFile = 'tests/fixtures/wpf-ui-review/MainWindow.xaml';
+export const parameterizedPromptPolicy = 'call-then-findings-v1';
 const summary = { query: { automationId: 'hybridSummary' }, readStates: true, maxDepth: 2, maxNodes: 8 };
 const checkboxParameters = { regionAutomationId: 'hybridChecks',
   checkboxAutomationIds: Array.from({ length: 8 }, (_, i) => 'hybridCheck' + i), maxDepth: 4, maxNodes: 40 };
@@ -84,7 +85,8 @@ const canonical = (value: unknown): string => JSON.stringify(value, (_key, item)
 
 export function modelTools(mode: 'native' | 'hybrid', task?: ModelTask) {
   if (mode === 'hybrid' && task?.parameters) return [{ type: 'function', function: {
-    name: 'run_readonly_workflow', description: 'Run the installed readonly checkbox-audit client recipe. Supply parameters from the task. No code execution. ' +
+    name: 'run_readonly_workflow', description: 'Invoke this function as a tool call to execute the installed readonly checkbox-audit client recipe. ' +
+      'Supply parameters from the task, then use the returned findings for your final answer. No code execution. ' +
       'Omit summaryAutomationId for unconditional reads; On reads details and Off skips them. Parameters are validated before connection or reads.',
     parameters: { type: 'object', properties: { recipe: { type: 'string', enum: ['checkbox-audit'] }, parameters: {
       type: 'object', properties: { summaryAutomationId: { type: 'string', minLength: 1, maxLength: 256 },
@@ -108,13 +110,18 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
   const messages: Message[] = [{ role: 'system', content: 'You are testing an isolated Windows fixture. Use only supplied tools. ' +
     'Observe before planning dependent reads; all calls execute serially. A deferred call did not execute. ' +
     'Read tool success and completeness. Missing state is not false. Final answer must be only the requested JSON object, no Markdown. ' +
+    (task.parameters ? 'First send a function tool call to perform the requested observation and wait for its tool result. ' +
+      'Tool arguments are not the final answer. After the required successful observations, return the task findings as valid JSON ' +
+      'with quoted property names and observed values, without tool inputs or placeholders. ' : '') +
     `Fixed target PID=${target.pid}, HWND=${target.hwnd}. Use backgroundOnly:true,capture:"none",responseFormat:"compact". ` +
     'Best scoped options: hybridSummary maxDepth=2 maxNodes=8 readStates=true; hybridChecks maxDepth=4 maxNodes=40 readStates=true; btnNormalAction maxDepth=2 maxNodes=8. ' +
     (mode === 'hybrid' ? 'The supplied recipes are already installed trusted programs; their descriptions and schema count toward context usage.' : '') },
     { role: 'user', content: `Task ${task.id}: ${task.instructions}` + (mode === 'hybrid' ?
-      task.parameters ? ' Construct and submit checkbox-audit parameters from this task. Set regionAutomationId to the task region and ' +
+      task.parameters ? ' Call run_readonly_workflow through a function tool call with recipe="checkbox-audit" and parameters from this task. ' +
+        'Set regionAutomationId to the task region and ' +
         'checkboxAutomationIds to the entire selected set. For conditional tasks set summaryAutomationId to the summary ID; otherwise omit it. ' +
-        'One workflow performs the necessary summary and detail observations. Do not use the summary as the checkbox region or split the selected set.' :
+        'One workflow performs the necessary summary and detail observations. Do not use the summary as the checkbox region or split the selected set. ' +
+        'Wait for its tool result, then return only the observed task findings in the requested final JSON shape. Do not print recipe parameters as your answer.' :
         ` Use the matching preinstalled recipe ${task.id}.` : '') }];
   const tools = modelTools(mode, task), turns: Array<{ request: ModelRequest; response: ModelReply; elapsedMs: number }> = [];
   const toolResults: Array<{ id: string; name: string; result: unknown }> = [];

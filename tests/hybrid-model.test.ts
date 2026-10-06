@@ -8,6 +8,33 @@ import * as harness from '../scripts/lib/hybrid-model.js';
 
 const reportModule = async () => import(new URL('../scripts/lib/hybrid-report.js', import.meta.url).href).catch(() => ({}));
 
+it('parameterized calls separate executable tool messages from printed arguments and evidence-backed findings', async () => {
+  for (const task of [...harness.createParameterizedTasks('On'), ...harness.createParameterizedTasks('Off')]) {
+    const printed = { recipe: 'checkbox-audit', parameters: task.parameters };
+    for (const mode of ['native', 'hybrid'] as const) {
+      let reads = 0;
+      const result = await runModelUiTask({ task, mode, target, model: 'fixed-test-model',
+        call: async () => { reads++; throw new Error('Printed JSON must never dispatch a read.'); },
+        complete: async () => reply(undefined, printed) });
+      assert.equal(result.failure, 'FINAL_WITHOUT_OBSERVATION'); assert.equal(result.success, false);
+      assert.equal(reads, 0); assert.equal(result.mcpCalls, 0); assert.equal(result.modelRequests, 1);
+      assert.equal(result.parameterValidation.submittedCalls, 0);
+      assert.equal(result.parameterCorrection.attempted, false); assert.equal(result.formatCorrection.attempted, false);
+      assert.deepEqual(result.measuredUsage, { promptTokens: 100, completionTokens: 10, totalTokens: 110 });
+      const system = result.turns[0].request.messages[0].content!;
+      assert.match(system, /function tool call/i, 'Both paths must explicitly request execution through tool calls.');
+      assert.match(system, /arguments are not the final answer/i, 'The final-answer contract must exclude submitted arguments.');
+    }
+  }
+  const task = harness.createParameterizedTasks('On')[0]; let requests = 0;
+  const wrongFinal = await runModelUiTask({ task, mode: 'hybrid', target, model: 'fixed-test-model', call,
+    complete: async () => ++requests === 1 ? reply([invoke('read', 'run_readonly_workflow', { recipe: 'checkbox-audit', parameters: task.parameters })]) :
+      reply(undefined, { recipe: 'checkbox-audit', parameters: task.parameters }) });
+  assert.equal(wrongFinal.success, false); assert.equal(wrongFinal.mcpCalls, 1);
+  assert.equal(wrongFinal.failure, 'INCORRECT_FINDINGS');
+  assert.equal(wrongFinal.formatCorrection.attempted, false);
+});
+
 it('parameterized model tasks execute submitted subsets and bound corrections without laundering scope or evidence', async () => {
   const createTasks = (harness as any).createParameterizedTasks;
   assert.equal(typeof createTasks, 'function');

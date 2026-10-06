@@ -10,7 +10,7 @@ public partial class MainWindow
     private void BuildHybridFixture()
     {
         var panel = new StackPanel { Margin = new Thickness(16) };
-        var summary = new CheckBox { Content = "Details required", IsChecked = true };
+        var summary = new CheckBox { Content = "Details required", IsChecked = !Environment.GetCommandLineArgs().Contains("--hybrid-summary-off") };
         AutomationProperties.SetAutomationId(summary, "hybridSummary");
         panel.Children.Add(summary);
         var rows = new StackPanel();

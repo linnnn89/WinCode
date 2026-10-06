@@ -4,6 +4,93 @@ import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { httpCompletion, modelTasks, runModelUiTask, type ModelReply, type Completion } from '../scripts/lib/hybrid-model.js';
 import type { UiReadCaller } from '../src/Client/ReadonlyUiWorkflow.js';
+import * as harness from '../scripts/lib/hybrid-model.js';
+
+const reportModule = async () => import(new URL('../scripts/lib/hybrid-report.js', import.meta.url).href).catch(() => ({}));
+
+it('conditional model tasks require On details and accept Off without dispatching dependent reads', async () => {
+  for (const state of ['On', 'Off'] as const) for (const mode of ['native', 'hybrid'] as const) {
+    const task = (harness as any).createModelTasks?.(state)[2] ?? { ...modelTasks[2],
+      expected: state === 'Off' ? { detailsRequired: false } : modelTasks[2].expected };
+    let requests = 0; const reads: string[] = [];
+    const measured = await runModelUiTask({ task, mode, target, model: 'fixed-test-model',
+      call: async (...args) => {
+        reads.push((args[1].query as any).automationId);
+        const value = await call(...args), text = value.content[0] as { type: 'text'; text: string };
+        const body = JSON.parse(text.text); if (body.tree.automationId === 'hybridSummary') body.tree.states.toggle = state;
+        return { content: [{ type: 'text', text: JSON.stringify(body) }] };
+      }, complete: async () => {
+        requests++;
+        if (requests === 1) return reply([mode === 'hybrid' ? invoke('recipe', 'run_readonly_workflow', { recipe: 'T3' }) :
+          invoke('summary', 'wincode_ui_inspect', { query: { automationId: 'hybridSummary' }, readStates: true })]);
+        if (mode === 'native' && requests === 2) return reply([invoke('detail', 'wincode_ui_inspect', {
+          query: { automationId: 'hybridChecks' }, readStates: true })]);
+        return reply(undefined, state === 'Off' ? { detailsRequired: false } :
+          { detailsRequired: true, details: { checkedCount: 7, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] } });
+      } });
+    assert.equal(measured.success, true, `${mode}/${state}: ${measured.failure}`);
+    assert.deepEqual(reads, state === 'Off' ? ['hybridSummary'] : ['hybridSummary', 'hybridChecks']);
+    if (mode === 'native' && state === 'Off') assert.equal((measured.toolResults[1].result as any).workStarted, false);
+  }
+  // Off must also reject a detail region selected by name or a broader root query.
+  for (const query of [{ name: 'Eight checks' }, { automationId: 'WinCodeWpfFixtureRoot' }]) {
+    let requests = 0, reads = 0;
+    const measured = await runModelUiTask({ task: (harness as any).createModelTasks('Off')[2], mode: 'native', target,
+      model: 'fixed-test-model', call: async (...args) => {
+        reads++; const value = await call(...args), text = value.content[0] as { type: 'text'; text: string };
+        const body = JSON.parse(text.text); body.tree.states.toggle = 'Off';
+        return { content: [{ type: 'text', text: JSON.stringify(body) }] };
+      }, complete: async () => ++requests === 1 ? reply([invoke('summary', 'wincode_ui_inspect', {
+        query: { automationId: 'hybridSummary' }, readStates: true })]) : requests === 2 ?
+        reply([invoke('unnecessary', 'wincode_ui_inspect', { query, readStates: true })]) : reply(undefined, { detailsRequired: false }) });
+    assert.equal(measured.success, true); assert.equal(reads, 1, 'Off cannot be bypassed by another selector');
+    assert.equal((measured.toolResults[1].result as any).workStarted, false);
+    assert.match((measured.toolResults[1].result as any).message, /after Off return/);
+  }
+});
+
+it('experiment summaries count failed attempts and preserve missing usage and invalid comparisons', async () => {
+  const { summarizeModelExperiment } = await reportModule();
+  assert.equal(typeof summarizeModelExperiment, 'function');
+  const sample = (mode: string, success: boolean, elapsedMs: number, usage: unknown, extra = {}) => ({
+    task: 'T1', mode, success, elapsedMs, measuredUsage: usage, modelRequests: 2, modelToolRounds: 1, mcpCalls: 1,
+    measuredCacheUsage: { hitTokens: 60, missTokens: 40 }, ...extra });
+  const rows = [sample('native', true, 100, { promptTokens: 100, completionTokens: 10, totalTokens: 110 }),
+    sample('native', false, 300, null, { failure: 'INCOMPLETE_MODEL_RESPONSE', measuredCacheUsage: null }),
+    sample('hybrid', true, 50, { promptTokens: 100, completionTokens: 10, totalTokens: 110 })];
+  const summary = summarizeModelExperiment({ tasks: ['T1'], repetitions: 2, samples: rows,
+    integrity: { sourcesUnchanged: true, gatewayExited: true, fixtureExited: true } });
+  const c = summary.comparisons[0];
+  assert.equal(c.validComparison, false); assert.equal(c.totalTokenReduction, null);
+  assert.deepEqual(c.native.attempts, { samples: 2, failed: 1, elapsedMs: 400, modelRequests: 4, mcpCalls: 2,
+    totalTokens: null, knownTotalTokens: 110, missingUsageSamples: 1,
+    cacheHitTokens: null, cacheMissTokens: null, knownCacheHitTokens: 60, knownCacheMissTokens: 40, missingCacheSamples: 1 });
+  assert.equal(c.native.p50Ms, 100); assert.equal(c.hybrid.samples, 1); assert.equal(summary.success, false);
+  const complete = [rows[0], { ...rows[0], mode: 'hybrid', elapsedMs: 50 }];
+  assert.equal(summarizeModelExperiment({ tasks: ['T1'], repetitions: 1, samples: complete,
+    integrity: { sourcesUnchanged: false, gatewayExited: true, fixtureExited: true } }).comparisons[0].validComparison, false);
+  const empty = summarizeModelExperiment({ tasks: ['T1'], repetitions: 1, samples: [],
+    integrity: { sourcesUnchanged: true, gatewayExited: true, fixtureExited: true } });
+  assert.equal(empty.comparisons[0].native.attempts.totalTokens, null);
+});
+
+it('public experiment summaries omit synthetic secrets paths targets and free text', async () => {
+  const { summarizeModelExperiment } = await reportModule();
+  assert.equal(typeof summarizeModelExperiment, 'function');
+  const privateText = 'synthetic-private-value@example.invalid C:\\Users\\synthetic\\fixture sk-synthetic-secret-value';
+  const summary = summarizeModelExperiment({ tasks: ['T1'], repetitions: 1, samples: [{ task: 'T1', mode: 'native',
+    success: false, failure: privateText, elapsedMs: 1, modelRequests: 1, modelToolRounds: 0, mcpCalls: 0,
+    measuredUsage: null, measuredCacheUsage: null, transcript: privateText, findings: { secret: privateText },
+    target: { pid: 123, hwnd: privateText }, turns: [{ request: privateText }], returnedModels: [privateText] }],
+    integrity: { sourcesUnchanged: true, gatewayExited: true, fixtureExited: true, secret: privateText },
+    model: privateText, endpoint: privateText });
+  const text = JSON.stringify(summary);
+  for (const value of ['synthetic-private-value', 'C:\\Users', 'sk-synthetic', 'transcript', 'findings', 'target', 'turns', 'endpoint'])
+    assert.equal(text.includes(value), false, value);
+  assert.deepEqual(summary.comparisons[0].native.failureCategories, { OTHER: 1 });
+  assert.throws(() => summarizeModelExperiment({ tasks: [privateText], repetitions: 1, samples: [],
+    integrity: { sourcesUnchanged: true, gatewayExited: true, fixtureExited: true } }));
+});
 
 const target = { pid: 42, hwnd: '0x123' };
 const reply = (toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>, content?: unknown): ModelReply => ({

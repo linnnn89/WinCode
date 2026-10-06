@@ -29,7 +29,12 @@ export const modelTasks = [
         runtimeSourceVerified: value.sourceEvidence?.runtimeSourceVerified };
     } },
 ];
-export type ModelTask = typeof modelTasks[number];
+export type ModelTask = { id: string; instructions: string; expected: unknown; run: (reader: UiReader) => Promise<unknown> };
+export function createModelTasks(summaryState: 'On' | 'Off'): ModelTask[] {
+  if (!['On', 'Off'].includes(summaryState)) throw new Error('Unsupported fixture summary state.');
+  return modelTasks.map(task => summaryState === 'Off' && ['T1', 'T3'].includes(task.id) ?
+    { ...task, expected: { detailsRequired: false } } : task);
+}
 export type Message = { role: string; content?: string | null; tool_calls?: ToolCall[]; tool_call_id?: string; [key: string]: unknown };
 type ToolCall = { id: string; type: string; function: { name: string; arguments: string } };
 export type ModelReply = { id?: string; model?: string; system_fingerprint?: string; choices: Array<{ message: Message; finish_reason: string }>;
@@ -61,6 +66,7 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
   const toolResults: Array<{ id: string; name: string; result: unknown }> = [];
   let mcpCalls = 0, intermediateTextBytes = 0, deliveredTextBytes = 0, deferredCalls = 0, modelRequests = 0, modelLatencyMs = 0;
   const observations: string[] = [];
+  let observedSummary: string | undefined;
   const tracked: UiReadCaller = async (name, args, opts) => {
     mcpCalls++; const value = await call(name, args, opts);
     intermediateTextBytes += value.content.filter(block => block.type === 'text').reduce((sum, block) => sum + Buffer.byteLength(block.text), 0);
@@ -70,8 +76,11 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
     // Raw MCP success is provisional. Only an accepted complete workflow can justify a final answer.
     if (!report.success) return;
     for (const step of report.steps) {
-      const id = (step.evidence?.nodes as Array<{ automationId?: string }> | undefined)?.[0]?.automationId;
-      if (step.status === 'completed' && typeof id === 'string') observations.push(id);
+      const node = (step.evidence?.nodes as Array<{ automationId?: string; states?: { toggle?: string } }> | undefined)?.[0];
+      if (step.status === 'completed' && typeof node?.automationId === 'string') {
+        observations.push(node.automationId);
+        if (node.automationId === 'hybridSummary') observedSummary = node.states?.toggle;
+      }
     }
   };
   const started = performance.now();
@@ -124,6 +133,10 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
                 (args.responseFormat !== undefined && args.responseFormat !== 'compact')) throw new Error('UNSUPPORTED_CAPTURE_OR_FORMAT');
               if (args.candidateFiles && JSON.stringify(args.candidateFiles) !== JSON.stringify([sourceFile])) throw new Error('UNSUPPORTED_SOURCE_FILE');
               if (args.candidateCodeFiles || args.textQueries) throw new Error('UNSUPPORTED_SOURCE_FILE');
+              if (task.id === 'T3' && observedSummary === 'Off' && args.query?.automationId !== 'hybridSummary')
+                throw new Error('DEPENDENT_READ_NOT_REQUIRED');
+              if (task.id === 'T3' && args.query?.automationId === 'hybridChecks' && observedSummary !== 'On')
+                throw new Error('DEPENDENT_READ_NOT_REQUIRED');
               const { pid: _pid, hwnd: _hwnd, backgroundOnly: _background, responseFormat: _format, ...input } = args;
               let original: CallToolResult | undefined;
               const checked = await runReadonlyUiWorkflow(async (...params) => { original = await tracked(...params); return original; }, target,
@@ -132,7 +145,22 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
               result = checked.isError ? checked : original;
             }
             observed = true;
-          } catch (error) { result = { success: false, errorCode: error instanceof Error ? error.message : 'HARNESS_ERROR', workStarted: mcpCalls > callsBefore }; }
+          } catch (error) {
+            const errorCode = error instanceof SyntaxError ? 'INVALID_TOOL_ARGUMENT_JSON' : error instanceof Error ? error.message : 'HARNESS_ERROR';
+            const hints: Record<string, string> = {
+              UNSUPPORTED_TOOL: mode === 'hybrid' ? 'Use run_readonly_workflow with an installed T1–T4 recipe.' :
+                'Use only wincode_ui_inspect or wincode_ui_review for this readonly task.',
+              UNKNOWN_RECIPE: 'Choose the installed T1, T2, T3 or T4 recipe matching the requested task.',
+              TARGET_CHANGED: 'Use the fixed PID/HWND in the system instructions; do not select another window.',
+              INVALID_ARGUMENT: 'Supply a JSON object matching the advertised tool parameters.',
+              INVALID_TOOL_ARGUMENT_JSON: 'Tool arguments must be valid JSON, without Markdown or expression syntax.',
+              UNSUPPORTED_CAPTURE_OR_FORMAT: 'Use backgroundOnly:true, capture:"none" and responseFormat:"compact".',
+              UNSUPPORTED_SOURCE_FILE: `Use only the advertised candidateFiles:["${sourceFile}"]; omit candidateCodeFiles and textQueries.`,
+              DEPENDENT_READ_NOT_REQUIRED: 'For T3, observe hybridSummary first. Read hybridChecks only after accepted On; after Off return {"detailsRequired":false} without reading other regions.',
+            };
+            result = { success: false, errorCode, workStarted: mcpCalls > callsBefore,
+              ...(hints[errorCode] ? { message: hints[errorCode] } : {}) };
+          }
         }
         toolResults.push({ id: item.id, name: item.function.name, result });
         const text = JSON.stringify(result);
@@ -142,7 +170,7 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
     }
     if (findings === undefined) throw new Error('MODEL_ROUND_BUDGET_EXCEEDED');
     const required = task.id === 'T1' ? ['hybridSummary'] : task.id === 'T2' ? ['hybridChecks'] :
-      task.id === 'T3' ? ['hybridSummary', 'hybridChecks'] : ['btnNormalAction'];
+      task.id === 'T3' ? (observedSummary === 'Off' ? ['hybridSummary'] : ['hybridSummary', 'hybridChecks']) : ['btnNormalAction'];
     let cursor = 0;
     for (const observed of observations) if (observed === required[cursor]) cursor++;
     if (cursor !== required.length) throw new Error('FINAL_WITHOUT_REQUIRED_EVIDENCE');
@@ -157,12 +185,18 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
       completionTokens: turns.reduce((sum, turn) => sum + turn.response.usage!.completion_tokens, 0),
       totalTokens: turns.reduce((sum, turn) => sum + turn.response.usage!.total_tokens, 0),
     } : null;
+  const measuredCacheUsage = measuredUsage && turns.every(({ response: { usage } }) =>
+    Number.isSafeInteger(usage!.prompt_cache_hit_tokens) && (usage!.prompt_cache_hit_tokens as number) >= 0 &&
+    (usage!.prompt_cache_hit_tokens as number) <= usage!.prompt_tokens) ? {
+      hitTokens: turns.reduce((sum, { response: { usage } }) => sum + (usage!.prompt_cache_hit_tokens as number), 0),
+      missTokens: turns.reduce((sum, { response: { usage } }) => sum + usage!.prompt_tokens - (usage!.prompt_cache_hit_tokens as number), 0),
+    } : null;
   return { task: task.id, mode, success: !failure, failure, findings, elapsedMs: performance.now() - started,
     modelRequests, completedModelRequests: turns.length, returnedModels: [...new Set(turns.map(turn => turn.response.model).filter(Boolean))],
     systemFingerprints: [...new Set(turns.map(turn => turn.response.system_fingerprint).filter(Boolean))],
     modelToolRounds: turns.filter(turn => turn.response.choices?.[0]?.message.tool_calls?.length).length,
     modelLatencyMs, mcpCalls, intermediateTextBytes, deliveredTextBytes, deferredCalls,
-    measuredUsage, turns, toolResults };
+    measuredUsage, measuredCacheUsage, turns, toolResults };
 }
 
 /** Existing Chat Completions endpoint. No installation, credentials discovery, retries or redirects. */

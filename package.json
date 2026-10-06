@@ -27,7 +27,7 @@
     "test:tavern-context": "tsx scripts/verify-tavern-context.ts",
     "test:e2e": "tsx scripts/test-mcp-client.ts",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test:ui": "tsx --test --test-concurrency=1 tests/flaui-adapter.test.ts tests/ui-inspect-mcp.test.ts tests/ui-window-list.test.ts tests/ui-action-mcp.test.ts",
+    "test:ui": "tsx --test --test-concurrency=1 tests/flaui-adapter.test.ts tests/ui-inspect-mcp.test.ts tests/ui-window-list.test.ts tests/ui-action-mcp.test.ts tests/hybrid-ui-session.test.ts",
     "test:all": "npm run check && npm run check:desktop",
     "test:ui-query": "tsx scripts/verify-ui-query.ts",
     "test:ui-code": "tsx --test tests/ui-code-runtime.test.ts",

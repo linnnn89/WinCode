@@ -24,11 +24,10 @@ npm run benchmark:hybrid -- 20
 
 ```ts
 import { WinCodeSession } from '../src/Client/SkillSession.js';
-import { runReadonlyUiWorkflow } from '../src/Client/ReadonlyUiWorkflow.js';
 
 const session = new WinCodeSession({ workspace: selectedWorkspace });
 try {
-  const result = await runReadonlyUiWorkflow(session.call.bind(session), selectedTarget, async reader => {
+  const result = await session.readonlyUiWorkflow(selectedTarget, async reader => {
     const summary = await reader.inspect({
       query: { automationId: 'hybridSummary' }, readStates: true, maxDepth: 2, maxNodes: 8,
     });
@@ -48,6 +47,12 @@ try {
 ```
 
 这是项目内 TypeScript API，示例中的 workspace/target 需要由宿主提供。执行的是受信任客户端程序，没有新增执行模型源码的工具、解释器或 sandbox。包装器限制自己的工具入口，不能限制宿主程序在包装器以外的能力，也不能替任意第三方客户端切断模型轮次。
+
+在能执行受信任 TypeScript 的宿主中，优先使用 `session.readonlyUiWorkflow(target, program, options)`。它复用同一个标准 MCP 连接，沿用工作区／构建身份校验、工具验证和完整内容块返回；创建会话及只做客户端处理均不启动 Gateway，首次实际读取才连接。返回值包括 `report`、`content` 和 `isError`，宿主应保留原生 image 内容块。
+
+该入口把会话关闭信号与调用方取消信号合并。`close()` 会取消正在读取、排队及两次读取之间等待的编排，等待已登记工作流形成最终报告，并观察 Gateway 退出。完成步骤的证据保留，后续读取不再分发；关闭后的会话入口拒绝新工作流。调用方仍需保存返回报告；关闭会话不自动替宿主交付附件。客户端回调使用宿主已有的执行能力，signal/race 不能强制终止同步死循环或撤销回调在包装器之外的操作。
+
+已有连接的其他客户端可继续使用独立的 `runReadonlyUiWorkflow(call, target, program, options)`，由宿主提供取消与连接关闭。终端 JSON 入口 `SkillSessionCli.js` 沿用现有单工具协议；本轮 TypeScript 入口没有新增 JSON 计划或服务器工具。
 
 ## 执行契约
 
@@ -91,3 +96,5 @@ Node 24.19.0、SDK 10.0.303：类型检查、Gateway 构建、fixture Release �
 | T4 | 827.11 / 847.74 | 826.74 / 860.57 | 18.16% |
 
 两条路径的 UIA 调用数相同，中位工具耗时基本持平。T3 的脚本观察结果交付次数从 2 次变为 1 次，其他用例均为 1 次。这些结果验证了客户端编排的执行行为和输出投影；未证明真实模型 token 或完整任务耗时达到原规划的投入阈值，当前决策维持客户端 PoC。
+
+第二轮增加会话级入口及 3 项行为测试：冷会话在客户端等待期间关闭；复用真实 Gateway 完成条件读取并交付原生截图；真实 UIA provider 阻塞期间关闭，保留首步证据并停止排队的第三次读取。最后一项确认 Gateway 和 native helper 的实际 PID 已退出，fixture 也显式回收。类型检查、构建及构建指纹核对通过；原有完整回归 467/467、新增会话行为测试 3/3 通过，测试清单共 58 个文件。这轮验证宿主接入与关闭行为，未运行 LLM A/B，第一轮模型指标仍为 null。

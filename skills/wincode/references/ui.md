@@ -6,6 +6,8 @@ UI 工具同样占用每实例 32 个业务受理槽；既有 UI/健康探测互
 
 ## 规范字段
 
+混合只读编排实验分支 `codex/hybrid-readonly-orchestration` 提供客户端 TypeScript 入口 `WinCodeSession.readonlyUiWorkflow(target, program, options)`。适用于能执行受信任客户端程序的宿主：先列出窗口并明确选择 PID/HWND，然后在程序内串行调用 `reader.inspect`／`reader.review`，按明确状态决定是否继续，并返回 findings。入口复用会话，关闭时取消编排并等待收尾；同时处理返回的 `isError`、步骤完整性及全部原生内容块。此能力只在该实验分支提供，使用前核对本机交付源码；详细契约见交付目录的 `docs/hybrid-readonly-orchestration.md`。普通 MCP 和终端 JSON 会话按下面的既有工具字段调用。
+
 参数名称区分大小写；额外字段仅被容忍和忽略，不会被当成筛选条件。不能把 `automationID`、`AutomationId` 或 `title` 当作下面的规范字段。数字、布尔值必须使用真正的 JSON 类型。
 
 | 工具/字段 | 类型与约束 |

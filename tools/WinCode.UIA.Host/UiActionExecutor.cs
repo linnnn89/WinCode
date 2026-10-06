@@ -67,31 +67,38 @@ internal static class UiActionExecutor
             ControlType = request.TargetControlType,
         };
         var walker = automation.TreeWalkerFactory.GetControlViewWalker();
+        var elapsed = Stopwatch.StartNew();
+        var scopedRoot = UiScopeResolver.Resolve(root, walker, request.ScopePath, elapsed, cancellationToken, out var scopeResult);
+        if (scopedRoot == null)
+            return UiScopeResolver.Failed(request, scopeResult!, identity.Pid, identity.Hwnd);
         var search = new BoundedUiSearch<AutomationElement>();
-        search.Run(root, walker.GetFirstChild, walker.GetNextSibling,
-            element => UiTreeReader.MatchesQuery(element, query), MaxSearchNodes, MaxMatches, cancellationToken);
+        search.Run(scopedRoot, walker.GetFirstChild, walker.GetNextSibling,
+            element => UiTreeReader.MatchesQuery(element, query), MaxSearchNodes, MaxMatches, cancellationToken,
+            milliseconds: request.ScopePath == null ? 2000 : UiScopeResolver.Remaining(elapsed));
+
+        InspectResponse WithScope(InspectResponse response) { response.ScopeResult = scopeResult; return response; }
 
         if (search.Matches.Count > 1)
-            return Failed(request, "TARGET_AMBIGUOUS",
-                "Selector matched multiple controls; only a unique target may be acted on.", identity);
+            return WithScope(Failed(request, "TARGET_AMBIGUOUS",
+                "Selector matched multiple controls; only a unique target may be acted on.", identity));
         if (!search.Complete)
-            return Failed(request, "TARGET_SEARCH_INCOMPLETE",
-                $"Target search stopped early ({search.Reason ?? "unknown"}); uniqueness is unproven.", identity);
+            return WithScope(Failed(request, "TARGET_SEARCH_INCOMPLETE",
+                $"Target search stopped early ({search.Reason ?? "unknown"}); uniqueness is unproven.", identity));
         if (search.Matches.Count == 0)
-            return Failed(request, "TARGET_NOT_FOUND", "No control in the target window matched the selector.", identity);
+            return WithScope(Failed(request, "TARGET_NOT_FOUND", "No control in the selected scope matched the selector.", identity));
 
         var target = search.Matches[0];
         var evidence = Describe(target);
         cancellationToken.ThrowIfCancellationRequested();
 
-        return request.Action switch
+        return WithScope(request.Action switch
         {
             "click" => Click(request, target, evidence, identity),
             "type" => Type(request, automation, target, query, evidence, identity, cancellationToken),
             "setValue" => SetValue(request, target, evidence, identity),
             "setExpanded" => SetExpanded(request, target, evidence, identity),
             _ => Failed(request, "UNKNOWN_ACTION", $"Unknown action: {request.Action}", identity),
-        };
+        });
     }
 
     private static InspectResponse SetExpanded(InspectRequest request, AutomationElement target, UiTargetDto evidence, ResolvedWindow identity)

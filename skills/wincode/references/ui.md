@@ -17,6 +17,7 @@ UI 工具同样占用每实例 32 个业务受理槽；既有 UI/健康探测互
 | `hwnd` | 可选非空字符串，十六进制如 `"0x123ABC"` 或十进制字符串；不能传 JSON 数字 |
 | `capture` | 可选字符串 `none/original/annotated`，默认 `none` |
 | `responseFormat` | inspect/review 可选 `full/compact`，默认 full；只影响 Gateway 输出，不改变原生取证或执行 UI 操作 |
+| `scopePath` | 实验构建 inspect/review/setExpanded 可选；1–50 个父选择器，每项只含 automationId/name/controlType，至少一个非空精确条件。每一步唯一定位上一范围的严格后代，最后在该父级内查询／展开；需要 inspectionVersion 5。click/type 暂不接受 |
 | `maxDepth` / `maxNodes` | 可选整数，分别为 1–50（默认 6）、1–5000（默认 300） |
 | `backgroundOnly` | 可选布尔值，默认 `false`；为 `true` 时必须同时提供 `pid` 和 `hwnd` |
 | `readStates` | 可选布尔值，默认 `false`；只读状态，不执行动作或读取输入值 |
@@ -66,6 +67,12 @@ captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-
 
 ## 操作方式与授权
 
+**第十六轮父范围定位。** 从本次实际 UI 观察构造有序父路径，不把源码中的名称或局部节点 id 当作运行时身份。例：先 `wincode_ui_inspect({pid,hwnd,scopePath:[{automationId:"实际语音区域ID"}],query:{name:"实际高级标题",controlType:"Group"},readStates:true,capture:"none"})`；确认唯一且 Collapsed 后，用同一 scopePath 调用 `wincode_ui_set_expanded({pid,hwnd,scopePath:[{automationId:"实际语音区域ID"}],targetName:"实际高级标题",targetControlType:"Group",expanded:true})`。再将已观察的高级选择器追加到路径，检查其子控件。示例占位值不能照抄。
+
+路径每一项可以跳过 Pane 等布局包装，但不能匹配当前范围根节点本身；每次请求重新解析，不缓存 COM 对象。不提供 query 时 inspect 返回最后父级的树；最终 query 可匹配该根及其后代。scopeResult 记录 resolvedCount、visitedNodes，失败时还有从 0 开始的 failedIndex、status 和 reason。SCOPE_NOT_FOUND／SCOPE_AMBIGUOUS／SCOPE_SEARCH_INCOMPLETE 分别表示父路径缺失、多义、不完整；不退回整窗搜索。路径不会自动展开隐藏父级，也不实现菜单探索。compact 的 expansionRequests 保留原 scopePath；capture 仍按整窗取证，不代表局部裁剪，只有树的定位范围改变。
+
+带路径的展开会先用只读 health 验证 Host 为 inspectionVersion 5，再发送动作；旧版返回 VERSION_MISMATCH，动作不发送。该探测和动作共用本请求 deadline，不增加跨请求预算、权限令牌或逐步确认。标准请求不带 scopePath 时沿用既有流程；展开后仍需独立读回实际状态。
+
 实验分支的展开导航独立于只读取证。目标缺失时先区分完整搜索无匹配、搜索不完整和歧义；只用用户授权范围内的实际父级名称／标识提出候选，不把所有 not-found 当成折叠。`wincode_ui_set_expanded({pid,hwnd,targetName,targetControlType,expanded:true})` 在完整唯一搜索、启用且明确 Expanded／Collapsed 状态成立后才受理；不支持、未知状态或歧义时拒绝，不回退为 click／坐标／焦点。动作回执只表示调用被接受，之后必须读回展开状态及原子控件。超时或失败不自动重放。
 
 客户端 `WinCodeSession.expandUiWorkflow(target,{parentQuery?,candidateQuery?,childQuery},options)` 接收目标复选框查询，可选明确父级或待重新核验的发现候选；parentQuery 与 candidateQuery 不能同时提供。共用固定 PID/HWND、15 秒默认总预算（上限 30 秒）。提供显式父级时最多 5 次调用；自动发现或候选选择时最多 6 次。保存首次查询，诊断父级根状态；Collapsed 才设置 Expanded 一次，随后要求完整父级树证明子控件归属，再单独读回子控件的真实 toggle 状态。根状态诊断有意只返回一层，允许仅 maxDepth 截断；这不代表父级子树完整，最终验证仍要求完整子树、唯一匹配及必要属性／状态／遍历证据。第十四轮仅允许 className／bounds／isOffscreen 的辅助属性缺口继续，并在 steps／actionTarget 保留原记录；其他属性问题与无法解释的 propertyIssueCount 仍阻断。展开动作启用证据未知返回 TARGET_EVIDENCE_INCOMPLETE，实际禁用返回 TARGET_DISABLED。它不会递归探索任意菜单，且可能因较大的父级树超预算而停止。普通 `readonly-ui` 的门槛未改，也不触发导航动作。
@@ -78,9 +85,9 @@ captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-
 
 **展开后的局部诊断。** 第十五轮的 `diagnosis.localObservation` 记录实际父区域 query、treeComplete／截断／遍历／属性缺口、匹配数、最多 20 个匹配及 20 个内层 Collapsed Group，超出数量分别用 matchesOmitted／candidatesOmitted 表示。局部项含本次 id／parentId、实际名称／ID／类型、isEnabled、展开 state 和 propertyIssues；id 仅用于解释本次树结构，不能跨请求定位。父级已观察 Expanded、但目标缺失／多义时仍 stopped／success:false、没有 findings；cause 区分 `observed-inner-collapsed-candidates`、`child-not-found-in-parent`、`child-ambiguous-in-parent`，不完整证据为 `local-observation-incomplete`。parentState 表示最新父级观察，原始状态仍保留在 steps。读取相应 nextAction 继续同一任务的观察，不把已确认展开描述成动作结果未知，也不重放外层动作。
 
-这些内层候选不附可执行 nextRequest：观察到局部节点不证明其选择器在全窗唯一，当前 UiQuery 没有父范围搜索参数。根据实际候选安排后续唯一定位，歧义时先修正查询；不默认首项或递归展开全部。该诊断复用本次父树，不额外轮询或扫描窗口。缺口保留，即使已看到候选，也不能在树不完整时宣称候选唯一或目标不存在。
+这些内层候选仍不附可执行 nextRequest：第十六轮标准工具提供 scopePath，但现有 expand-ui 尚未生成父路径或接入多层执行。调用方可根据实际父树构造路径并独立核验内层；路径本身多义时先修正查询，不默认首项或递归展开全部。该诊断复用本次父树，不额外轮询或扫描窗口。缺口保留，即使已看到候选，也不能在树不完整时宣称候选唯一或目标不存在。
 
-上述调用数和 deadline 由代码按单请求限制；发现与选择是两次请求，未共享累计预算，也未建立强制关联上一请求 target／childQuery 的状态。跨请求累计预算当前不要求补齐。沿用用户选定窗口和任务；新的实际观察可用于合法查询修正，已授权导航不要求逐步重复确认。首次 Group 发现仍可能被其他 Group 的必要状态／非辅助属性缺口阻断，所选父级的直接续接已消除这一耦合。初始候选没有祖先／邻近上下文，局部诊断仅解释观察到的树关系；内层操作仍须独立定位。尚未实现任意任务的证据拆分、父范围查询或递归导航。
+上述调用数和 deadline 由代码按单请求限制；发现与选择是两次请求，未共享累计预算，也未建立强制关联上一请求 target／childQuery 的状态。跨请求累计预算当前不要求补齐。沿用用户选定窗口和任务；新的实际观察可用于合法查询修正，已授权导航不要求逐步重复确认。首次 Group 发现仍可能被其他 Group 的必要状态／非辅助属性缺口阻断，所选父级的直接续接已消除这一耦合。初始候选没有祖先／邻近上下文，局部诊断仅解释观察到的树关系；内层操作仍须独立定位。标准工具的父范围定位已实现，任意任务的证据拆分与自动递归导航尚未实现。
 
 先按任务选定模式，再调用。
 

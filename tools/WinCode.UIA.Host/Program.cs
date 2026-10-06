@@ -91,6 +91,11 @@ public static class Program
                 return;
             }
 
+            if (!UiScopeResolver.Valid(request)) {
+                WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "Invalid scopePath; supported for inspect and setExpanded only.");
+                return;
+            }
+
             if (UiActionExecutor.IsAction(request.Action))
             {
                 // 破坏性操作：定位条件必须先成立，且审计记录在任何目标读写之前落盘。
@@ -135,6 +140,10 @@ public static class Program
 
             var result = ExecuteInspect(request, cts.Token);
             WriteSuccessResponse(request.RequestId, result);
+        }
+        catch (JsonException)
+        {
+            WriteErrorResponse(request?.RequestId, "INVALID_ARGUMENT", "Invalid JSON request or selector shape.");
         }
         catch (AuditException error)
         {
@@ -230,12 +239,17 @@ public static class Program
         };
 
         var walker = automation.TreeWalkerFactory.GetControlViewWalker();
+        var searchElapsed = Stopwatch.StartNew();
+        var scopedRoot = UiScopeResolver.Resolve(rootElement, walker, request.ScopePath, searchElapsed, ct, out var scopeResult);
+        if (scopedRoot == null)
+            return UiScopeResolver.Failed(request, scopeResult!, resolvedPid > 0 ? resolvedPid : request.Pid, $"0x{targetHwnd.ToInt64():X}");
         QueryResultDto? queryResult = null;
-        AutomationElement? selected = rootElement;
+        AutomationElement? selected = scopedRoot;
         if (request.Query is { } query) {
             var search = new BoundedUiSearch<AutomationElement>();
-            search.Run(rootElement, walker.GetFirstChild, walker.GetNextSibling,
-                element => MatchesQuery(element, query), query.MaxSearchNodes ?? 1000, query.MaxMatches ?? 10, ct);
+            search.Run(scopedRoot, walker.GetFirstChild, walker.GetNextSibling,
+                element => MatchesQuery(element, query), query.MaxSearchNodes ?? 1000, query.MaxMatches ?? 10, ct,
+                milliseconds: request.ScopePath == null ? 2000 : UiScopeResolver.Remaining(searchElapsed));
             queryResult = new QueryResultDto {
                 SearchComplete = search.Complete, VisitedNodes = search.Visited, Reason = search.Reason,
                 Status = search.Matches.Count > 1 ? "ambiguous" : !search.Complete ? "incomplete" : search.Matches.Count == 0 ? "not-found" : "unique"
@@ -316,6 +330,7 @@ public static class Program
             ProtocolVersion = "1.0",
             RequestId = request.RequestId,
             Success = true,
+            ScopeResult = scopeResult,
             Pid = resolvedPid > 0 ? resolvedPid : request.Pid,
             Hwnd = $"0x{targetHwnd.ToInt64():X}",
             CaptureOrigin = captureOrigin,

@@ -425,3 +425,43 @@ completed／selection-required／stopped、success 和 findings 的完成含义�
 原始测试与验收记录留在 Git 忽略的 `test-tmp/hybrid-fifteenth-checks/` 和两次 CLI 附件目录；公开只记录方法、失败、状态与数量。没有将原始窗口树或截图提交，也未读取凭据配置或请求外部模型。
 
 收尾检查：六份修改 MD 的 51 个相对链接、18 个锚点、代码围栏与折叠标签配对通过；十个公开变更文件新增行的本机绝对路径、邮箱及常见凭据形状为 0。本轮已生成的 40 个本地 JSON／日志文件常见凭据形状为 0。该检查不是已知密钥精确比对，不保证所有未知秘密均已排除；本地附件仍含窗口和进程信息，不作为匿名公开文件。安装 Skill 最终 check 为 matched=true。git diff --check 通过，提交范围仅这十个文件，原始记录及无关未跟踪文件不提交。
+
+## 第十六轮父路径内查询与展开（2026-10-07）
+
+本轮用户授权先实现父范围定位这一部分，沿用实验分支。实现前本地 HEAD 与远端实验分支均为 `1be61ef32e1b93699686cafb701447384af67431`，远端 main 仍为 `038c0ccc7372948da405546cc7ec0add56eea9de`。不合 main，不改默认 MCP 配置，保留无关未跟踪文件。
+
+### 实现和依据
+
+标准 inspect/review/setExpanded 增加可选 scopePath，每项为精确父选择器；每次原生请求从窗口重新解析，逐项在上一范围的严格后代中确认完整唯一，最后查询／动作留在最后父级。可跳过布局包装，不匹配当前根来充当下一层。无路径请求沿用原流程。最终 query 搜索包含最后父级及其后代；不带 query 时返回最后父级树，截图仍是整窗取证。
+
+复用已有 BoundedUiSearch，并加入可选 includeRoot；独立 UiScopeResolver 只负责同请求路径解析，没有递归引擎、跨请求 COM 缓存或新依赖。整个父路径及最终目标共用原有 2 秒搜索时限，整体仍受请求 deadline／取消约束。父路径失败保留 scopeResult 的解析数量、从 0 开始的失败位置、搜索状态和原因，返回 SCOPE_NOT_FOUND／SCOPE_AMBIGUOUS／SCOPE_SEARCH_INCOMPLETE，不退回整窗操作。
+
+inspectionVersion 升至 5。旧 Host 可能认识 setExpanded 却忽略父范围，所以带路径动作在现有互斥及 deadline 内先执行只读 health，低于 5 时动作不发送；检查没有新增权限状态机或累计预算。compact expansionRequests 保留原路径。MCP schema、共享 TypeScript 契约、原生 DTO／读取／动作及 Skill 同步；click/type 与客户端 expand-ui 参数未扩展。
+
+设计参考 [Microsoft AutomationId 的作用范围](https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/use-the-automationid-property)和当前依赖 [FlaUI 5.0.0 的嵌套定位源码](https://github.com/FlaUI/FlaUI/blob/v5.0.0/src/FlaUI.Core/AutomationElements/AutomationElement.Find.cs)。采用相对父范围逐层定位的思路，保留本项目完整唯一搜索，不复制 FindFirst 的首项选择。
+
+### 实验方法、失败和验证
+
+新增自动测试共 2 项：核心契约检查字段透传、非法路径、compact 后续查询保留路径、旧 Host 只收到 health 而未收到动作；真实 WPF 场景检查两个并列区域中的同名同 ID、缺失／歧义／不前进路径无操作、指定侧展开、另一侧保持折叠、两层路径读取和重复展开 no-op。夹具只在显式 --scope-navigation 模式增加该场景，两个区域的 Normalize 状态分别固定为 On／Off，不读取实际业务配置。
+
+契约测试先失败，实测收到的范围为 undefined，再补共享字段／schema 后通过。首次类型检查发现 scope schema 的 as const 生成 readonly 数组，与 SDK schema 类型不兼容，改为普通对象后通过；首次夹具编译发现局部 label 与已有变量重名，改为 regionLabel 后通过。这两项均为构建问题，不当成功验收记录。
+
+首次相关桌面运行为 2/3，新双区域测试缺少 tree。随后通过当前 Codex CLI 读取完整结果，发现 inspectionVersion 为 5 但 queryResult 仍在整窗匹配到两个高级控件且无 scopeResult；根因是 FlaUiAdapter 的原生 JSON payload 字段白名单漏传 scopePath。补实际字段后相关桌面 3/3 通过。契约层 mock 路由曾通过而真实链路失败，说明真实窗口与客户端入口验证不可省略。本轮没有因失败扩大到无关重构。
+
+相关核心 39/39；完整核心仅一次 492/492；相关桌面最终单次 3/3。最终 typecheck、TypeScript build、原生 Host Release publish 及 WPF fixture publish 通过。项目继续使用已有 SDK 10.0.303，不安装环境，不改 global.json。
+
+### 当前 Codex 客户端实际验收
+
+最终 PTY CLI 连接当前实验构建，hello.runtime.build.status=verified，buildId 为 `edcec0497b822d8cf11dae3ddff8a2bdd2ab2e3b83b88b1c4ffd6787c6b8b4f8`。revision 为实现前 `1be61ef`；当前未提交源码由 sourceHash `dfadc9341966fdacb8c8196d0a07c0c1262b744453b0d62054df1cfda96934d8` 与 artifactHash `5938792991812de3a9403e93cf6b2fff1720240379a1a3bb86b0fbbfcca2272c` 识别，不将 revision 误作全部实现身份。
+
+在独立实际 WPF 窗口顺序完成：语音父路径内唯一观察 Advanced=Collapsed；在同父路径下 Expand 一次；语音 → Advanced 两层路径内读取 Normalize=On；显示父路径内读回 Advanced=Collapsed。每份完整 MCP 结果已读取，isError=false，query.searchComplete=true、treeComplete=true，无遍历或属性缺口，Host inspectionVersion=5。动作回执之外使用独立读回来确认真实结果。
+
+最终入口显式 close 返回 closed=true、进程 exit 0；诊断用的上一入口也已关闭。独立 fixture 自动退出后核对本轮两个入口、Gateway、launcher 和 fixture 等已观察自有进程无残留，UIA Helper 存活数为 0。没有关闭用户自有应用。本轮没有重新验收 New-tavern 或 Electron 的 scopePath；此前只读／单层记录不能代替该能力的非 fixture 或非 WPF 验收。
+
+### 文档、Skill 与隐私
+
+更新三份现有 hybrid MD：当前入口和状态改为第十六轮，保留第十五轮原方案与历史结果；移除“父范围未实现”的当前结论，同时保留自动生成父路径／递归执行、非 fixture 同名路径和非 WPF 导航未验证的限制。不新增重复规划文件。仓库与已安装 Skill 的 root／UI／诊断三份文档同步，旧安装内容先备份，4 个受管文件最终 check matched=true，无关文件及 MCP 配置保留。
+
+原始记录仅在忽略目录 `test-tmp/hybrid-sixteenth-checks/` 及 `test-tmp/skill-sessions/run-Gc6vlr/`、`test-tmp/skill-sessions/run-IXZ3Oj/`。公开只记录方法、失败、合成夹具标识、结果及数量；不提交原始窗口树、截图、进程身份或本机路径。未读取凭据配置、输入真实个人数据或请求外部模型 API。提交前检查公开新增行及这些本地记录的常见凭据形状；这不是已知密钥精确比对，也不承诺排除任意未知秘密，本地附件不作为匿名公开资料。
+
+收尾检查：19 个公开变更文件新增行的本机绝对路径、邮箱及常见凭据形状均为 0；22 个本地 JSON／日志文件常见凭据形状为 0。6 份 MD 的 58 个相对链接、21 个锚点、代码围栏及折叠标签配对通过，git diff --check 通过。原始记录和无关未跟踪文件不进入提交。

@@ -1,6 +1,6 @@
 /**
  * Bounded Windows UI inspection contracts. Optional query/state fields require inspectionVersion 2;
- * semantic actions require inspectionVersion 3; explicit expand/collapse requires version 4.
+ * semantic actions require inspectionVersion 3; explicit expand/collapse requires version 4; parent paths require version 5.
  */
 
 export interface UiRect {
@@ -42,10 +42,26 @@ export interface UiQuery {
   maxSearchNodes?: number; maxMatches?: number;
 }
 
+export type UiScopeSelector = Pick<UiQuery, 'automationId' | 'name' | 'controlType'>;
+
 export type UiAction = 'click' | 'type' | 'setValue' | 'setExpanded';
 
-/** 取证结构版本：2 增加 query/readStates，3 增加语义操作。旧 Helper 不得被当作新能力。 */
-export const UI_INSPECTION_VERSIONS = { QUERY_AND_STATES: 2, ACTIONS: 3, EXPAND_COLLAPSE: 4 } as const;
+/** 取证版本与能力必须对应；5 增加 inspect/setExpanded 的父级路径。 */
+export const UI_INSPECTION_VERSIONS = { QUERY_AND_STATES: 2, ACTIONS: 3, EXPAND_COLLAPSE: 4, PARENT_SCOPE: 5 } as const;
+
+/** Logical descendant scopes: each hop must resolve uniquely, never match the current root itself. */
+export function validateUiScope(scopePath: unknown, action?: string): void {
+  if (scopePath === undefined) return;
+  if (action !== undefined && action !== 'inspect' && action !== 'setExpanded')
+    throw new Error('scopePath is supported only for inspection and setExpanded.');
+  if (!Array.isArray(scopePath) || scopePath.length < 1 || scopePath.length > 50)
+    throw new Error('scopePath requires 1–50 exact parent selectors.');
+  for (const selector of scopePath) {
+    validateUiQuery(selector, false);
+    if (Object.keys(selector).some(key => !['automationId', 'name', 'controlType'].includes(key)))
+      throw new Error('scopePath selectors accept only automationId, name and controlType.');
+  }
+}
 
 export function isUiAction(action: unknown): action is UiAction {
   return action === 'click' || action === 'type' || action === 'setValue' || action === 'setExpanded';
@@ -57,6 +73,7 @@ export function isUiAction(action: unknown): action is UiAction {
  */
 export function validateUiAction(request: UiInspectRequest): void {
   if (!isUiAction(request.action)) throw new Error('validateUiAction requires a ui action.');
+  validateUiScope(request.scopePath, request.action);
   // 查询与状态读取属于取证范围；与破坏性动作混用会让调用方误以为动作被限定在同一范围内。
   if (request.query !== undefined || request.readStates === true)
     throw new Error('query/readStates describe inspection and are not accepted for an action.');
@@ -97,6 +114,7 @@ export function validateUiQuery(query: unknown, readStates: unknown): void {
 }
 
 export interface UiInspectRequest {
+  scopePath?: UiScopeSelector[];
   query?: UiQuery;
   readStates?: boolean;
   schemaVersion?: string;
@@ -126,6 +144,7 @@ export interface UiInspectRequest {
 export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout' | 'budgetLimit' | 'maxWindows' | 'enumerationFailed';
 
 export interface UiInspectResult {
+  scopeResult?: { resolvedCount: number; failedIndex?: number; status: 'resolved' | 'not-found' | 'ambiguous' | 'incomplete'; visitedNodes: number; reason?: string };
   hostIdentity?: { version: string; informationalVersion?: string; configuration?: string; framework?: string };
   inspectionVersion?: number;
   helperPeakWorkingSetBytes?: number;
@@ -207,6 +226,9 @@ export const UiErrorCodes = {
   SHUTDOWN: 'SHUTDOWN',
   // 语义操作（click/type/setValue）结果码。只有唯一命中的目标才允许被操作。
   TARGET_NOT_FOUND: 'TARGET_NOT_FOUND',
+  SCOPE_NOT_FOUND: 'SCOPE_NOT_FOUND',
+  SCOPE_AMBIGUOUS: 'SCOPE_AMBIGUOUS',
+  SCOPE_SEARCH_INCOMPLETE: 'SCOPE_SEARCH_INCOMPLETE',
   TARGET_AMBIGUOUS: 'TARGET_AMBIGUOUS',
   TARGET_SEARCH_INCOMPLETE: 'TARGET_SEARCH_INCOMPLETE',
   TARGET_DISABLED: 'TARGET_DISABLED',

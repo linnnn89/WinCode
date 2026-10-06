@@ -185,6 +185,17 @@ public partial class MainWindow : Window
                 System.Windows.Automation.AutomationProperties.SetAutomationId(inner, "actionInnerOptions");
                 Add(new Expander { Header = "Outer options", IsExpanded = true, Content = inner }, "actionOuterOptions");
             }
+            if (Environment.GetCommandLineArgs().Contains("--scope-navigation"))
+            {
+                foreach (var (id, regionLabel, value) in new[] { ("scopeSpeech", "Speech", true), ("scopeDisplay", "Display", false) })
+                {
+                    var check = new CheckBox { Content = "Normalize", IsChecked = value };
+                    System.Windows.Automation.AutomationProperties.SetAutomationId(check, "scopeNormalize");
+                    var inner = new Expander { Header = "Advanced", Content = new StackPanel { Children = { check } } };
+                    System.Windows.Automation.AutomationProperties.SetAutomationId(inner, "scopeAdvanced");
+                    Add(new Expander { Header = regionLabel, IsExpanded = true, Content = new StackPanel { Children = { inner } } }, id);
+                }
+            }
 
             var disabled = new Button { Content = "Disabled", IsEnabled = false, Height = 30 };
             disabled.Click += (_, _) => echo.Text = "disabled-click";

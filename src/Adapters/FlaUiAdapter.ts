@@ -17,6 +17,7 @@ import {
 import {
   UiInspectRequest,
   validateUiQuery,
+  validateUiScope,
   validateUiAction,
   isUiAction,
   UI_INSPECTION_VERSIONS,
@@ -289,7 +290,7 @@ export class FlaUiAdapter implements IAdapter {
     operation?: OperationContext
   ): Promise<UiInspectResult> {
     const requestId = request.requestId || randomUUID();
-    try { validateUiQuery(request.query, request.readStates); }
+    try { validateUiQuery(request.query, request.readStates); validateUiScope(request.scopePath, request.action); }
     catch (error) { return {schemaVersion: "1.0", protocolVersion: "1.0", requestId, success: false, errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message}; }
     if (isUiAction(request.action)) {
       // 拒绝必须发生在启动 Helper 之前：破坏性动作没有"参数不对但仍先执行"的余地。
@@ -387,6 +388,17 @@ export class FlaUiAdapter implements IAdapter {
           };
         }
 
+        // An older host recognizes setExpanded but ignores scopePath. Check before sending any action.
+        if (normRequest.scopePath && isUiAction(normRequest.action)) {
+          const capability = await this.executeHost({ action: 'health', requestId: `${requestId}-scope`, pid: 0 },
+            Math.max(1, deadline - Date.now()), executionSignal);
+          if (!capability.success) return { ...capability, requestId,
+            ...(deadlineController.signal.aborted && !signal?.aborted && capability.errorCode === UiErrorCodes.CANCELLED
+              ? { errorCode:UiErrorCodes.TIMEOUT, errorMessage:'UI inspection deadline exceeded during capability check.' } : {}) };
+          if ((capability.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.PARENT_SCOPE)
+            return { schemaVersion:'1.0', protocolVersion:'1.0', requestId, success:false,
+              errorCode:UiErrorCodes.VERSION_MISMATCH, errorMessage:'scopePath requires inspectionVersion 5; no action was sent.' };
+        }
         const result = await this.executeHost(normRequest, Math.max(1, deadline - Date.now()), executionSignal);
         if (deadlineController.signal.aborted && !signal?.aborted && result.errorCode === UiErrorCodes.CANCELLED) {
           return { ...result, errorCode: UiErrorCodes.TIMEOUT, errorMessage: 'UI inspection deadline exceeded.' };
@@ -429,6 +441,9 @@ export class FlaUiAdapter implements IAdapter {
         };
       }
       // Old/custom helpers must not silently ignore a scoped query and return a whole window.
+      if (request.scopePath && parsed.success && (parsed.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.PARENT_SCOPE)
+        return { schemaVersion:'1.0', protocolVersion:'1.0', requestId:request.requestId, success:false,
+          errorCode:UiErrorCodes.VERSION_MISMATCH, errorMessage:'scopePath requires inspectionVersion 5.', auditNotice:parsed.auditNotice };
       if ((request.query || request.readStates) && parsed.success && (parsed.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.QUERY_AND_STATES) {
         return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
           success: false, errorCode: UiErrorCodes.VERSION_MISMATCH,
@@ -498,6 +513,7 @@ export class FlaUiAdapter implements IAdapter {
       requestId: request.requestId,
       action: request.action ?? 'inspect',
       query: request.query,
+      scopePath: request.scopePath,
       readStates: request.readStates,
       backgroundOnly: request.backgroundOnly,
       processName: request.processName,

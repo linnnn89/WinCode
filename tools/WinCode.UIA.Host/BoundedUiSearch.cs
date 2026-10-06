@@ -12,7 +12,7 @@ public sealed class BoundedUiSearch<T> where T : class
     private readonly Stopwatch elapsed = Stopwatch.StartNew();
 
     public void Run(T root, Func<T, T?> first, Func<T, T?> next, Func<T, bool?> match,
-        int maxNodes, int maxMatches, CancellationToken cancellation, int maxDepth = 50, int milliseconds = 2000)
+        int maxNodes, int maxMatches, CancellationToken cancellation, int maxDepth = 50, int milliseconds = 2000, bool includeRoot = true)
     {
         bool halted = false;
         bool Stop() {
@@ -26,7 +26,7 @@ public sealed class BoundedUiSearch<T> where T : class
             if (Stop()) return;
             Visited++;
             try {
-                var matches = match(node);
+                var matches = depth == 1 && !includeRoot ? false : match(node);
                 if (matches == null) Reason ??= "propertyUnavailable";
                 if (matches == true) {
                     if (Matches.Count >= maxMatches) { halted = true; Reason ??= "maxMatches"; return; }

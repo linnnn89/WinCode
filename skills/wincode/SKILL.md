@@ -7,7 +7,7 @@ description: 使用 WinCode MCP 分析 Windows/.NET 项目源码、引用与变�
 
 适用于 WinCode 0.16.0。已有正确工作区的 MCP 连接时直接使用；采用按需模式时，首次需要 WinCode 才按[诊断手册的会话入口](references/diagnostics.md#skill-按需会话)启动。Skill 被发现或读取不需要预启动任何进程。
 
-本份说明同时描述 `codex/hybrid-readonly-orchestration` 实验构建的客户端配方及展开导航。`readonly-ui`／`expand-ui` 是该分支 CLI action，不是标准 MCP 工具名；第十五轮增加已展开选择续接及局部诊断。使用前按手册核对当前连接／入口能力，旧 main 或旧连接不会因 Skill 更新获得新功能。
+本份说明同时描述 `codex/hybrid-readonly-orchestration` 实验构建的客户端配方及展开导航。`readonly-ui`／`expand-ui` 是该分支 CLI action，不是标准 MCP 工具名；第十五轮增加已展开选择续接及局部诊断，第十六轮增加标准 inspect/review 与 setExpanded 的 scopePath 父范围定位（inspectionVersion 5）。客户端配方尚未自动生成父路径或递归执行。使用前按手册核对当前连接／入口能力，旧 main 或旧连接不会因 Skill 更新获得新功能。
 
 只读取与当前任务有关的手册：
 

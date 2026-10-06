@@ -187,6 +187,40 @@ describe('semantic UI actions against the real WPF fixture', () => {
       } finally { await killProcessTree(nested.child); }
     });
 
+  it('parent paths isolate duplicate IDs and expansion without escaping missing or ambiguous scopes',
+    { timeout: 60000 }, async () => {
+      const scoped = await startFixture(['--background-fixture', '--scope-navigation']);
+      const inspect = async (scopePath?: any[], query = { automationId:'scopeAdvanced' }) =>
+        (await call('wincode_ui_inspect', { ...scoped.target, scopePath, query, readStates:true, capture:'none' })).body;
+      const expand = async (scopePath: any[]) =>
+        (await call('wincode_ui_set_expanded', { ...scoped.target, scopePath, targetAutomationId:'scopeAdvanced', expanded:true })).body;
+      try {
+        assert.equal((await inspect()).queryResult.status, 'ambiguous');
+        const voice = [{ automationId:'scopeSpeech' }];
+        const display = [{ automationId:'scopeDisplay' }];
+        assert.equal((await inspect(voice)).tree.states.expandCollapse, 'Collapsed');
+        for (const [scopePath, code, index] of [
+          [[{automationId:'missing'}], 'SCOPE_NOT_FOUND', 0],
+          [[{automationId:'scopeAdvanced'}], 'SCOPE_AMBIGUOUS', 0],
+          [[...voice, {automationId:'scopeSpeech'}], 'SCOPE_NOT_FOUND', 1],
+        ] as const) {
+          const failed = await expand([...scopePath]);
+          assert.equal(failed.success, false); assert.equal(failed.errorCode, code, JSON.stringify(failed));
+          assert.equal(failed.scopeResult.failedIndex, index);
+          assert.equal(failed.actionMethod, undefined);
+        }
+        assert.equal((await inspect(voice)).tree.states.expandCollapse, 'Collapsed');
+        assert.equal((await expand(voice)).success, true);
+        assert.equal((await inspect(display)).tree.states.expandCollapse, 'Collapsed');
+        const path = [...voice, {automationId:'scopeAdvanced'}];
+        const child = await inspect(path, {automationId:'scopeNormalize'});
+        assert.equal(child.queryResult.status, 'unique', JSON.stringify(child));
+        assert.equal(child.tree.states.toggle, 'On');
+        assert.equal(child.scopeResult.resolvedCount, 2);
+        assert.equal((await expand(voice)).actionMethod, 'ExpandCollapsePattern:no-op');
+      } finally { await killProcessTree(scoped.child); }
+    });
+
   it('real property failures allow auxiliary gaps but distinguish unknown enabled evidence from disabled targets',
     { timeout: 45000 }, async () => {
       // Separate fault window keeps unknown-enabled nodes out of the normal discovery scenarios.

@@ -52,7 +52,9 @@ node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标
 
 **状态续接与局部诊断。** 第十五轮的 candidateQuery 直接重新定位所选 Group，不重新发现全窗候选。当前唯一且有效的 Expanded 父级可继续读取，零额外展开；Collapsed 才操作一次。完整搜索无匹配／多义为 NAVIGATION_SELECTION_STALE；实际禁用、证据未知和搜索不完整分别报告准确原因。父级观察 Expanded 后仍缺目标时，读取 diagnosis.localObservation 和 nextAction：它保留本次父树范围、完整性、实际匹配与内层折叠候选，区分缺失、歧义和截断。任务未完成仍没有 findings，不把局部候选当成功答案，也不重放外层动作。局部 id／parentId 只用于本次关系说明；内层项没有可执行 nextRequest，下一步先独立唯一定位，详见[UI 手册](ui.md#操作方式与授权)。
 
-**预算与范围的实现边界。** 单次 expand-ui 的 deadline／调用数由程序限制；发现和选择请求各自计时，没有跨请求累计预算或绑定上次任务范围的校验，当前也不要求先新增这些框架。nextRequest 继承原字段属于请求构造，不是不可更改的权限令牌。沿用用户选定窗口与任务，不为已授权的导航逐步重复确认。不要把实验宿主的历史总预算说成日常 CLI 已实现能力。第十四轮允许展开导航中的 className／bounds／isOffscreen 缺口并保留记录；TARGET_EVIDENCE_INCOMPLETE 区分启用／身份证据未知与实际禁用。其他属性、普通只读工作流／源码门槛、父范围查询和递归导航仍是实现限制。
+**父范围与版本。** 第十六轮标准 inspect/review/setExpanded 接受 scopePath，需要 inspectionVersion 5；它逐层唯一解析实际父选择器，失败报告 SCOPE_NOT_FOUND／SCOPE_AMBIGUOUS／SCOPE_SEARCH_INCOMPLETE 及 scopeResult.failedIndex，不回退全窗。setExpanded 在发送动作前用同一 deadline 内的 health 检查能力；VERSION_MISMATCH 表示动作未发送。CLI 标准工具请求可以直接携带该字段，expand-ui 参数尚未接入父路径。旧连接不会热更新；调用前查看本实例 schema，字段与示例见[UI 手册](ui.md#操作方式与授权)。
+
+**预算与范围的实现边界。** 单次 expand-ui 的 deadline／调用数由程序限制；发现和选择请求各自计时，没有跨请求累计预算或绑定上次任务范围的校验，当前也不要求先新增这些框架。nextRequest 继承原字段属于请求构造，不是不可更改的权限令牌。沿用用户选定窗口与任务，不为已授权的导航逐步重复确认。不要把实验宿主的历史总预算说成日常 CLI 已实现能力。第十四轮允许展开导航中的 className／bounds／isOffscreen 缺口并保留记录；TARGET_EVIDENCE_INCOMPLETE 区分启用／身份证据未知与实际禁用。其他属性、普通只读工作流／源码门槛和自动递归导航仍是实现限制。
 
 **调用与回答的顺序。** 先确认实际窗口及页面，再提交工具／配方请求，等待相同 id 回执，读取完整 `resultFile`，核对 `isError`、业务状态及证据完整性，最后按实际观察回答。`{recipe,parameters}` 只是输入，打印参数不能代替调用。标准 inspect 的 `success:true` 只说明查询完成；仍须检查 `queryResult.status="unique"`、`searchComplete=true`、`treeComplete=true`、截断／属性问题及所选控件的明确状态。`not-found` 不能推成未勾选或数量为零。配方须为 `status="completed"`、`success=true` 且具有符合任务范围的 findings；`stopped` 或 `isError:true` 应保留错误与已有步骤，不自动重放。
 

@@ -1,9 +1,9 @@
-import type { UiNode } from '../Core/UiContracts.js';
+import type { UiNode, UiScopeSelector } from '../Core/UiContracts.js';
 import type { UiReviewResult } from '../CompositeTools/UiReview.js';
 import type { UiCodeCandidate } from '../Core/UiCodeMapper.js';
 
 /** Keep IDs and hierarchy intact so the image remains tied to the same observation. */
-export function compactUi(result: Omit<UiReviewResult, 'annotatedPngBase64' | 'screenshotPngBase64'>) {
+export function compactUi(result: Omit<UiReviewResult, 'annotatedPngBase64' | 'screenshotPngBase64'>, scopePath?: UiScopeSelector[]) {
   const nodes: UiNode[] = [];
   const compactNode = (node: UiNode): UiNode => {
     nodes.push(node);
@@ -24,6 +24,7 @@ export function compactUi(result: Omit<UiReviewResult, 'annotatedPngBase64' | 's
       expansionRequests.push({ tool: 'wincode_ui_inspect', arguments: {
         pid: result.pid, hwnd: result.hwnd, backgroundOnly: true, capture: 'none', responseFormat: 'full',
         ...(query ? { query } : {}),
+        ...(scopePath ? { scopePath } : {}),
       } });
     }
   }

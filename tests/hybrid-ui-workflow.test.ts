@@ -29,8 +29,59 @@ test('automatic expansion reports multiple or absent candidates without performi
     }, target, { childQuery: { automationId: 'check' } });
     assert.equal(checked.report.errorCode, count ? 'NAVIGATION_CANDIDATE_AMBIGUOUS' : 'NAVIGATION_CANDIDATE_NOT_FOUND');
     assert.equal(checked.report.diagnosis.candidates?.length, count);
+    if (count) {
+      assert.equal(checked.report.status, 'selection-required');
+      assert.equal(checked.isError, false);
+      assert.equal(checked.report.success, false);
+      assert.deepEqual(checked.report.diagnosis.candidates?.[0].nextRequest, { action: 'expand-ui', target,
+        parameters: { childQuery: { automationId: 'check' }, candidateQuery: { controlType: 'Group', automationId: 'group0' } }, timeoutMs: 15000 });
+    }
     assert.equal(checked.report.actionAttempted, false);
     assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect']);
+  }
+});
+
+test('candidate selection is checked against fresh discovery before any action', async () => {
+  for (const scenario of ['disappeared', 'renamed', 'disabled', 'incomplete', 'duplicate']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async tool => {
+      calls.push(tool);
+      const value = observation(); delete value.tree;
+      const group = { ...observation().tree!, automationId: 'speech', name: scenario === 'renamed' ? 'Other' : 'Speech',
+        controlType: 'Group', isEnabled: scenario !== 'disabled',
+        states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } };
+      const groups = scenario === 'disappeared' ? [] : scenario === 'duplicate' ? [group, structuredClone(group)] : [group];
+      value.queryResult = calls.length === 1 ? { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] }
+        : { status: scenario === 'incomplete' ? 'incomplete' : groups.length > 1 ? 'ambiguous' : groups.length ? 'unique' : 'not-found',
+          searchComplete: scenario !== 'incomplete', visitedNodes: 8, matches: groups };
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' }, candidateQuery: { automationId: 'speech', name: 'Speech', controlType: 'Group' } });
+    assert.equal(checked.report.errorCode, scenario === 'incomplete' ? 'NAVIGATION_DISCOVERY_INCOMPLETE' : 'NAVIGATION_SELECTION_STALE', scenario);
+    assert.equal(checked.report.actionAttempted, false);
+    assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect']);
+  }
+});
+
+test('selected navigation preserves failed actions and missing child evidence without replay', async () => {
+  for (const scenario of ['action-failed', 'wrong-parent']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async tool => {
+      calls.push(tool);
+      const value = observation();
+      const group = { ...value.tree!, automationId: 'speech', controlType: 'Group', isEnabled: true,
+        states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: calls.length >= 5 ? 'Expanded' : 'Collapsed' } };
+      if (calls.length === 1) { delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] }; }
+      else { value.tree = group; value.queryResult!.matches = [group]; }
+      if (tool === 'wincode_ui_set_expanded' && scenario === 'action-failed') {
+        value.success = false; value.errorCode = 'UI_ACTION_FAILED'; value.errorMessage = 'Action outcome unknown.';
+      }
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' }, candidateQuery: { automationId: 'speech', controlType: 'Group' } });
+    assert.equal(checked.report.errorCode, scenario === 'action-failed' ? 'UI_ACTION_FAILED' : 'CHILD_RELATIONSHIP_UNCONFIRMED');
+    assert.equal(checked.report.actionAttempted, true);
+    assert.equal(checked.report.findings, undefined);
+    assert.equal(calls.filter(tool => tool === 'wincode_ui_set_expanded').length, 1);
+    assert.equal(calls.length, scenario === 'action-failed' ? 4 : 5);
   }
 });
 

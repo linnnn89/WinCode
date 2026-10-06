@@ -68,9 +68,13 @@ captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-
 
 实验分支的展开导航独立于只读取证。目标缺失时先区分完整搜索无匹配、搜索不完整和歧义；只用用户授权范围内的实际父级名称／标识提出候选，不把所有 not-found 当成折叠。`wincode_ui_set_expanded({pid,hwnd,targetName,targetControlType,expanded:true})` 在完整唯一搜索、启用且明确 Expanded／Collapsed 状态成立后才受理；不支持、未知状态或歧义时拒绝，不回退为 click／坐标／焦点。动作回执只表示调用被接受，之后必须读回展开状态及原子控件。超时或失败不自动重放。
 
-客户端 `WinCodeSession.expandUiWorkflow(target,{parentQuery?,childQuery},options)` 接收目标复选框查询，可选明确父级候选；共用固定 PID/HWND、15 秒默认总预算（上限 30 秒）。提供父级时最多 5 次调用；省略父级时最多 6 次。保存首次查询，诊断父级根状态；Collapsed 才设置 Expanded 一次，随后要求完整父级树证明子控件归属，再单独读回子控件的真实 toggle 状态。根状态诊断有意只返回一层，允许仅 maxDepth 截断；这不代表父级子树完整，最终验证仍要求完整子树、唯一匹配和无属性／遍历问题。它不会递归探索任意菜单，且可能因较大的父级树超预算而停止。普通 `readonly-ui` 不触发任何导航动作。
+客户端 `WinCodeSession.expandUiWorkflow(target,{parentQuery?,candidateQuery?,childQuery},options)` 接收目标复选框查询，可选明确父级或待重新核验的发现候选；parentQuery 与 candidateQuery 不能同时提供。共用固定 PID/HWND、15 秒默认总预算（上限 30 秒）。提供显式父级时最多 5 次调用；自动发现或候选选择时最多 6 次。保存首次查询，诊断父级根状态；Collapsed 才设置 Expanded 一次，随后要求完整父级树证明子控件归属，再单独读回子控件的真实 toggle 状态。根状态诊断有意只返回一层，允许仅 maxDepth 截断；这不代表父级子树完整，最终验证仍要求完整子树、唯一匹配和无属性／遍历问题。它不会递归探索任意菜单，且可能因较大的父级树超预算而停止。普通 `readonly-ui` 不触发任何导航动作。
 
-**省略父级的有限发现。** 目标已唯一可见且取证完整时，直接读取，只有 1 次调用。完整搜索未找到目标时，在同一窗口搜索 `Group`（最多搜索 1000 个节点、20 个匹配）；仅当搜索完整、状态已知，且存在唯一启用的 Collapsed Group，才使用实际名称／AutomationId 和类型重新定位并尝试展开。候选唯一不能证明目标在其中，仍须后续归属验证。多个候选返回 `NAVIGATION_CANDIDATE_AMBIGUOUS` 和 `diagnosis.candidates`，由调用方依据额外证据提供 `parentQuery`；零候选、搜索不完整、状态未知或候选无可用标识均停止，不执行点击回退。这个试点只覆盖 Group，不遍历菜单、Tab、TreeItem，不证明任意导航发现能力。
+**省略父级的有限发现。** 目标已唯一可见且取证完整时，直接读取，只有 1 次调用。完整搜索未找到目标时，在同一窗口搜索 `Group`（最多搜索 1000 个节点、20 个匹配）；搜索完整、状态已知且唯一启用的 Collapsed Group 可自动重新定位并尝试展开。候选唯一不能证明目标在其中，仍须后续归属验证。零候选、搜索不完整、状态未知或候选无可用标识均停止，不执行点击回退。这个试点只覆盖 Group，不遍历菜单、Tab、TreeItem，不证明任意导航发现能力。
+
+**多个候选交给当前 AI 选择。** 多候选且有可定位项时返回 `status:"selection-required"`、`success:false`、`isError:false`，保留诊断码 `NAVIGATION_CANDIDATE_AMBIGUOUS`；这是待决策结果，不是任务完成。`diagnosis.candidates` 每项包含实际 query/state；可定位项附 `nextRequest`（action、target、parameters、timeoutMs）。依据目标任务和当前页面证据选择一个相关项，补一个新 id 后原样提交其请求；不要默认选第一项、编造候选或展开全部。证据不足时追加相关只读观察或澄清。本轮一次选择，最多一次展开，不自行循环探索其他候选。
+
+后续 `candidateQuery` 必须含实际名称或 AutomationId，可带 Group 类型，不能带搜索预算。它会重新搜索当前窗口并要求选择仍对应唯一、启用的折叠候选，再重新定位、操作并验证。候选消失、改名、禁用或重复时返回 `NAVIGATION_SELECTION_STALE`，不操作；动作失败或子控件归属不成立也停止，不自动重放。目标已经可见时仍直接读取，没有必要再执行选择。程序校验选择的当前有效性；相关性的语义判断由调用方 AI 完成，没有内部评分模型。
 
 先按任务选定模式，再调用。
 

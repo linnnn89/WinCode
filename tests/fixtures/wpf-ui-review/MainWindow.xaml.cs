@@ -139,7 +139,14 @@ public partial class MainWindow : Window
 
             var childCheck = new CheckBox { Content = "Normalize", IsChecked = true };
             System.Windows.Automation.AutomationProperties.SetAutomationId(childCheck, "actionNormalize");
-            Add(new Expander { Header = "Advanced", Content = childCheck }, "actionAdvanced");
+            var navigationCandidates = Environment.GetCommandLineArgs().Contains("--navigation-candidates");
+            Add(new Expander { Header = navigationCandidates ? "Speech advanced" : "Advanced", Content = childCheck }, "actionAdvanced");
+            if (navigationCandidates)
+            {
+                var displayCheck = new CheckBox { Content = "Dark theme", IsChecked = false };
+                System.Windows.Automation.AutomationProperties.SetAutomationId(displayCheck, "actionDarkTheme");
+                Add(new Expander { Header = "Display advanced", Content = displayCheck, IsExpanded = true }, "actionDisplayAdvanced");
+            }
 
             var disabled = new Button { Content = "Disabled", IsEnabled = false, Height = 30 };
             disabled.Click += (_, _) => echo.Text = "disabled-click";

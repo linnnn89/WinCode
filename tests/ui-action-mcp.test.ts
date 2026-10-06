@@ -104,8 +104,8 @@ describe('semantic UI actions against the real WPF fixture', () => {
     const executable = path.resolve(root, 'tests/fixtures/wpf-ui-review/bin/Release/net10.0-windows/win-x64/publish/wpf-ui-review.exe');
     const built = fs.existsSync(executable);
     fixture = spawn(built ? executable : 'dotnet',
-      built ? ['--action-fixture', '--auto-close=120000']
-        : ['run', '--project', 'tests/fixtures/wpf-ui-review/wpf-ui-review.csproj', '--no-build', '--', '--action-fixture', '--auto-close=120000'],
+      built ? ['--action-fixture', '--navigation-candidates', '--auto-close=120000']
+        : ['run', '--project', 'tests/fixtures/wpf-ui-review/wpf-ui-review.csproj', '--no-build', '--', '--action-fixture', '--navigation-candidates', '--auto-close=120000'],
       { cwd: root, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: false });
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('fixture launch timed out waiting for READY')), 20000);
@@ -187,6 +187,32 @@ describe('semantic UI actions against the real WPF fixture', () => {
     assert.equal(result.report.findings?.state, 'On');
     const unchanged = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionAdvanced', expanded: true });
     assert.equal(unchanged.body.status, 'already-expanded');
+  });
+
+  it('returns selectable live candidates and expands only the chosen group', { timeout: 30000 }, async () => {
+    for (const id of ['actionAdvanced', 'actionDisplayAdvanced']) {
+      const collapsed = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: id, expanded: false });
+      assert.equal(collapsed.body.success, true, JSON.stringify(collapsed));
+    }
+    const { runExpandUiWorkflow } = await import('../src/Client/ExpandUiWorkflow.js');
+    const caller = (name: string, args: Record<string, unknown>, options: any) => client.callTool({ name, arguments: args }, options);
+    const first = await runExpandUiWorkflow(caller, { pid, hwnd }, { childQuery: { automationId: 'actionNormalize' } });
+    assert.equal(first.report.status, 'selection-required', JSON.stringify(first.report));
+    assert.equal(first.isError, false);
+    assert.equal(first.report.actionAttempted, false);
+    assert.equal(first.report.diagnosis.candidates?.length, 2);
+    const chosen = first.report.diagnosis.candidates!.find(candidate => candidate.query.name === 'Speech advanced');
+    assert.ok(chosen?.nextRequest);
+    const request = chosen.nextRequest;
+    const selected = await runExpandUiWorkflow(caller, request.target, request.parameters, { timeoutMs: request.timeoutMs });
+    assert.equal(selected.report.success, true, JSON.stringify(selected.report));
+    assert.equal(selected.report.diagnosis.candidateSource, 'selected-group');
+    assert.equal(selected.report.diagnosis.relationshipVerified, true);
+    assert.equal(selected.report.findings?.state, 'On');
+    assert.equal(selected.report.steps.filter(step => step.tool === 'wincode_ui_set_expanded').length, 1);
+    const other = await call('wincode_ui_inspect', { pid, hwnd, query: { automationId: 'actionDisplayAdvanced' }, readStates: true });
+    assert.equal(other.body.tree.states.expandCollapse, 'Collapsed');
+    await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionDisplayAdvanced', expanded: true });
   });
 
   it('refuses ambiguous or unsupported navigation and preserves the parent state', { timeout: 30000 }, async () => {

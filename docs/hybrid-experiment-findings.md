@@ -284,3 +284,27 @@ CLI 显式 close 并实际退出，独立检查入口与 Gateway 均无残留；
 当前能力只覆盖唯一的折叠 Group。其他控件类型、多个候选的语义选择、两层以上路径与虚拟化节点仍未实现。本轮未运行外部 LLM API，不证明更便宜模型会正确自主选择目标，也不能把单一真实应用验收推广为任意菜单发现成功。
 
 本地原始结果位于 Git 忽略的 `test-tmp/hybrid-twelfth-checks/` 及会话附件 `test-tmp/skill-sessions/run-wOyXEl/`；包含本机路径／目标标识／区域控件文字，不提交或当匿名附件。取证没有读取输入值或访问 New-tavern 密钥配置，Group 查询仍会遍历窗口属性，并非完整隐私隔离。公开文件只记脱敏行为和数量。已配置 DeepSeek 凭据的原值及 JSON／URL／Base64 变体在本轮公开变更、本地记录和会话附件中的匹配为 0；只在内存中比对，不发起模型请求。此结论限于该已知凭据与指定文件，不声称扫描所有未知个人秘密。公开新增行的绝对路径、邮箱及密钥形状检查和文档相对链接／围栏检查通过。
+
+## 第十三轮多候选选择（2026-10-06）
+
+### 行为与范围
+
+用户批准接通“多个候选 → 当前 AI 选择 → 程序验证执行”。原实现已有候选列表和显式 parentQuery，但把多候选统一标记为 stopped 错误。本轮增加明确的待选择结果和候选请求，保持原生协议与依赖不变。
+
+发现多个完整、启用、折叠的 Group 且存在可定位项时，返回 status=selection-required、success=false、isError=false，保留 NAVIGATION_CANDIDATE_AMBIGUOUS 诊断码。候选包含实际名称／AutomationId／类型／状态，可定位项附 nextRequest，绑定本次 target、childQuery 与 timeoutMs。调用方必须读取完整结果，根据任务与实际候选文字选择一个，补新 id 提交；等待选择不能当作任务成功。没有新模型调用或确定性语义评分，实际选择由当前客户端 AI 作出。
+
+新 candidateQuery 与 parentQuery 互斥。选择后的请求先重新观察目标与完整 Group 匹配集，要求选择仍对应唯一、启用、折叠候选，再以当前实际身份重新定位。消失、改名、禁用或重复返回 NAVIGATION_SELECTION_STALE，零动作；搜索不完整保留 NAVIGATION_DISCOVERY_INCOMPLETE。动作失败／结果未知或展开后找不到唯一目标均停止，不重放。目标已可见时直接读取；显式父级及单候选路径保留。每选择请求最多 6 次工具调用、1 次展开，本轮客户端只做一次候选选择，没有自动遍历列表或多层递归。
+
+### 验证方法与结果
+
+新增恰好 3 项回归：选择必须经实时发现验证（消失、改名、禁用、不完整、重复）；动作失败／选错父级不重放、不生成 findings；真实 WPF 两个折叠区域下的发现与选择，仅展开所选区域。另更新已有多候选测试验证新状态与 nextRequest 契约。先运行两个新增单元测试和该既有契约测试，旧实现三项失败（未知 candidateQuery／仍为 stopped），实现后三项通过。真实 WPF 测试在既有 action fixture 中用可选 --navigation-candidates 增加 Speech advanced 与 Display advanced，不修改用户应用。新场景与既有导航兼容回归共 5/5；类型检查、fixture 发布、Gateway 构建通过。完整核心回归仅一次，项目 SDK 与文件并发 4，487/487。
+
+当前 Codex 另外通过一个分支 CLI 会话完成实际功能验收，核对 buildId `d88d2d13ccd6dd81e09f2bc60046d3ad6a86abbd466f4a58e9ecc5a7ea565754`，读取全部结果文件。观察两个 Group 后，将显示区域折叠作为前置准备；语音区域初始已折叠。正式任务查询 Normalize，发现阶段两次读取，返回两个实际标题及 nextRequest，零动作。当前 Codex 根据语音 Normalize 任务与 Speech／Display 标题选择 Speech advanced，并提交返回请求：重新扫描后六次调用，明确展开一次、父级完整验证、目标 On；最后独立读取显示 Group 为 Collapsed。发现约 1.75 秒、后续流程约 5.24 秒，均不含启动、准备、AI 决策与结果文件读取成本；单次客户端验收不作为模型成功率／性能统计。
+
+本轮窗口枚举、准备、正式请求和独立对照共 12 次目标 helper 审计，均有成功结束记录且原 helper 无残留；自有 fixture、CLI 入口、Gateway 均独立检查退出。仅导航与状态读取，没有输入或业务设置保存。未专门采样前台变化，不宣称界面操作绝不打扰用户。
+
+### 限制与隐私
+
+多候选实际验收使用独立真实 WPF fixture；New-tavern 此前只证明单候选路径，当前未发现或安排非 fixture 的多候选页面。候选信息本轮仅含实际身份与状态，未增加祖先路径／邻近标签／图像辅助；遇到语义相近候选仍需进一步只读取证或澄清。多层嵌套、任意菜单／Tab／TreeItem 与自动多次尝试未实现。候选有效性验证能拒绝失效选择，但不能保证 AI 语义判断正确，因此展开后的目标归属仍是完成条件。
+
+本地记录在忽略目录 `test-tmp/hybrid-thirteenth-checks/` 与 `test-tmp/skill-sessions/run-DRwrfe/`，不提交；可能含本机路径、PID/HWND、窗口控件文字，不当匿名附件。已知 DeepSeek 凭据及 JSON／URL／Base64 变体在本轮公开变更、本地记录和会话附件中的匹配为 0；只在本机内存中比对，未请求模型 API。公开新增行的绝对路径、邮箱和密钥形状扫描，以及文档相对链接／围栏检查通过。此结论限于已知凭据和所列范围，不代表所有未知个人秘密已扫描。main、默认安装和无关文件保持既有状态。

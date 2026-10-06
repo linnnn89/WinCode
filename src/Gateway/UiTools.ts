@@ -20,6 +20,7 @@ function validateActionRequest(args: UiActionArgs, action: UiAction): void {
     action, pid: args.pid, hwnd: args.hwnd,
     targetAutomationId: args.targetAutomationId, targetName: args.targetName,
     targetControlType: args.targetControlType, inputText: args.inputText, clearBefore: args.clearBefore,
+    expanded: args.expanded,
   });
 }
 
@@ -31,6 +32,7 @@ type UiActionArgs = {
   pid?: number; hwnd?: string;
   targetAutomationId?: string; targetName?: string; targetControlType?: string;
   inputText?: string; clearBefore?: boolean;
+  expanded?: boolean;
 };
 type UiTypeArgs = UiActionArgs & { inputText: string; mode?: 'type' | 'setValue' };
 
@@ -198,6 +200,21 @@ export const UI_TOOLS = [
   }),
   inspectDefinition,
   clickDefinition,
+  defineTool<UiActionArgs & { expanded: boolean }>({
+    name: 'wincode_ui_set_expanded',
+    description: 'Sets one unique enabled control to an explicit Expanded or Collapsed state using ExpandCollapsePattern. Already in the requested state is a no-op. No mouse, focus, click fallback or automatic retry. Verify state and child controls with inspect afterwards. Requires an inspectionVersion 4 helper.',
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    inputSchema: { type: 'object', additionalProperties: true,
+      properties: { ...actionTargetProperties, expanded: { type: 'boolean' } }, required: ['expanded'],
+      anyOf: [{ required: ['pid'] }, { required: ['hwnd'] }] },
+  }, {
+    invalidArguments, validate: args => validateActionRequest(args, 'setExpanded'), requestBudget: 'ui',
+    preserveOutcomeOnInterruption: true,
+    execute: async (args, { router, signal }) => {
+      const result = await router.performUiAction({ ...args, hwnd: args.hwnd?.trim(), action: 'setExpanded' }, signal);
+      return jsonResult(result, false, !result.success);
+    },
+  }),
   typeDefinition,
   defineTool<UiReviewArgs>({
     name: 'wincode_ui_review',

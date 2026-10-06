@@ -49,6 +49,7 @@ public class InspectRequest
     public string? TargetControlType { get; set; }
     public string? InputText { get; set; }
     public bool ClearBefore { get; set; }
+    public bool? Expanded { get; set; }
 }
 
 /// <summary>被操作控件的身份证据；不包含输入文本，避免在结果中回显敏感内容。</summary>
@@ -76,8 +77,8 @@ public sealed record HostBuildIdentity(string Version, string? InformationalVers
 public class InspectResponse
 {
     public HostBuildIdentity HostIdentity { get; } = HostBuildIdentity.Current;
-    /// <summary>取证结构版本：2 增加 query/readStates，3 增加语义操作（click/type/setValue）。</summary>
-    public int InspectionVersion { get; set; } = 3;
+    /// <summary>2 增加 query/readStates，3 增加语义操作，4 增加明确展开／折叠。</summary>
+    public int InspectionVersion { get; set; } = 4;
     public long? HelperPeakWorkingSetBytes { get; set; }
     public QueryResultDto? QueryResult { get; set; }
     public bool? TreeComplete { get; set; }

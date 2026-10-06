@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { withTimeout } from '../Core/ResourceManager.js';
 import { runReadonlyUiWorkflow, type UiReader, type UiTarget, type UiWorkflowOptions } from './ReadonlyUiWorkflow.js';
 import { createReadonlyUiRecipe, type CheckboxAuditParameters } from './ReadonlyUiRecipes.js';
+import { runExpandUiWorkflow, type ExpandUiParameters } from './ExpandUiWorkflow.js';
 
 export interface SkillSessionOptions {
   workspace: string;
@@ -74,6 +75,17 @@ export class WinCodeSession {
   get status() {
     return { state: this.state, workspace: this.workspace, pid: this.transport?.pid ?? null,
       identity: this.identity ? { ...this.identity } : null, error: this.failure?.message ?? null };
+  }
+
+  /** Explicit navigation is separate from readonly recipes and participates in owner shutdown. */
+  expandUiWorkflow(target: UiTarget, parameters: ExpandUiParameters, options: UiWorkflowOptions = {}) {
+    if (['failed', 'closing', 'closed'].includes(this.state)) throw this.failure ?? new Error('Session is closed; create a new session explicitly.');
+    const running = runExpandUiWorkflow(this.call.bind(this), target, parameters, { ...options,
+      signal: AbortSignal.any([this.shutdown.signal, ...(options.signal ? [options.signal] : [])]) });
+    this.workflows.add(running);
+    const finished = () => { this.workflows.delete(running); };
+    void running.then(finished, finished);
+    return running;
   }
 
   /** Installed client recipe; compile/validate parameters before the first tool read. */

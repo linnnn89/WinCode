@@ -22,6 +22,7 @@ UI 工具同样占用每实例 32 个业务受理槽；既有 UI/健康探测互
 | `readStates` | 可选布尔值，默认 `false`；只读状态，不执行动作或读取输入值 |
 | `query` | 可选对象；至少有一个规范定位字段 `automationId/name/controlType`，每个为非空白字符串、最长 256；可选 `maxSearchNodes` 整数 1–5000、默认 1000，`maxMatches` 整数 1–20、默认 10。仅有未知字段不构成有效查询 |
 | `wincode_ui_click` | `pid`/`hwnd` 至少一个；`targetAutomationId`/`targetName`/`targetControlType` 至少一个，每个为非空白字符串、最长 256 |
+| `wincode_ui_set_expanded` | 实验分支：同 click 的定位字段，必填 `expanded` 布尔值；只用 ExpandCollapsePattern 明确设置展开／折叠，已处于所需状态时不操作；需要 inspectionVersion 4 Host |
 | `wincode_ui_type` | 具备上述 click 的全部字段，另必填 `inputText`（最长 4096；mode=type 必须非空，mode=setValue 允许空字符串以清空值）；可选 `clearBefore`（布尔，默认 false，仅 mode=type 有效）、`mode`（`type`/`setValue`，默认 `type`） |
 | `wincode_ui_review` | 接受上述 inspect 的全部规范字段，另必填 `candidateFiles`：1–16 个相对 `.xaml` 路径、每项最长 512；可选 `candidateCodeFiles`：1–8 个相对 `.cs` 路径、每项最长 512；可选 `textQueries`：最多 5 个非空字面字符串、每项最长 80 |
 
@@ -64,6 +65,10 @@ captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-
 多个控件若指向同一文件、相邻赋值，可在确认文件未变化后复用当前会话已展示的精确行；有缺口时合并为一次有界 lineRanges 请求。不要因为每个候选都带 nextRequest 就机械重复读取。复用仅限已经核对的正文，不代表这些运行时 UI 证据获得了跨调用有效期保证，也不扩大运行时绑定结论。
 
 ## 操作方式与授权
+
+实验分支的展开导航独立于只读取证。目标缺失时先区分完整搜索无匹配、搜索不完整和歧义；只用用户授权范围内的实际父级名称／标识提出候选，不把所有 not-found 当成折叠。`wincode_ui_set_expanded({pid,hwnd,targetName,targetControlType,expanded:true})` 在完整唯一搜索、启用且明确 Expanded／Collapsed 状态成立后才受理；不支持、未知状态或歧义时拒绝，不回退为 click／坐标／焦点。动作回执只表示调用被接受，之后必须读回展开状态及原子控件。超时或失败不自动重放。
+
+客户端 `WinCodeSession.expandUiWorkflow(target,{parentQuery,childQuery},options)` 接收一个明确父级候选与目标复选框查询，共用固定 PID/HWND、15 秒默认总预算（上限 30 秒），最多 5 次调用。保存首次查询，诊断父级根状态；Collapsed 才设置 Expanded 一次，随后要求完整父级树证明子控件归属，再单独读回子控件的真实 toggle 状态。根状态诊断有意只返回一层，允许仅 maxDepth 截断；这不代表父级子树完整，最终验证仍要求完整子树、唯一匹配和无属性／遍历问题。它不会递归探索任意菜单，且可能因较大的父级树超预算而停止。普通 `readonly-ui` 不触发任何导航动作。
 
 先按任务选定模式，再调用。
 

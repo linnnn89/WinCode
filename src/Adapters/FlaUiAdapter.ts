@@ -436,10 +436,11 @@ export class FlaUiAdapter implements IAdapter {
       }
       // 旧 Helper 不认得 action 字段，会退化成一次只读取证并返回 success=true。
       // 那种结果不能当作操作已执行，必须在协议层按版本拒绝。
-      if (isUiAction(request.action) && parsed.success && (parsed.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.ACTIONS) {
+      const actionVersion = request.action === 'setExpanded' ? UI_INSPECTION_VERSIONS.EXPAND_COLLAPSE : UI_INSPECTION_VERSIONS.ACTIONS;
+      if (isUiAction(request.action) && parsed.success && (parsed.inspectionVersion ?? 0) < actionVersion) {
         return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
           success: false, errorCode: UiErrorCodes.VERSION_MISMATCH,
-          errorMessage: `The ${request.action} action requires an inspectionVersion ${UI_INSPECTION_VERSIONS.ACTIONS} helper; this helper ignored the requested action.`,
+          errorMessage: `The ${request.action} action requires an inspectionVersion ${actionVersion} helper; this helper ignored the requested action.`,
           auditNotice: parsed.auditNotice };
       }
       return parsed;
@@ -513,6 +514,7 @@ export class FlaUiAdapter implements IAdapter {
       targetName: request.targetName,
       targetControlType: request.targetControlType,
       inputText: request.inputText,
+      expanded: request.expanded,
       clearBefore: request.clearBefore,
     });
 

@@ -118,7 +118,11 @@ export async function runReadonlyUiWorkflow<T>(call: UiReadCaller, target: UiTar
         if (value.pid !== fixed.pid || !value.hwnd || BigInt(value.hwnd) !== BigInt(fixed.hwnd))
           throw new WorkflowStop('TARGET_CHANGED', 'Response does not belong to the fixed PID and HWND.');
         if (value.queryResult && value.queryResult.status !== 'unique')
-          throw new WorkflowStop('QUERY_' + value.queryResult.status.toUpperCase().replace('-', '_'), 'Query did not identify a complete unique region.');
+          throw new WorkflowStop('QUERY_' + value.queryResult.status.toUpperCase().replace('-', '_'),
+            value.queryResult.status === 'not-found' && value.queryResult.searchComplete ?
+              'Complete search found no match. Verify page/selector and inspect an authorized parent candidate; a collapsed cause is unproven. Readonly workflows never perform navigation.' :
+              value.queryResult.status === 'ambiguous' ? 'Selector matched multiple controls. Add an observed exact identifier; no navigation is permitted.' :
+              'Search is incomplete. Do not infer absence or state; obtain complete scoped evidence before continuing.');
         const nodeIssues = (node: UiNode): boolean => Boolean(node.propertyIssues?.length) || node.children.some(nodeIssues);
         if (!value.tree || value.treeComplete !== true || value.truncated || value.traversalErrors || value.propertyIssueCount || nodeIssues(value.tree) ||
           value.queryResult?.searchComplete === false || value.sourceEvidenceOmitted || value.codeEvidenceOmitted ||

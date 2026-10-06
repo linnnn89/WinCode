@@ -144,6 +144,7 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 | `wincode_ui_list_windows` | List visible top-level windows with process and title filters. |
 | `wincode_ui_inspect` | Read controls and optional states or screenshots. |
 | `wincode_ui_click` | Click one uniquely matched control through UI Automation patterns. |
+| `wincode_ui_set_expanded` | Hybrid test branch: explicitly expand/collapse one uniquely matched enabled control; requires inspectionVersion 4. Verify its state afterwards. |
 | `wincode_ui_type` | Type text into, or set the value of, one uniquely matched control. |
 | `wincode_ui_review` | Inspect UI and return candidate XAML/C# source locations. |
 | `wincode_hello_world` | Read instance identity, workspace binding, capabilities and known status. |
@@ -315,6 +316,7 @@ npm run delivery:verify
 | `wincode_ui_list_windows` | 列出可见顶层窗口，支持按进程和标题筛选。 |
 | `wincode_ui_inspect` | 读取控件信息，以及可选的状态或截图。 |
 | `wincode_ui_click` | 通过 UI Automation 模式点击唯一命中的控件。 |
+| `wincode_ui_set_expanded` | 混合测试分支：明确展开／折叠唯一、启用的控件；需要 inspectionVersion 4，之后须读回状态。 |
 | `wincode_ui_type` | 向唯一命中的控件输入文本，或直接写入其值。 |
 | `wincode_ui_review` | 检查 UI 并返回 XAML/C# 源码候选位置。 |
 | `wincode_hello_world` | 读取实例身份、工作区绑定、能力及已知状态。 |

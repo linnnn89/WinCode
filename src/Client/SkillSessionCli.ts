@@ -71,11 +71,12 @@ function receive(line: string) {
       active.controller.abort(new Error('Skill request cancelled.'));
       write({ id, cancellationRequested: true, targetId: active.id }); return;
     }
-    if (request.action !== undefined && request.action !== 'readonly-ui') throw new Error('Unknown session action.');
+    if (request.action !== undefined && !['readonly-ui', 'expand-ui'].includes(request.action)) throw new Error('Unknown session action.');
     if (active) throw new Error('A request is already active; await its result or cancel it explicitly.');
     const program = request.action === 'readonly-ui' ? createReadonlyUiRecipe(request.recipe, request.parameters) : undefined;
-    if (program) {
-      if (Object.keys(request).some(key => !['id', 'action', 'recipe', 'target', 'parameters', 'timeoutMs'].includes(key)) ||
+    if (program || request.action === 'expand-ui') {
+      const fields = request.action === 'expand-ui' ? ['id', 'action', 'target', 'parameters', 'timeoutMs'] : ['id', 'action', 'recipe', 'target', 'parameters', 'timeoutMs'];
+      if (Object.keys(request).some(key => !fields.includes(key)) ||
         !request.target || typeof request.target !== 'object' || Array.isArray(request.target) ||
         Object.keys(request.target).some(key => !['pid', 'hwnd'].includes(key)))
         throw new Error('Readonly recipe requires a fixed target and no unsupported request fields.');
@@ -85,7 +86,8 @@ function receive(line: string) {
     active = current;
     current.done = (async () => {
       try {
-        const result = program ? await session.readonlyUiWorkflow(request.target, program,
+        const result = request.action === 'expand-ui' ? await session.expandUiWorkflow(request.target, request.parameters,
+          { signal: controller.signal, timeoutMs: request.timeoutMs }) : program ? await session.readonlyUiWorkflow(request.target, program,
           { signal: controller.signal, timeoutMs: request.timeoutMs }) :
           await session.call(request.tool, request.arguments ?? {}, { signal: controller.signal, timeoutMs: request.timeoutMs });
         try { await respond(current.id, result); }

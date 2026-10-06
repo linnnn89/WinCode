@@ -137,6 +137,10 @@ public partial class MainWindow : Window
             toggle.Unchecked += (_, _) => echo.Text = "toggled:false";
             Add(toggle, "actionToggle");
 
+            var childCheck = new CheckBox { Content = "Normalize", IsChecked = true };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(childCheck, "actionNormalize");
+            Add(new Expander { Header = "Advanced", Content = childCheck }, "actionAdvanced");
+
             var disabled = new Button { Content = "Disabled", IsEnabled = false, Height = 30 };
             disabled.Click += (_, _) => echo.Text = "disabled-click";
             Add(disabled, "actionDisabled");

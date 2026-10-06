@@ -1,6 +1,6 @@
 /**
  * Bounded Windows UI inspection contracts. Optional query/state fields require inspectionVersion 2;
- * semantic actions (click/type/setValue) require inspectionVersion 3.
+ * semantic actions require inspectionVersion 3; explicit expand/collapse requires version 4.
  */
 
 export interface UiRect {
@@ -42,13 +42,13 @@ export interface UiQuery {
   maxSearchNodes?: number; maxMatches?: number;
 }
 
-export type UiAction = 'click' | 'type' | 'setValue';
+export type UiAction = 'click' | 'type' | 'setValue' | 'setExpanded';
 
 /** 取证结构版本：2 增加 query/readStates，3 增加语义操作。旧 Helper 不得被当作新能力。 */
-export const UI_INSPECTION_VERSIONS = { QUERY_AND_STATES: 2, ACTIONS: 3 } as const;
+export const UI_INSPECTION_VERSIONS = { QUERY_AND_STATES: 2, ACTIONS: 3, EXPAND_COLLAPSE: 4 } as const;
 
 export function isUiAction(action: unknown): action is UiAction {
-  return action === 'click' || action === 'type' || action === 'setValue';
+  return action === 'click' || action === 'type' || action === 'setValue' || action === 'setExpanded';
 }
 
 /**
@@ -67,8 +67,10 @@ export function validateUiAction(request: UiInspectRequest): void {
       throw new Error('Invalid target selector.');
   if (request.clearBefore !== undefined && typeof request.clearBefore !== 'boolean') throw new Error('clearBefore must be boolean.');
   if (request.clearBefore === true && request.action !== 'type') throw new Error('clearBefore is only supported for the type action.');
-  if (request.action === 'click') {
-    if (request.inputText !== undefined) throw new Error('inputText is not accepted for the click action.');
+  if (request.action === 'setExpanded' && typeof request.expanded !== 'boolean') throw new Error('expanded must be boolean.');
+  if (request.action !== 'setExpanded' && request.expanded !== undefined) throw new Error('expanded is only supported for setExpanded.');
+  if (request.action === 'click' || request.action === 'setExpanded') {
+    if (request.inputText !== undefined) throw new Error(`inputText is not accepted for the ${request.action} action.`);
     return;
   }
   if (typeof request.inputText !== 'string' || request.inputText.length > 4096) throw new Error('inputText is required and must be at most 4096 characters.');
@@ -118,6 +120,7 @@ export interface UiInspectRequest {
   inputText?: string;
   /** 仅 type 有效：先清空目标控件的既有内容。 */
   clearBefore?: boolean;
+  expanded?: boolean;
 }
 
 export type UiTruncateReason = 'maxDepth' | 'maxNodes' | 'timeout' | 'budgetLimit' | 'maxWindows' | 'enumerationFailed';
@@ -208,6 +211,8 @@ export const UiErrorCodes = {
   TARGET_SEARCH_INCOMPLETE: 'TARGET_SEARCH_INCOMPLETE',
   TARGET_DISABLED: 'TARGET_DISABLED',
   NO_CLICK_PATTERN: 'NO_CLICK_PATTERN',
+  NO_EXPAND_COLLAPSE_PATTERN: 'NO_EXPAND_COLLAPSE_PATTERN',
+  EXPAND_STATE_UNSUPPORTED: 'EXPAND_STATE_UNSUPPORTED',
   NO_VALUE_PATTERN: 'NO_VALUE_PATTERN',
   VALUE_READONLY: 'VALUE_READONLY',
   FOCUS_FAILED: 'FOCUS_FAILED',

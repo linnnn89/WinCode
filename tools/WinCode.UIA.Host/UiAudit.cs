@@ -50,7 +50,7 @@ internal sealed class UiAudit : IDisposable
                 phase = "start", helper = Environment.ProcessId, target = pid, hwnd = CanonicalHandle(hwnd),
                 // 操作名必须如实记录：破坏性动作绝不能被记成 "inspect"。
                 op = operation switch { "listWindows" => "windows", "click" => "click", "type" => "type",
-                    "setValue" => "setValue", _ => "inspect" },
+                    "setValue" => "setValue", "setExpanded" => "setExpanded", _ => "inspect" },
                 capture = capture is "original" or "annotated" ? capture : "none" });
             var statePath = Path.Combine(audit.directory, StateName);
             int stateReserve = File.Exists(statePath) ? 0 : 32;

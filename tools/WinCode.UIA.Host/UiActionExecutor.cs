@@ -3,6 +3,7 @@ using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
+using FlaUI.Core.Definitions;
 using FlaUI.UIA3;
 using static WinCode.UIA.Host.WindowResolver;
 
@@ -23,7 +24,7 @@ internal static class UiActionExecutor
     private const int MaxInputLength = 4096;
     private const int MaxMessageLength = 200;
 
-    internal static bool IsAction(string? action) => action is "click" or "type" or "setValue";
+    internal static bool IsAction(string? action) => action is "click" or "type" or "setValue" or "setExpanded";
 
     /// <summary>协议层前置校验：定位条件组合、字段形状与输入文本长度必须先成立。</summary>
     internal static bool ValidActionRequest(InspectRequest request)
@@ -35,6 +36,7 @@ internal static class UiActionExecutor
         return request.Action switch
         {
             "click" => request.InputText == null,
+            "setExpanded" => request.InputText == null && !request.ClearBefore && request.Expanded != null,
             "type" => request.InputText is { Length: > 0 and <= MaxInputLength },
             "setValue" => request.InputText is { Length: <= MaxInputLength },
             _ => false,
@@ -87,8 +89,26 @@ internal static class UiActionExecutor
             "click" => Click(request, target, evidence, identity),
             "type" => Type(request, automation, target, query, evidence, identity, cancellationToken),
             "setValue" => SetValue(request, target, evidence, identity),
+            "setExpanded" => SetExpanded(request, target, evidence, identity),
             _ => Failed(request, "UNKNOWN_ACTION", $"Unknown action: {request.Action}", identity),
         };
+    }
+
+    private static InspectResponse SetExpanded(InspectRequest request, AutomationElement target, UiTargetDto evidence, ResolvedWindow identity)
+    {
+        // Unknown enabled/state evidence must not authorize navigation.
+        if (evidence.IsEnabled != true || evidence.PropertyIssues?.Count > 0)
+            return Failed(request, "TARGET_DISABLED", "Target is disabled or its enabled state is unproven; no navigation was attempted.", identity, evidence);
+        if (!target.Patterns.ExpandCollapse.TryGetPattern(out var pattern))
+            return Failed(request, "NO_EXPAND_COLLAPSE_PATTERN", "Target has no ExpandCollapsePattern; no click fallback was attempted.", identity, evidence);
+        var state = pattern.ExpandCollapseState.Value;
+        if (state != ExpandCollapseState.Expanded && state != ExpandCollapseState.Collapsed)
+            return Failed(request, "EXPAND_STATE_UNSUPPORTED", "Only an observed Expanded or Collapsed state permits navigation.", identity, evidence);
+        var expanded = request.Expanded == true;
+        if ((state == ExpandCollapseState.Expanded) == expanded)
+            return Succeeded(request, evidence, identity, "ExpandCollapsePattern:no-op", expanded ? "already-expanded" : "already-collapsed");
+        return RunPattern(request, evidence, identity, expanded ? "ExpandCollapsePattern.Expand" : "ExpandCollapsePattern.Collapse",
+            expanded ? "expand-requested" : "collapse-requested", () => { if (expanded) pattern.Expand(); else pattern.Collapse(); });
     }
 
     private static InspectResponse Click(InspectRequest request, AutomationElement target, UiTargetDto evidence, ResolvedWindow identity)

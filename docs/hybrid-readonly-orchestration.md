@@ -2,6 +2,8 @@
 
 实验分支：`codex/hybrid-readonly-orchestration`。基线：`038c0ccc7372948da405546cc7ec0add56eea9de`。
 
+**接手入口：先读 [当前状态与第十轮计划](hybrid-next-iteration-plan.md)，无需从头重跑本文命令。** 截至第九轮（实现记录基线 `91e074b`），有限 fixture 的参数化真实模型小样本通过，实际客户端完整使用流程和非 fixture 应用迁移尚待验证。本文各轮结论、命令和预算按当时状态保留，不能混作最新状态或新的执行指令。
+
 实际发现的缺陷、未解决问题及隐私边界见 [问题与验证边界](hybrid-experiment-findings.md)。失败记录保留在本地，公开文档只提交脱敏汇总。
 
 本迭代增加客户端只读编排和真实 Windows UI 基准。标准 MCP 工具、schema、Gateway 准入和 UIA helper 生命周期保持既有路径。只有显式调用客户端模块才启用混合模式；本分支独立测试，暂不合并到 `main`。

@@ -14,6 +14,8 @@ npm run build
 npm run build:hybrid-fixture
 node --import tsx --test tests/hybrid-ui-workflow.test.ts
 npm run benchmark:hybrid -- 20
+# 已通过进程环境提供获授权的模型配置时：
+npm run benchmark:hybrid-model -- 20
 ```
 
 需要现有的 Release UIA Host 发布目录和 fixture 已完成的 NuGet restore。缺少这些依赖时按常规项目配置处理；基准不自动安装、重试或降级。`benchmark:hybrid -- 1` 是快速工作流验证，不能替代默认 20 次测量。结果写入 `test-tmp/hybrid-ui-<timestamp>/report.json`，同目录保存背景窗口截图及其步骤证据。实验输出不提交到 Git。
@@ -98,3 +100,42 @@ Node 24.19.0、SDK 10.0.303：类型检查、Gateway 构建、fixture Release �
 两条路径的 UIA 调用数相同，中位工具耗时基本持平。T3 的脚本观察结果交付次数从 2 次变为 1 次，其他用例均为 1 次。这些结果验证了客户端编排的执行行为和输出投影；未证明真实模型 token 或完整任务耗时达到原规划的投入阈值，当前决策维持客户端 PoC。
 
 第二轮增加会话级入口及 3 项行为测试：冷会话在客户端等待期间关闭；复用真实 Gateway 完成条件读取并交付原生截图；真实 UIA provider 阻塞期间关闭，保留首步证据并停止排队的第三次读取。最后一项确认 Gateway 和 native helper 的实际 PID 已退出，fixture 也显式回收。类型检查、构建及构建指纹核对通过；原有完整回归 467/467、新增会话行为测试 3/3 通过，测试清单共 58 个文件。这轮验证宿主接入与关闭行为，未运行 LLM A/B，第一轮模型指标仍为 null。
+
+## 第三轮：真实模型与预置客户端工作流 A/B
+
+`benchmark:hybrid-model` 使用现有 Chat Completions 服务和隔离 Windows fixture，不启动另一个代理，也不安装依赖、修改客户端配置或新增服务。本轮验证 DeepSeek，请求使用其 `thinking:disabled` 扩展；其他提供方尚未验证。通过进程环境提供 `WINCODE_MODEL_BASE_URL`、`WINCODE_MODEL_NAME` 和 `WINCODE_MODEL_API_KEY`；凭据仅放入 HTTP Authorization，不写入报告或命令参数。端点使用 HTTPS，本地 API stub 可使用 loopback HTTP；禁止携带凭据的 URL 和重定向，不自动重试。缺少配置时在启动窗口前拒绝。模型调用／结果回填采用 [DeepSeek 官方工具调用协议](https://api-docs.deepseek.com/guides/tool_calls/)。
+
+默认每任务每路径 20 次，共 160 个样本；显式传入 1–19 次仅作小样本验证。每个任务最多 8 次模型请求、120 秒，单次模型输出上限 2048 token，保持 `temperature:0`、`thinking:disabled`。每个样本使用新对话，交替两条路径先后顺序，共享已校验的连接和明确选择的 PID/HWND。正式运行期间保持基准源码稳定；报告记录脚本 SHA-256、Gateway 构建身份、请求模型名及各响应实际返回的模型／fingerprint。模型别名不保证固定权重版本。
+
+- A：模型获得当前注册表中的 `wincode_ui_inspect`／`wincode_ui_review` 完整 schema，使用明确 scoped query、compact、合理预算和既有 review。宿主只允许固定目标、无截图及 fixture 的明确 XAML 候选文件，仍经过标准 MCP 和只读观察校验。
+- B：模型获得 `run_readonly_workflow` 私有基准入口及 T1–T4 的完整配方说明，选择已安装的匹配配方。可信 TypeScript 程序在内部完成相同查询、条件分支与统计，再返回步骤证据和 findings。该入口仅属于基准宿主；没有注册为 WinCode MCP 工具。
+- 两边任务提示给出相同的选择器、最佳查询和独立状态计数规则。预期值只在宿主断言中存在，不发给模型；最终 JSON 除值正确外，还必须有任务要求的真实读取证据。
+
+模型发出同一轮多个工具调用时，宿主先执行一项观察，随后对每个尚未执行的 call ID 返回 `DEFERRED_AFTER_OBSERVATION` 和 `workStarted:false`。模型读取观察和延期回执后，自己重新决定后续请求；宿主不把旧计划自动加入队列。这是该基准的保守客户端策略，不能解释成服务器已支持整轮调度。
+
+报告写入 `test-tmp/hybrid-model-<timestamp>/report.json`，逐次 JSON transcript 保留请求正文、模型响应、usage 和工具回执。实际 token 按提供方返回的每次 `prompt_tokens + completion_tokens` 累加，包含 schema、配方说明、重复历史、工具结果、最终回答和缓存命中的 prompt token；没有完整 usage 时返回 null，不从字节估算。`modelRequests` 包括最终回答及失败请求，`modelToolRounds` 只计带工具调用的完成响应；耗时统计覆盖整个任务，共同冷连接和窗口发现单列。
+
+比较表只用成功样本计算 P50/P95，同时报告失败数量；任一侧未完成全部计划样本，`validComparison:false`，收益百分比为 null。每个样本后检查 helper 已无活动 PID，收尾观察 Gateway 和 fixture 实际退出。前台采样只描述本轮观察。报告、API 凭据和本机配置均不提交到仓库。
+
+**解释边界：** B 测量的是预先开发好的领域工作流，包含运行时配方说明的上下文成本；没有测量模型生成程序、开发配方或生产宿主的完整成本。两边给模型的工具目录大小不同，token 收益包含 schema 减少与输出投影，不能全部归因为条件编排。该实验没有隔离这些因素，也未证明普通 MCP 客户端对 batch 的需求。结果用于判断是否继续客户端路线，不直接触发服务器 batch 或通用 runtime。
+
+第三轮新增 3 项自动化契约／场景测试：真实本地 HTTP stub 下的 A/B 往返和 usage 计量；依赖调用延期及写操作／目标变化的分发前拒绝；缺失 usage、HTTP 错误与请求期间取消。后者验证不重试、不记录凭据及保留部分计量。
+
+### 第三轮本地测量结果（2026-10-06）
+
+类型检查、构建、源码／产物指纹核对通过；完整自动化回归 470/470 通过，含本轮新增 3 项测试，清单共 59 个测试文件。真实测量使用 Node 22.23.1、`deepseek-flash`、非 thinking、temperature 0。每任务每路径 20 次，共 160 个样本和 345 次真实模型请求。混合路径 80/80 通过；原生路径 77/80 通过，T3 的第 10、16、19 次输出为自然语言，未满足约定的最终 JSON 格式。失败回合保留，不重跑覆盖；因此整个报告 `success:false`，T3 的 `validComparison:false`、收益百分比为 null。这是基准记录的模型输出契约失败，不能报告为 WinCode UIA 操作失败，也不能算成全部任务通过。
+
+| 任务 | 通过数：原生 / 混合 | 平均实际总 token：原生 / 混合 | token 减少 | 原生 P50 / P95（ms） | 混合 P50 / P95（ms） | 中位耗时减少 |
+|---|---|---|---|---|---|---|
+| T1 | 20 / 20 | 5304.60 / 2353.80 | 55.63% | 2713.48 / 3277.36 | 2253.00 / 2534.53 | 16.97% |
+| T2 | 20 / 20 | 6863.50 / 3721.00 | 45.79% | 2763.69 / 3176.00 | 2380.80 / 2802.57 | 13.85% |
+| T3 | 17 / 20 | 11724.06 / 4219.40 | 不判定 | 4805.06 / 6778.73 | 3316.77 / 3700.01 | 不判定 |
+| T4 | 20 / 20 | 5986.30 / 2891.15 | 51.70% | 2934.90 / 3169.75 | 2500.70 / 2754.69 | 14.79% |
+
+T3 原生行的均值／分位数仅描述 17 个成功样本；未包含 3 次失败的代价，不能用于达标或整体成功率推断。所有逐次记录均保留失败请求的 usage 和完整耗时。
+
+T1、T2、T4 每条路径均为 1 次工具观察轮次、2 次模型请求（含最终回答）；最佳原生 T2 已一次读取共同父区域，编排没有减少其轮次。T3 混合为 1 次工具观察轮次、2 次模型请求；原生成功样本平均为 2.12 次工具观察轮次、3.12 次模型请求。两条路径的底层调用仍分别为 1、1、2、1，共 200 次 MCP UI 调用。工具目录 JSON 为原生 6043 字节、混合 1802 字节，因此不能将 token 减少全部归因为少一次模型往返。
+
+Native audit 观察到 201 次 helper start（含窗口发现）。独立的收尾检查用审计 helper PID／开始时间和当前 Windows 进程创建时间排除 PID 重用，201 次启动对应 186 个不同 PID，未发现残留。Gateway 和 fixture 实际退出，4458 次前台采样未观察到 fixture 进入前台。证据保存在本次 `test-tmp/hybrid-model-1791283297644/` 下的 report、逐次 transcript 和 `helper-exit-check.json`。
+
+**当前决策：继续客户端领域工作流。** 完成的 T1/T2/T4 在本配置下达到 token 门槛，但 T2 未减少模型轮次，T3 原生路径存在输出契约失败，且普通 MCP 客户端对 batch 的需求未验证。实验支持保留并使用预置客户端配方；服务器只读 batch、discovery 和通用 runtime 的进入条件仍未满足。

@@ -46,6 +46,8 @@ node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标
 
 **实验分支的明确展开导航。** 用户授权这条导航路径后，可调用 `action:"expand-ui"`；它不是只读配方，不加 `recipe` 字段。例：`{"id":"nav1","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"parentQuery":{"name":"实际父级标题","controlType":"Group"},"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"}},"timeoutMs":15000}`。父级字段必须来自实际页面或明确候选，不能凭缺失子控件猜测。完整结果保留首次查询、父级诊断、是否尝试动作、后续状态和归属证据；`isError:true` 或 `status:"stopped"` 时不能引用 findings 为成功，也不能自动重放展开。新动作需要 inspectionVersion 4 Host；旧连接不会因读取新版 Skill 自动获得该能力。
 
+已授权在指定窗口尝试发现一个折叠 Group 时，可省略 `parentQuery`：`{"id":"nav2","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"}},"timeoutMs":15000}`。该形式最多 6 次工具调用、1 次展开；目标已可见则只读取 1 次。只有完整搜索中唯一启用的折叠 Group 才可尝试；歧义时查看结果中的 `diagnosis.candidates`，不要让模型猜选或自行循环。省略字段仍表示授权导航尝试，不是只读查询；Group 之外的路径和递归探索不在本轮能力内。
+
 **调用与回答的顺序。** 先确认实际窗口及页面，再提交工具／配方请求，等待相同 id 回执，读取完整 `resultFile`，核对 `isError`、业务状态及证据完整性，最后按实际观察回答。`{recipe,parameters}` 只是输入，打印参数不能代替调用。标准 inspect 的 `success:true` 只说明查询完成；仍须检查 `queryResult.status="unique"`、`searchComplete=true`、`treeComplete=true`、截断／属性问题及所选控件的明确状态。`not-found` 不能推成未勾选或数量为零。配方须为 `status="completed"`、`success=true` 且具有符合任务范围的 findings；`stopped` 或 `isError:true` 应保留错误与已有步骤，不自动重放。
 
 源码中的 AutomationId 是定位候选，先确认运行时页面／展开状态；折叠内容可能不在当前 UIA 树中。缺失后先说明观察范围，不能按源码默认值补答案。用户提供明确的新页面状态后，可重新安排一次有界观察，并将此前失败单独保留；不要反复发送相同请求碰运气。精确查询减少返回内容，但不保证查询搜索过程完全不访问其他节点的属性；日志和原始附件保持本地。

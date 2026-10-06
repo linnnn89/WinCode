@@ -157,6 +157,27 @@ describe('semantic UI actions against the real WPF fixture', () => {
     assert.equal(result.report.findings?.state, 'On');
   });
 
+  it('discovers the collapsed group without a parent selector and skips navigation when the child is visible', { timeout: 30000 }, async () => {
+    const collapsed = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionAdvanced', expanded: false });
+    assert.equal(collapsed.body.success, true, JSON.stringify(collapsed));
+    const { runExpandUiWorkflow } = await import('../src/Client/ExpandUiWorkflow.js');
+    const automatic = () => runExpandUiWorkflow((name, args, options) => client.callTool({ name, arguments: args }, options),
+      { pid, hwnd }, { childQuery: { automationId: 'actionNormalize' } }, { timeoutMs: 15000 });
+    const discovered = await automatic();
+    assert.equal(discovered.report.success, true, JSON.stringify(discovered.report));
+    assert.equal(discovered.report.steps[0].value.queryResult?.status, 'not-found');
+    assert.equal(discovered.report.diagnosis.candidateSource, 'discovered-group');
+    assert.equal(discovered.report.diagnosis.relationshipVerified, true);
+    assert.equal(discovered.report.actionAttempted, true);
+    assert.equal(discovered.report.findings?.state, 'On');
+    assert.equal(discovered.report.metrics.dispatchedCalls, 6);
+    const visible = await automatic();
+    assert.equal(visible.report.success, true, JSON.stringify(visible.report));
+    assert.equal(visible.report.actionAttempted, false);
+    assert.equal(visible.report.findings?.state, 'On');
+    assert.equal(visible.report.metrics.dispatchedCalls, 1);
+  });
+
   it('keeps an already expanded parent open without another navigation action', { timeout: 30000 }, async () => {
     const opened = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionAdvanced', expanded: true });
     assert.equal(opened.body.success, true, JSON.stringify(opened));

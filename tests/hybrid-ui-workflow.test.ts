@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { runReadonlyUiWorkflow, type UiReadCaller } from '../src/Client/ReadonlyUiWorkflow.js';
 import type { UiInspectResult } from '../src/Core/UiContracts.js';
 import { createReadonlyUiRecipe } from '../src/Client/ReadonlyUiRecipes.js';
+import { runExpandUiWorkflow } from '../src/Client/ExpandUiWorkflow.js';
 
 const target = { pid: 42, hwnd: '0x123' };
 const observation = (requestId = 'read-1'): UiInspectResult => ({ schemaVersion: '1.0', protocolVersion: '1.0',
@@ -11,6 +12,51 @@ const observation = (requestId = 'read-1'): UiInspectResult => ({ schemaVersion:
   tree: { id: 1, parentId: null, automationId: 'check', isEnabled: false,
     states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] } });
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
+
+test('automatic expansion reports multiple or absent candidates without performing an action', async () => {
+  for (const count of [0, 2]) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push(tool);
+      const value = observation(); delete value.tree;
+      const discovery = calls.length === 2;
+      if (discovery) assert.deepEqual(args.query, { controlType: 'Group', maxSearchNodes: 1000, maxMatches: 20 });
+      value.queryResult = { status: discovery && count ? 'ambiguous' : 'not-found', searchComplete: true,
+        visitedNodes: 8, matches: discovery ? Array.from({ length: count }, (_, i) => ({ ...observation().tree!,
+          automationId: `group${i}`, controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } })) : [] };
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' } });
+    assert.equal(checked.report.errorCode, count ? 'NAVIGATION_CANDIDATE_AMBIGUOUS' : 'NAVIGATION_CANDIDATE_NOT_FOUND');
+    assert.equal(checked.report.diagnosis.candidates?.length, count);
+    assert.equal(checked.report.actionAttempted, false);
+    assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect']);
+  }
+});
+
+test('automatic expansion never infers a unique candidate from incomplete or unaddressable evidence', async () => {
+  for (const scenario of ['search-limit', 'unknown-state', 'unknown-enabled', 'property-issue', 'no-identity']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async tool => {
+      calls.push(tool);
+      const value = observation(); delete value.tree;
+      const group = { ...observation().tree!, controlType: 'Group', isEnabled: true,
+        states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } };
+      if (scenario === 'unknown-state') group.states.expandCollapse = 'unknown';
+      if (scenario === 'unknown-enabled') delete (group as { isEnabled?: boolean }).isEnabled;
+      if (scenario === 'property-issue') group.propertyIssues = ['Name'];
+      if (scenario === 'no-identity') delete group.automationId;
+      value.queryResult = calls.length === 1
+        ? { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] }
+        : { status: scenario === 'search-limit' ? 'incomplete' : 'unique', searchComplete: scenario !== 'search-limit',
+          visitedNodes: 8, matches: [group] };
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' } });
+    assert.equal(checked.report.errorCode, scenario === 'no-identity' ? 'NAVIGATION_CANDIDATE_UNADDRESSABLE' : 'NAVIGATION_DISCOVERY_INCOMPLETE', scenario);
+    assert.equal(checked.report.actionAttempted, false);
+    assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect']);
+  }
+});
 
 test('recipe input errors identify the legal field and correction without echoing rejected values', () => {
   const valid = { regionAutomationId: 'region', checkboxAutomationIds: ['a', 'b'] };

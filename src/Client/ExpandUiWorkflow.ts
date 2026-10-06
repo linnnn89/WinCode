@@ -2,20 +2,20 @@ import type { UiInspectResult, UiNode, UiQuery } from '../Core/UiContracts.js';
 import { validateUiQuery } from '../Core/UiContracts.js';
 import type { UiReadCaller, UiTarget } from './ReadonlyUiWorkflow.js';
 
-export type ExpandUiParameters = { parentQuery: UiQuery; childQuery: UiQuery };
+export type ExpandUiParameters = { parentQuery?: UiQuery; childQuery: UiQuery };
 
 class NavigationStop extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 
-/** One caller-supplied navigation candidate, not recursive menu discovery or a readonly recipe. */
+/** One explicit parent or one discovered collapsed Group; no recursive exploration. */
 export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, parameters: ExpandUiParameters,
   options: { timeoutMs?: number; signal?: AbortSignal } = {}) {
   if (!target || !Number.isSafeInteger(target.pid) || target.pid < 1 || typeof target.hwnd !== 'string' ||
     target.hwnd.length > 32 || !/^(0x[\da-f]+|\d+)$/i.test(target.hwnd) || BigInt(target.hwnd) <= 0n)
     throw new Error('Supply an explicit positive PID and HWND.');
   if (!parameters || Object.keys(parameters).some(key => !['parentQuery', 'childQuery'].includes(key)) ||
-    !parameters.parentQuery || !parameters.childQuery) throw new Error('Supply exactly parentQuery and childQuery.');
+    !parameters.childQuery) throw new Error('Supply childQuery and optionally parentQuery; no other parameters are accepted.');
   validateUiQuery(parameters.parentQuery, true);
   validateUiQuery(parameters.childQuery, true);
   const fixed = { ...target }, input = structuredClone(parameters);
@@ -25,7 +25,8 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
   const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(options.signal ? [options.signal] : [])]);
   const steps: Array<{ tool: string; value: UiInspectResult }> = [];
   let actionAttempted = false, bytes = 0, dispatchedCalls = 0;
-  const diagnosis: { initialQuery?: string; parentState?: string; cause: string; nextAction: string; relationshipVerified?: boolean } =
+  const diagnosis: { initialQuery?: string; parentState?: string; cause: string; nextAction: string; relationshipVerified?: boolean;
+    candidateSource?: 'supplied-parent' | 'discovered-group'; candidates?: Array<{ query: UiQuery; state: string }> } =
     { cause: 'unknown', nextAction: 'Inspect the authorized parent candidate; do not infer a collapsed parent from a missing child.' };
   let findings: { automationId?: string; state: string; states: UiNode['states'] } | undefined;
   let failure: NavigationStop | undefined;
@@ -35,7 +36,7 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
   };
   const invoke = async (tool: string, args: Record<string, unknown>) => {
     checkDeadline();
-    if (dispatchedCalls >= 5) stop('STEP_BUDGET_EXCEEDED', 'Navigation permits at most five calls.');
+    if (dispatchedCalls >= (input.parentQuery ? 5 : 6)) stop('STEP_BUDGET_EXCEEDED', 'Navigation call budget exceeded.');
     dispatchedCalls++;
     if (tool === 'wincode_ui_set_expanded') actionAttempted = true;
     const result = await call(tool, { ...args, ...fixed }, { signal, timeoutMs: Math.max(1, deadline - Date.now()) });
@@ -71,41 +72,69 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
   const matches = (node: UiNode, query: UiQuery): boolean =>
     (!query.automationId || node.automationId === query.automationId) && (!query.name || node.name === query.name) &&
     (!query.controlType || node.controlType === query.controlType);
+  const readChild = (value: UiInspectResult) => {
+    const child = unique(value);
+    complete(value);
+    if (!child.states || !['On', 'Off', 'Indeterminate'].includes(child.states.toggle))
+      stop('STATE_UNAVAILABLE', 'Child toggle state is not known; do not infer Off.');
+    findings = { automationId: child.automationId, state: child.states!.toggle, states: child.states };
+    diagnosis.nextAction = 'Use the observed child state. No further navigation is needed.';
+  };
+  const discoverParent = async (): Promise<UiQuery> => {
+    diagnosis.candidateSource = 'discovered-group';
+    const value = await inspect({ controlType: 'Group', maxSearchNodes: 1000, maxMatches: 20 }, true);
+    const query = value.queryResult;
+    // This is match-set evidence: root-only tree truncation does not truncate the query search.
+    if (!query?.searchComplete || query.status === 'incomplete' || value.traversalErrors || value.propertyIssueCount ||
+      query.matches.some(node => node.propertyIssues?.length || node.controlType !== 'Group' ||
+        typeof node.isEnabled !== 'boolean' || !['Collapsed', 'Expanded', 'LeafNode', 'PartiallyExpanded', 'unsupported'].includes(node.states?.expandCollapse ?? '')))
+      return stop('NAVIGATION_DISCOVERY_INCOMPLETE', 'Group search or candidate state is incomplete. Do not infer uniqueness; inspect the page or supply a proven parentQuery.');
+    const candidates = query.matches.filter(node => node.isEnabled === true && node.states?.expandCollapse === 'Collapsed');
+    diagnosis.candidates = candidates.map(node => ({ query: { controlType: 'Group',
+      ...(node.automationId ? { automationId: node.automationId } : {}), ...(node.name ? { name: node.name } : {}) }, state: 'Collapsed' }));
+    if (!candidates.length) return stop('NAVIGATION_CANDIDATE_NOT_FOUND', 'No enabled collapsed Group was observed. Other control types and recursive discovery are outside this workflow.');
+    if (candidates.length !== 1) return stop('NAVIGATION_CANDIDATE_AMBIGUOUS', 'Multiple collapsed Groups were observed. Use the returned candidates to supply an evidence-based parentQuery; no action was taken.');
+    const selected = diagnosis.candidates[0].query;
+    if (!selected.automationId && !selected.name) return stop('NAVIGATION_CANDIDATE_UNADDRESSABLE', 'The candidate has no exact name or automationId. No action was taken.');
+    validateUiQuery(selected, true);
+    return selected;
+  };
   try {
     const initial = await inspect(input.childQuery);
     diagnosis.initialQuery = initial.queryResult?.status;
     // Missing child is evidence, not permission to guess the parent or retry the same query.
     if (initial.queryResult?.status !== 'not-found' || !initial.queryResult.searchComplete) unique(initial);
-    const parent = await inspect(input.parentQuery, true);
-    const node = unique(parent);
-    if (parent.propertyIssueCount || parent.traversalErrors || node.propertyIssues?.length ||
-      (parent.truncated && parent.truncateReason !== 'maxDepth')) stop('INCOMPLETE_OBSERVATION', 'Parent identity/state evidence is incomplete.');
-    diagnosis.parentState = node.states?.expandCollapse;
-    if (node.isEnabled !== true) stop('TARGET_DISABLED', 'Parent is disabled or enabled state is unknown; no navigation was attempted.');
-    if (!['Collapsed', 'Expanded'].includes(node.states?.expandCollapse ?? ''))
-      stop('NO_EXPAND_COLLAPSE_PATTERN', 'Parent has no proven actionable expand state. Do not substitute a click.');
-    if (node.states?.expandCollapse === 'Collapsed') {
-      diagnosis.cause = 'observed-collapsed-navigation-candidate';
-      diagnosis.nextAction = 'Set this unique parent to Expanded once, then verify the parent and child relationship.';
-      await invoke('wincode_ui_set_expanded', { targetAutomationId: input.parentQuery.automationId,
-        targetName: input.parentQuery.name, targetControlType: input.parentQuery.controlType, expanded: true });
+    if (!input.parentQuery && initial.queryResult?.status === 'unique') {
+      readChild(initial);
+      diagnosis.cause = 'target-already-visible';
+    } else {
+      if (input.parentQuery) diagnosis.candidateSource = 'supplied-parent';
+      const parentQuery = input.parentQuery ?? await discoverParent();
+      const parent = await inspect(parentQuery, true);
+      const node = unique(parent);
+      if (parent.propertyIssueCount || parent.traversalErrors || node.propertyIssues?.length ||
+        (parent.truncated && parent.truncateReason !== 'maxDepth')) stop('INCOMPLETE_OBSERVATION', 'Parent identity/state evidence is incomplete.');
+      diagnosis.parentState = node.states?.expandCollapse;
+      if (node.isEnabled !== true) stop('TARGET_DISABLED', 'Parent is disabled or enabled state is unknown; no navigation was attempted.');
+      if (!['Collapsed', 'Expanded'].includes(node.states?.expandCollapse ?? ''))
+        stop('NO_EXPAND_COLLAPSE_PATTERN', 'Parent has no proven actionable expand state. Do not substitute a click.');
+      if (node.states?.expandCollapse === 'Collapsed') {
+        diagnosis.cause = 'observed-collapsed-navigation-candidate';
+        diagnosis.nextAction = 'Set this unique parent to Expanded once, then verify the parent and child relationship.';
+        await invoke('wincode_ui_set_expanded', { targetAutomationId: parentQuery.automationId,
+          targetName: parentQuery.name, targetControlType: parentQuery.controlType, expanded: true });
+      }
+      const verified = await inspect(parentQuery);
+      const expanded = unique(verified);
+      complete(verified);
+      if (expanded.states?.expandCollapse !== 'Expanded') stop('EXPANSION_UNCONFIRMED', 'Parent was not observed Expanded. Stop; do not repeat the action.');
+      const children: UiNode[] = [];
+      const visit = (n: UiNode) => { for (const child of n.children) { if (matches(child, input.childQuery)) children.push(child); visit(child); } };
+      visit(expanded);
+      if (children.length !== 1) stop('CHILD_RELATIONSHIP_UNCONFIRMED', 'Expanded parent does not contain exactly one matching child; check the navigation candidate.');
+      diagnosis.relationshipVerified = true;
+      readChild(await inspect(input.childQuery));
     }
-    const verified = await inspect(input.parentQuery);
-    const expanded = unique(verified);
-    complete(verified);
-    if (expanded.states?.expandCollapse !== 'Expanded') stop('EXPANSION_UNCONFIRMED', 'Parent was not observed Expanded. Stop; do not repeat the action.');
-    const children: UiNode[] = [];
-    const visit = (n: UiNode) => { for (const child of n.children) { if (matches(child, input.childQuery)) children.push(child); visit(child); } };
-    visit(expanded);
-    if (children.length !== 1) stop('CHILD_RELATIONSHIP_UNCONFIRMED', 'Expanded parent does not contain exactly one matching child; check the navigation candidate.');
-    diagnosis.relationshipVerified = true;
-    const final = await inspect(input.childQuery);
-    const child = unique(final);
-    complete(final);
-    if (!child.states || !['On', 'Off', 'Indeterminate'].includes(child.states.toggle))
-      stop('STATE_UNAVAILABLE', 'Child toggle state is not known; do not infer Off.');
-    findings = { automationId: child.automationId, state: child.states!.toggle, states: child.states };
-    diagnosis.nextAction = 'Use the observed child state. No further navigation is needed.';
   } catch (error) {
     failure = error instanceof NavigationStop ? error : new NavigationStop('NAVIGATION_ERROR',
       (error instanceof Error ? error.message : String(error)).slice(0, 2048));
@@ -115,7 +144,7 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
   const report = { version: 1, success: !failure, status: failure ? 'stopped' : 'completed', target: fixed,
     errorCode: failure?.code, errorMessage: failure?.message, diagnosis, actionAttempted, findings: failure ? undefined : findings,
     steps, metrics: { elapsedMs: performance.now() - started, dispatchedCalls },
-    observationSemantics: 'Ordered live observations; caller supplied parent is a candidate until child containment is verified.' };
+    observationSemantics: 'Ordered live observations; a supplied or discovered parent is only a candidate until child containment is verified.' };
   let text = JSON.stringify(report);
   if (Buffer.byteLength(text) > 128 * 1024) {
     report.success = false; report.status = 'stopped'; report.errorCode = 'OUTPUT_BUDGET_EXCEEDED'; report.findings = undefined;

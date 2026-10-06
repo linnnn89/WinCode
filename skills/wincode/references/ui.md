@@ -68,7 +68,9 @@ captureQuality 在标注前检查原始像素，最多采样 1024 点；suspect-
 
 实验分支的展开导航独立于只读取证。目标缺失时先区分完整搜索无匹配、搜索不完整和歧义；只用用户授权范围内的实际父级名称／标识提出候选，不把所有 not-found 当成折叠。`wincode_ui_set_expanded({pid,hwnd,targetName,targetControlType,expanded:true})` 在完整唯一搜索、启用且明确 Expanded／Collapsed 状态成立后才受理；不支持、未知状态或歧义时拒绝，不回退为 click／坐标／焦点。动作回执只表示调用被接受，之后必须读回展开状态及原子控件。超时或失败不自动重放。
 
-客户端 `WinCodeSession.expandUiWorkflow(target,{parentQuery,childQuery},options)` 接收一个明确父级候选与目标复选框查询，共用固定 PID/HWND、15 秒默认总预算（上限 30 秒），最多 5 次调用。保存首次查询，诊断父级根状态；Collapsed 才设置 Expanded 一次，随后要求完整父级树证明子控件归属，再单独读回子控件的真实 toggle 状态。根状态诊断有意只返回一层，允许仅 maxDepth 截断；这不代表父级子树完整，最终验证仍要求完整子树、唯一匹配和无属性／遍历问题。它不会递归探索任意菜单，且可能因较大的父级树超预算而停止。普通 `readonly-ui` 不触发任何导航动作。
+客户端 `WinCodeSession.expandUiWorkflow(target,{parentQuery?,childQuery},options)` 接收目标复选框查询，可选明确父级候选；共用固定 PID/HWND、15 秒默认总预算（上限 30 秒）。提供父级时最多 5 次调用；省略父级时最多 6 次。保存首次查询，诊断父级根状态；Collapsed 才设置 Expanded 一次，随后要求完整父级树证明子控件归属，再单独读回子控件的真实 toggle 状态。根状态诊断有意只返回一层，允许仅 maxDepth 截断；这不代表父级子树完整，最终验证仍要求完整子树、唯一匹配和无属性／遍历问题。它不会递归探索任意菜单，且可能因较大的父级树超预算而停止。普通 `readonly-ui` 不触发任何导航动作。
+
+**省略父级的有限发现。** 目标已唯一可见且取证完整时，直接读取，只有 1 次调用。完整搜索未找到目标时，在同一窗口搜索 `Group`（最多搜索 1000 个节点、20 个匹配）；仅当搜索完整、状态已知，且存在唯一启用的 Collapsed Group，才使用实际名称／AutomationId 和类型重新定位并尝试展开。候选唯一不能证明目标在其中，仍须后续归属验证。多个候选返回 `NAVIGATION_CANDIDATE_AMBIGUOUS` 和 `diagnosis.candidates`，由调用方依据额外证据提供 `parentQuery`；零候选、搜索不完整、状态未知或候选无可用标识均停止，不执行点击回退。这个试点只覆盖 Group，不遍历菜单、Tab、TreeItem，不证明任意导航发现能力。
 
 先按任务选定模式，再调用。
 

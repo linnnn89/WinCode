@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withTimeout } from '../Core/ResourceManager.js';
 import { runReadonlyUiWorkflow, type UiReader, type UiTarget, type UiWorkflowOptions } from './ReadonlyUiWorkflow.js';
+import { createReadonlyUiRecipe, type CheckboxAuditParameters } from './ReadonlyUiRecipes.js';
 
 export interface SkillSessionOptions {
   workspace: string;
@@ -73,6 +74,11 @@ export class WinCodeSession {
   get status() {
     return { state: this.state, workspace: this.workspace, pid: this.transport?.pid ?? null,
       identity: this.identity ? { ...this.identity } : null, error: this.failure?.message ?? null };
+  }
+
+  /** Installed client recipe; compile/validate parameters before the first tool read. */
+  readonlyUiRecipe(target: UiTarget, recipe: 'checkbox-audit', parameters: CheckboxAuditParameters, options: UiWorkflowOptions = {}) {
+    return this.readonlyUiWorkflow(target, createReadonlyUiRecipe(recipe, parameters), options);
   }
 
   /** Reuse this connection; closing the owner also cancels processing between UI reads. */

@@ -15,7 +15,7 @@ const invoke = (id: string, name: string, args: unknown) => ({ id, type: 'functi
 const call: UiReadCaller = async (_name, args) => {
   const id = (args.query as { automationId: string }).automationId;
   const children = id === 'hybridChecks' ? Array.from({ length: 8 }, (_, i) => ({ id: i + 2, parentId: 1, automationId: 'hybridCheck' + i,
-    isEnabled: i !== 6, states: { toggle: i === 3 ? 'Off' : 'On' }, children: [] })) : [];
+    controlType: 'CheckBox', isEnabled: i !== 6, states: { toggle: i === 3 ? 'Off' : 'On' }, children: [] })) : [];
   return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...target, requestId: 'observation-' + id, treeComplete: true, truncated: false,
     queryResult: { status: 'unique', searchComplete: true, visitedNodes: 1, matches: [] },
     tree: { id: 1, parentId: null, automationId: id, states: { toggle: 'On' }, children } }) }] };

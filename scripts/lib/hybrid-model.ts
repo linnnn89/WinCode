@@ -1,21 +1,12 @@
 import type { CallToolResult } from '@modelcontextprotocol/client';
 import { WINCODE_TOOLS } from '../../src/Gateway/ToolRegistry.js';
 import { runReadonlyUiWorkflow, type UiReader, type UiTarget, type UiReadCaller } from '../../src/Client/ReadonlyUiWorkflow.js';
-import type { UiReviewResult } from '../../src/CompositeTools/UiReview.js';
-import type { UiNode } from '../../src/Core/UiContracts.js';
+import { createReadonlyUiRecipe } from '../../src/Client/ReadonlyUiRecipes.js';
 
 export const sourceFile = 'tests/fixtures/wpf-ui-review/MainWindow.xaml';
 const summary = { query: { automationId: 'hybridSummary' }, readStates: true, maxDepth: 2, maxNodes: 8 };
-const details = { query: { automationId: 'hybridChecks' }, readStates: true, maxDepth: 4, maxNodes: 40 };
-function checks(value: UiReviewResult) {
-  const rows: UiNode[] = [];
-  const visit = (node: UiNode) => { if (/^hybridCheck\d$/.test(node.automationId ?? '')) rows.push(node); node.children.forEach(visit); };
-  if (value.tree) visit(value.tree);
-  if (rows.length !== 8 || rows.some(node => !['On', 'Off'].includes(node.states?.toggle ?? ''))) throw new Error('Incomplete checkbox states.');
-  return { checkedCount: rows.filter(node => node.states?.toggle === 'On').length,
-    unchecked: rows.filter(node => node.states?.toggle === 'Off').map(node => node.automationId).sort(),
-    disabled: rows.filter(node => node.isEnabled === false).map(node => node.automationId).sort() };
-}
+const checkboxParameters = { regionAutomationId: 'hybridChecks',
+  checkboxAutomationIds: Array.from({ length: 8 }, (_, i) => 'hybridCheck' + i), maxDepth: 4, maxNodes: 40 };
 const checked = { checkedCount: 7, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] };
 export const modelTasks = [
   { id: 'T1', instructions: 'Read hybridSummary toggle state using query:{automationId:"hybridSummary"}. Return {detailsRequired:boolean}. On means true; Off means false; unknown is an error.',
@@ -25,14 +16,10 @@ export const modelTasks = [
       return { detailsRequired: state === 'On' };
     } },
   { id: 'T2', instructions: 'Read hybridChecks once using query:{automationId:"hybridChecks"} (common parent of hybridCheck0 through hybridCheck7). Return {checkedCount:number,unchecked:string[],disabled:string[]}, arrays sorted by automationId. Count only these eight CheckBoxes, not their text children. checkedCount counts every toggle=On, including disabled controls; enabled and checked are independent states.',
-    expected: checked, run: async (reader: UiReader) => checks(await reader.inspect(details)) },
+    expected: checked, run: createReadonlyUiRecipe('checkbox-audit', checkboxParameters) },
   { id: 'T3', instructions: 'First observe hybridSummary using query:{automationId:"hybridSummary"}. Only after observing On, read hybridChecks using query:{automationId:"hybridChecks"} and return {detailsRequired:true,details:{checkedCount:number,unchecked:string[],disabled:string[]}} as in T2. Count only hybridCheck0 through hybridCheck7; count every toggle=On including disabled controls, and sort arrays by automationId. If Off, skip detail read and return {detailsRequired:false}. Unknown is an error. Do not plan a dependent detail read before observing the summary.',
-    expected: { detailsRequired: true, details: checked }, run: async (reader: UiReader) => {
-      const state = (await reader.inspect(summary)).tree?.states?.toggle;
-      if (state === 'Off') return { detailsRequired: false };
-      if (state !== 'On') throw new Error('Unknown summary state.');
-      return { detailsRequired: true, details: checks(await reader.inspect(details)) };
-    } },
+    expected: { detailsRequired: true, details: checked },
+    run: createReadonlyUiRecipe('checkbox-audit', { ...checkboxParameters, summaryAutomationId: 'hybridSummary' }) },
   { id: 'T4', instructions: `Use wincode_ui_review with query:{automationId:"btnNormalAction"} and candidateFiles:["${sourceFile}"]. Omit textQueries and candidateCodeFiles. Return {disabled:boolean,sourceCandidates:[{file:string,automationId:string}],runtimeSourceVerified:boolean}. Report literal source candidates without claiming runtime mapping.`,
     expected: { disabled: true, sourceCandidates: [{ file: sourceFile, automationId: 'btnNormalAction' }], runtimeSourceVerified: false },
     run: async (reader: UiReader) => {

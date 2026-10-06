@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WinCodeSession } from './SkillSession.js';
+import { createReadonlyUiRecipe } from './ReadonlyUiRecipes.js';
 
 const argv = process.argv.slice(2);
 let workspace: string | undefined, roslynConfig: string | undefined;
@@ -70,14 +71,23 @@ function receive(line: string) {
       active.controller.abort(new Error('Skill request cancelled.'));
       write({ id, cancellationRequested: true, targetId: active.id }); return;
     }
-    if (request.action !== undefined) throw new Error('Unknown session action.');
+    if (request.action !== undefined && request.action !== 'readonly-ui') throw new Error('Unknown session action.');
     if (active) throw new Error('A request is already active; await its result or cancel it explicitly.');
+    const program = request.action === 'readonly-ui' ? createReadonlyUiRecipe(request.recipe, request.parameters) : undefined;
+    if (program) {
+      if (Object.keys(request).some(key => !['id', 'action', 'recipe', 'target', 'parameters', 'timeoutMs'].includes(key)) ||
+        !request.target || typeof request.target !== 'object' || Array.isArray(request.target) ||
+        Object.keys(request.target).some(key => !['pid', 'hwnd'].includes(key)))
+        throw new Error('Readonly recipe requires a fixed target and no unsupported request fields.');
+    }
     const controller = new AbortController();
     const current = { id: id!, controller, done: Promise.resolve() };
     active = current;
     current.done = (async () => {
       try {
-        const result = await session.call(request.tool, request.arguments ?? {}, { signal: controller.signal, timeoutMs: request.timeoutMs });
+        const result = program ? await session.readonlyUiWorkflow(request.target, program,
+          { signal: controller.signal, timeoutMs: request.timeoutMs }) :
+          await session.call(request.tool, request.arguments ?? {}, { signal: controller.signal, timeoutMs: request.timeoutMs });
         try { await respond(current.id, result); }
         catch (error) { write({ id: current.id, resultDeliveryError: errorText(error), toolResponded: true, isError: result.isError ?? false }); }
       }

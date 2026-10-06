@@ -32,6 +32,16 @@ node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标
 
 **读取结果。** 回执提供 `resultFile`、`isError` 和 `imageFiles`。用文件/执行工具读取 `resultFile` 中的完整 MCP `CallToolResult`，包括 text、structuredContent、image 等内容块；有图片时按需使用本地图片查看工具读取 `imageFiles[].path`。不要把 `isError:true` 当成成功，也不要只读短回执就推断业务结果。原始 JSON 和图片保存到安装目录的 `test-tmp/skill-sessions/run-*/`，关闭不会自动删除，按本地附件管理；不要提交这些文件。文本结果至少需要一次额外文件读取，这是按需模式的调用成本。
 
+**实验分支的混合只读配方。** `codex/hybrid-readonly-orchestration` 提供 `action:"readonly-ui"`，无需宿主执行 TypeScript 或提供模型 API key。先按上面的单工具协议列出窗口并明确选择 PID/HWND，再调用已安装的 `checkbox-audit`：
+
+```json
+{"id":"audit1","action":"readonly-ui","recipe":"checkbox-audit","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"summaryAutomationId":"summaryId","regionAutomationId":"regionId","checkboxAutomationIds":["checkA","checkB"]},"timeoutMs":15000}
+```
+
+示例 PID/HWND 和 AutomationId 必须替换为实际选择结果。summaryAutomationId 可省略；提供时先读摘要，On 才继续，Off 跳过详情，未知停止。明确列出的 1–64 个复选框必须唯一、完整且有确定状态，不从缺失状态推断 false。maxDepth 默认 4、maxNodes 默认 300，可在 parameters 中按原生工具范围调整；timeoutMs 默认 15000、范围 1–30000。只有这一个预置配方，不接受源码、表达式或任意工具名；未知字段在请求执行前拒绝。普通 MCP 工具和旧 JSON 单工具协议继续可用，这不是服务器新增工具。
+
+仍读取 resultFile 的完整 content 并处理 isError；配方 text 是步骤证据与 findings，多个步骤是有序观察而非原子快照。结果可能包含控件文字，不是匿名记录。cancel/close 沿用下文协议，targetId 对应配方请求 id。仅在核实使用本测试分支构建时调用；main 的旧入口没有此 action。
+
 **观察、取消、关闭。** 同样发送单行 JSON：
 
 ```json

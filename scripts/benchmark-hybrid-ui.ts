@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { WinCodeSession } from '../src/Client/SkillSession.js';
 import { runReadonlyUiWorkflow, type UiReader, type UiTarget } from '../src/Client/ReadonlyUiWorkflow.js';
+import { createReadonlyUiRecipe } from '../src/Client/ReadonlyUiRecipes.js';
 import type { UiNode } from '../src/Core/UiContracts.js';
 import type { UiReviewResult } from '../src/CompositeTools/UiReview.js';
 import { killProcessTree, withTimeout } from '../src/Core/ResourceManager.js';
@@ -87,14 +88,8 @@ function nodes(value: UiReviewResult): UiNode[] {
 }
 const summaryOptions = { query: { automationId: 'hybridSummary' }, readStates: true, maxDepth: 2, maxNodes: 8 };
 const checksOptions = { query: { automationId: 'hybridChecks' }, readStates: true, maxDepth: 4, maxNodes: 40 };
-function checks(value: UiReviewResult) {
-  const rows = nodes(value).filter(node => /^hybridCheck\d$/.test(node.automationId ?? ''));
-  assert.equal(rows.length, 8);
-  rows.forEach(node => { assert.ok(['On', 'Off'].includes(node.states?.toggle ?? '')); assert.equal(typeof node.isEnabled, 'boolean'); });
-  return { checkedCount: rows.filter(node => node.states?.toggle === 'On').length,
-    unchecked: rows.filter(node => node.states?.toggle === 'Off').map(node => node.automationId).sort(),
-    disabled: rows.filter(node => node.isEnabled === false).map(node => node.automationId).sort() };
-}
+const checkboxParameters = { regionAutomationId: 'hybridChecks',
+  checkboxAutomationIds: Array.from({ length: 8 }, (_, i) => 'hybridCheck' + i), maxDepth: 4, maxNodes: 40 };
 const tasks: Array<{ id: string; batches: number; run: (reader: UiReader) => Promise<unknown>; expected: unknown }> = [
   { id: 'T1', batches: 1, run: async reader => {
     const state = (await reader.inspect(summaryOptions)).tree?.states?.toggle;
@@ -103,14 +98,10 @@ const tasks: Array<{ id: string; batches: number; run: (reader: UiReader) => Pro
   },
     expected: { detailsRequired: true } },
   // Native baseline already reads the common parent once, rather than issuing eight redundant queries.
-  { id: 'T2', batches: 1, run: async reader => checks(await reader.inspect(checksOptions)),
+  { id: 'T2', batches: 1, run: createReadonlyUiRecipe('checkbox-audit', checkboxParameters),
     expected: { checkedCount: 7, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] } },
-  { id: 'T3', batches: 2, run: async reader => {
-    const state = (await reader.inspect(summaryOptions)).tree?.states?.toggle;
-    if (state === 'Off') return { detailsRequired: false };
-    assert.equal(state, 'On', 'unknown state cannot select a branch');
-    return { detailsRequired: true, details: checks(await reader.inspect(checksOptions)) };
-  }, expected: { detailsRequired: true, details: { checkedCount: 7, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] } } },
+  { id: 'T3', batches: 2, run: createReadonlyUiRecipe('checkbox-audit', { ...checkboxParameters, summaryAutomationId: 'hybridSummary' }),
+    expected: { detailsRequired: true, details: { checkedCount: 7, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] } } },
   { id: 'T4', batches: 1, run: async reader => {
     const value = await reader.review({ query: { automationId: 'btnNormalAction' }, maxDepth: 2, maxNodes: 8,
       candidateFiles: ['tests/fixtures/wpf-ui-review/MainWindow.xaml'] });
@@ -235,6 +226,8 @@ try {
     assert.ok(helperPid);
     if (mode === 'client-cancel') controller.abort();
     const result = await pending;
+    // Preserve the actual failure before asserting; timer ordering must be diagnosable from the record.
+    await fs.writeFile(path.join(output, mode + '-observation.json'), result.content[0].text);
     assert.equal(result.isError, true);
     assert.equal(result.report.errorCode, mode === 'client-cancel' ? 'CANCELLED' : 'DEADLINE_EXCEEDED');
     assert.equal(result.report.metrics.dispatchedCalls, 1);

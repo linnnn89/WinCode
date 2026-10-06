@@ -64,6 +64,9 @@ export async function runReadonlyUiWorkflow<T>(call: UiReadCaller, target: UiTar
 
   const cancellation = () => signal.reason instanceof WorkflowStop ? signal.reason :
     new WorkflowStop('CANCELLED', 'Readonly workflow cancelled; no subsequent calls will be dispatched.');
+  // A subordinate MCP timeout may settle before our timer callback, even after this deadline.
+  const interruption = () => signal.aborted ? cancellation() : Date.now() >= deadline ?
+    new WorkflowStop('DEADLINE_EXCEEDED', 'Readonly workflow deadline exceeded.') : undefined;
   const read = (tool: 'wincode_ui_inspect' | 'wincode_ui_review', input: UiReadOptions | UiReviewOptions): Promise<UiReviewResult> => {
     if (!accepting) return Promise.reject(new WorkflowStop('WORKFLOW_CLOSED', 'Workflow has already returned.'));
     const step: Step = { step: steps.length + 1, tool, status: 'not_started', elapsedMs: 0 };
@@ -74,7 +77,7 @@ export async function runReadonlyUiWorkflow<T>(call: UiReadCaller, target: UiTar
     steps.push(step);
     // Even Promise.all in the client program cannot bypass this FIFO.
     const pending = tail.then(async () => {
-      if (signal.aborted) stopped ??= cancellation();
+      stopped ??= interruption();
       if (stopped) throw stopped;
       const begin = performance.now();
       try {
@@ -133,8 +136,8 @@ export async function runReadonlyUiWorkflow<T>(call: UiReadCaller, target: UiTar
         step.status = 'completed';
         return value;
       } catch (error) {
-        stopped ??= signal.aborted ? cancellation() : error instanceof WorkflowStop ? error :
-          new WorkflowStop('WORKFLOW_ERROR', error instanceof Error ? error.message : String(error));
+        stopped ??= interruption() ?? (error instanceof WorkflowStop ? error :
+          new WorkflowStop('WORKFLOW_ERROR', error instanceof Error ? error.message : String(error)));
         // Preflight failures did not issue a tool request.
         if (step.status === 'running') step.status = 'failed';
         step.errorCode = stopped.code;
@@ -155,13 +158,13 @@ export async function runReadonlyUiWorkflow<T>(call: UiReadCaller, target: UiTar
     if (signal.aborted) throw cancellation();
     findings = await Promise.race([workflow({ inspect: input => read('wincode_ui_inspect', input), review: input => read('wincode_ui_review', input) }), workflowAborted]);
   } catch (error) {
-    stopped ??= error instanceof WorkflowStop ? error : new WorkflowStop('WORKFLOW_ERROR', error instanceof Error ? error.message : String(error));
+    stopped ??= interruption() ?? (error instanceof WorkflowStop ? error : new WorkflowStop('WORKFLOW_ERROR', error instanceof Error ? error.message : String(error)));
   } finally {
     accepting = false;
     await tail;
     signal.removeEventListener('abort', rejectWorkflowAbort);
     clearTimeout(timer);
-    if (signal.aborted) stopped ??= cancellation();
+    stopped ??= interruption();
   }
   const report = { version: 1, executionId, target: fixed, status: stopped ? 'stopped' : 'completed', success: !stopped,
     errorCode: stopped?.code, errorMessage: stopped?.message.slice(0, 2048), findings: stopped ? undefined : findings, steps,

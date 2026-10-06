@@ -54,7 +54,23 @@ try {
 
 该入口把会话关闭信号与调用方取消信号合并。`close()` 会取消正在读取、排队及两次读取之间等待的编排，等待已登记工作流形成最终报告，并观察 Gateway 退出。完成步骤的证据保留，后续读取不再分发；关闭后的会话入口拒绝新工作流。调用方仍需保存返回报告；关闭会话不自动替宿主交付附件。客户端回调使用宿主已有的执行能力，signal/race 不能强制终止同步死循环或撤销回调在包装器之外的操作。
 
-已有连接的其他客户端可继续使用独立的 `runReadonlyUiWorkflow(call, target, program, options)`，由宿主提供取消与连接关闭。终端 JSON 入口 `SkillSessionCli.js` 沿用现有单工具协议；本轮 TypeScript 入口没有新增 JSON 计划或服务器工具。
+已有连接的其他客户端可继续使用独立的 `runReadonlyUiWorkflow(call, target, program, options)`，由宿主提供取消与连接关闭。终端 JSON 入口 `SkillSessionCli.js` 保留原有单工具协议，测试分支另提供以下已安装客户端配方。
+
+### 已安装的复选框检查配方
+
+`session.readonlyUiRecipe(target, 'checkbox-audit', parameters, options)` 与终端入口复用同一配方及会话生命周期。先列出窗口并由调用方选择明确 PID/HWND，然后在同一个终端会话发送：
+
+```json
+{"id":"audit1","action":"readonly-ui","recipe":"checkbox-audit","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"summaryAutomationId":"hybridSummary","regionAutomationId":"hybridChecks","checkboxAutomationIds":["hybridCheck0","hybridCheck1","hybridCheck2","hybridCheck3","hybridCheck4","hybridCheck5","hybridCheck6","hybridCheck7"],"maxDepth":4,"maxNodes":40},"timeoutMs":15000}
+```
+
+PID/HWND 与 AutomationId 是示例占位值，使用实际选择的窗口和控件。回执仍为 `resultFile`、`isError`、`imageFiles`；读取结果文件的 text JSON 后检查 `success`、`steps` 和 `findings`，不要只根据短回执推断完成。取消和关闭沿用现有 action，`targetId` 指向活动配方请求的 id。
+
+配方接受 1–64 个互不重复的复选框 AutomationId，并只读取指定区域一次；maxDepth 默认 4、范围 1–50，maxNodes 默认 300、范围 1–5000。可选的 summaryAutomationId 先作一次状态观察：On 才读取区域，Off 返回 `detailsRequired:false`，缺失或未知停止。省略摘要时直接返回 `{checkedCount,unchecked,disabled}`；提供摘要且为 On 时返回 `{detailsRequired:true,details:{...}}`。勾选和启用是独立状态，禁用但 On 的控件仍计入 checkedCount。
+
+每个明确选择的 ID 必须在完整区域结果中唯一对应一个 CheckBox，并有确定 On/Off 与 isEnabled；缺失、重名、错误控件类型或未知状态均停止，不输出部分统计。配方名、参数及终端配方请求拒绝未知字段，不接受源码、表达式、任意工具名或改换窗口。终端 timeoutMs 默认 15000，范围 1–30000；沿用已有步骤／数据预算，捕获模式固定 none。普通单工具请求仍保留原有超时和原生图像返回。
+
+本轮 T2/T3 的脚本与模型基准复用 `ReadonlyUiRecipes.ts`，不再维护另一份测试专用统计程序。旧模型测量记录描述当时版本，代码调整后的性能需新测量才能确认。终端配方不需要模型 API key，不保存环境变量；结果文件可包含真实控件文字和节点证据，关闭不会自动删除，应按本地附件管理。
 
 ## 执行契约
 
@@ -139,3 +155,13 @@ T1、T2、T4 每条路径均为 1 次工具观察轮次、2 次模型请求（�
 Native audit 观察到 201 次 helper start（含窗口发现）。独立的收尾检查用审计 helper PID／开始时间和当前 Windows 进程创建时间排除 PID 重用，201 次启动对应 186 个不同 PID，未发现残留。Gateway 和 fixture 实际退出，4458 次前台采样未观察到 fixture 进入前台。证据保存在本次 `test-tmp/hybrid-model-1791283297644/` 下的 report、逐次 transcript 和 `helper-exit-check.json`。
 
 **当前决策：继续客户端领域工作流。** 完成的 T1/T2/T4 在本配置下达到 token 门槛，但 T2 未减少模型轮次，T3 原生路径存在输出契约失败，且普通 MCP 客户端对 batch 的需求未验证。实验支持保留并使用预置客户端配方；服务器只读 batch、discovery 和通用 runtime 的进入条件仍未满足。
+
+## 第四轮：终端接入预置客户端配方（2026-10-06）
+
+增加参数化 `checkbox-audit` 配方及 `WinCodeSession.readonlyUiRecipe`，现有 JSON 会话通过 `action:"readonly-ui"` 使用同一实现。T2/T3 的两套基准共用此配方；保留标准 MCP、单工具协议、固定目标、步骤证据、取消和关闭行为。没有新增依赖、服务器工具、解释器或写操作。
+
+本轮新增 3 项行为测试：明确控件集合与条件分支的完整性；真实终端会话的执行前拒绝、配方及原生调用复用；真实 UIA 阻塞后的取消／关闭和进程回收。配方接入后的完整回归 471/471 通过，清单仍为 59 个测试文件。首次回归与构建并行且未采用项目 SDK，曾因暂缺 build-manifest 与系统 10.0.302 失败；最终回归在构建完成后通过 `scripts/lib/dotnet.mjs` 验证并使用本地 10.0.303 SDK，未调整 global.json 或安装 SDK。
+
+短程基准还复现了已有总 deadline 分类竞争：MCP 先抛出 `Request timed out`、而总截止时间已过且工作流 timer 尚未处理时，原来误报 WORKFLOW_ERROR。现按实际截止时间统一返回 DEADLINE_EXCEEDED，并在原有预算测试中加入可控时钟场景，保留完成证据、停止后续分发且不重试；基准在断言前保存实际超时结果便于核查。
+
+该修正后的最终复核：类型检查及构建通过；工作流与模型 HTTP 契约测试 7/7，通过真实 Windows 会话测试 5/5；`benchmark:hybrid -- 1` 的 8 个正常路径样本及 7 类故障／状态场景全部通过，审计观察到 21 次 helper start，实际 helper/Gateway 退出检查通过。最终短程报告位于 `test-tmp/hybrid-ui-1791285314223/report.json`，回归及会话日志位于 `test-tmp/hybrid-recipe-checks/`。短程检查不作为性能测量，本轮没有请求真实模型，也没有更新第三轮 token 或缓存结论。

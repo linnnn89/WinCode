@@ -4,11 +4,11 @@
 
 本文记录本分支迭代中实际观察到的问题、修复证据和未解决限制。实验方法、接口和原始测量表见 [只读编排实验说明](hybrid-readonly-orchestration.md)。前七轮实现提交包括 `ce8b517`、`a47b6b3`、`7929cb9`、`e798f99`、`5003ad6`、`a27c7b3`、`ccac194`；第八轮为 `e7350fa`，第九轮为 `ef98cb6`／`91e074b`，均在实验分支，main 未合入。
 
-**当前接手请先读 [当前状态与未完成清单](hybrid-next-iteration-plan.md#当前未实现与待验证事项)。** 下文“仍未解决”等标题描述该轮结束时的状态，后续结果按时间追加，不抹去旧失败。最新实现为第十三轮多候选选择，代码基线 `70a378f`；New-tavern 单候选与独立 WPF 多候选已分别验收，尚未证明任意导航发现或非 fixture 多候选。完成后对剩余限制的代码核对见文末。
+**当前接手请先读 [当前状态与未完成清单](hybrid-next-iteration-plan.md#当前未实现与待验证事项)。** 下文“仍未解决”等标题描述该轮结束时的状态，后续结果按时间追加，不抹去旧失败。最新实现为第十四轮辅助属性门槛与错误分类修正；此前 New-tavern 单候选与独立 WPF 多候选已分别验收，本轮属性故障使用独立真实 WPF 窗口，尚未证明任意导航发现或非 fixture 多候选。
 
 ## 已确认并修复的缺陷
 
-最新实现验收见 [第十三轮多候选选择](#第十三轮多候选选择2026-10-06)，剩余事项的源码核对见 [完成后复核](#第十三轮后状态复核仅文档2026-10-06)，约束是否必要及修订顺序见 [产品约束设计复核](#产品约束设计复核仅文档2026-10-06)；以下各轮保留原有时间和失败边界。
+最新实现验收见 [第十四轮辅助属性缺口与错误反馈](#第十四轮辅助属性缺口与错误反馈2026-10-06)，第十三轮验收、完成后复核及产品约束复核按历史保留；当前剩余事项见 [交接入口](hybrid-next-iteration-plan.md#当前未实现与待验证事项)。
 
 ### 1. 总 deadline 已过，错误仍归类为 WORKFLOW_ERROR
 
@@ -339,3 +339,38 @@ CLI 显式 close 并实际退出，独立检查入口与 Gateway 均无残留；
 修订决策：跨请求累计预算没有当前必要性，不列为下一轮门槛；不新增令牌、配额框架或逐步授权。任务范围采用现有窗口和用户任务，允许按新观察修正查询；当前 nextRequest 原样续接规则仍保持实际协议要求。后续优先考虑辅助证据与必要证据分离、错误反馈准确性，其次是有效候选已展开后的续接及有依据的内层导航。详见 [修订后的推进顺序](hybrid-next-iteration-plan.md#修订后的推进顺序)。这覆盖此前“先补累计预算”的建议，不改变历史记录或宣称这些方向已经实现。
 
 本次仅更新三份 docs 和两份分支 Skill 手册；默认安装与 main 未切换，无关未跟踪文件未读写。检查记录存于 Git 忽略目录 `test-tmp/hybrid-design-review/`。五份修改文档的相对链接文件存在性、代码围栏配对与新增行的绝对路径／邮箱／密钥形状检查通过；已知配置 DeepSeek 凭据及 JSON／URL／Base64 变体在五份公开文件和本次检查记录共九个文件中匹配为零，只在本机内存中比较，未请求模型 API。该结论仅覆盖所列文件和已知凭据，不保证全机所有未知秘密均已扫描。没有将历史回归结果当成本次重新测试。
+
+## 第十四轮辅助属性缺口与错误反馈（2026-10-06）
+
+### 已实现的行为与范围
+
+按产品约束复核的第一项推进，限定在 ExpandUiWorkflow 和原生 setExpanded：className、bounds、isOffscreen 缺口不再单独阻断语义展开及复选框状态读取。steps／actionTarget 仍保留原 propertyIssues 和计数，不删除缺口或声称全部属性完整。其他属性问题、无法由返回树解释的属性计数、搜索／遍历／必要状态不完整仍停止。没有引入策略框架、累计预算或新的授权步骤。
+
+原生实际禁用仍为 TARGET_DISABLED；身份／启用证据缺失为 TARGET_EVIDENCE_INCOMPLETE，并提示核查缺口。客户端显式父级的启用未知也用该码；根状态诊断仍允许仅 maxDepth 截断，最终归属取证仍要求完整父树与唯一子控件、独立读回真实 toggle 状态。只读工作流和 checkbox-audit 未修改。未知 Group 的必要状态、候选已展开时的续接和多层导航也未顺带实现。
+
+### 测试先行与实际窗口证据
+
+新增三项自动化测试：两项核心场景、一项真实 WPF 属性故障场景。首先新增回归，两项核心测试均失败：辅助缺口被 NAVIGATION_DISCOVERY_INCOMPLETE 拒绝，启用未知分类不符。真实窗口中旧 Release Host 在唯一、启用的 Expander 仅有 `className:unsupported` 时返回 TARGET_DISABLED，复现了错误阻断；更新 Host 后同一属性故障场景通过。
+
+- 核心相关测试 11/11：辅助字段缺口保留，唯一父级展开后正确读到 On；身份缺口、未知属性、未解释的计数、启用未知、实际禁用、不完整搜索／树和未知 toggle 不得完成或执行导航。随后针对实际 isEnabled:unsupported 补足同一测试场景，复核通过。
+- 类型检查、Gateway 构建、Release Host 发布及 WPF fixture 发布通过，复用项目已安装 SDK，没有修改 global.json 或安装依赖。核心完整回归运行一次，489/489 通过；没有重跑外部模型历史样本。
+- 新的真实 WPF 测试 1/1：辅助字段缺口下原生展开及混合归属／子状态读取成功；启用证据未知和实际禁用分别给出对应码，区域保持 Collapsed。六项既有实际动作／导航回归 6/6，包含单候选、多候选、已展开不切换、歧义／不支持，以及既有点击输入路径。
+- 当前 Codex 使用分支 CLI 一次会话实际验证：先观察父级唯一、启用、Collapsed 且类名缺口；expand-ui 经 5 次标准工具调用、1 次展开，父树完整并确认目标归属，独立子控件读回 On，动作与步骤中的类名缺口保留。另一个启用未知区域返回 TARGET_EVIDENCE_INCOMPLETE，随后只读确认仍为 Collapsed。不是外部模型独立准确率实验。
+- CLI 握手核对的 buildId 为 `253029ad209af867b02c01a0e01478d8f337f3a3898c18495e6d2d6d0e876c63`，源码／产物摘要与磁盘构建一致；revision 字段是实现前的 `77f4ab4`，验收期间的未提交实现由 sourceHash／artifactHash 对应，不能只用 revision 断言旧代码。
+- CLI 显式 close 后入口和 Gateway 已退出；独立 fixture 按既有进程树清理方式结束，8 次该窗口的 helper 启动均无残留。关闭前记录的自有进程创建身份复核为 0 残留。fixture 的清理退出码为 1，来自测试结束的进程终止，不记录为应用自然关闭。
+
+真实夹具准备中有两项失败，保留事实：首次编译的局部变量名与既有 disabled 控件冲突，改名后发布通过；首次属性故障注入使测试窗口在 READY 前退出。核查 WPF 官方源码发现 IsEnabledCore 也由事件更新调用，而 UIA 属性查询经 ElementUtil.Invoke 将异常传给调用方。夹具仅在明确故障模式下处理自定义 FixturePropertyException 的事件异常，其余异常不处理；属性查询仍实际返回 unsupported，测试确认缺口而不是直接伪造 Host JSON。参考 [WPF AutomationPeer](https://github.com/dotnet/wpf/blob/main/src/Microsoft.DotNet.Wpf/src/PresentationCore/System/Windows/Automation/Peers/AutomationPeer.cs)及[ElementUtil.Invoke](https://github.com/dotnet/wpf/blob/main/src/Microsoft.DotNet.Wpf/src/PresentationCore/MS/internal/Automation/ElementUtil.cs)。这些失败与修正属于夹具准备，没有通过放宽生产守卫规避。
+
+### 当前限制与记录
+
+这是针对三类辅助属性的局部修正，不是任意字段／任意任务的证据策略。无关节点的必要属性／状态问题仍可能阻断；只读工作流的 UI／源码统一门槛、良性展开状态续接、内层折叠和非 fixture 多候选尚未处理。本轮实际属性故障验收使用隔离 WPF 提供方，没有对 New-tavern 注入故障，也没有外部 API 调用、性能结论或默认安装切换。
+
+用户提出非 WPF 兼容性后，核对了变更范围：UiTreeReader、UiPropertyEvidence、inspect/review 返回结构、click/type/setValue 均未改；分类依据 UIA 字段而非框架名称。WPF 夹具只提供本轮故障复现证据，不能推为所有 Win32／WinForms／Electron／WebView2 提供方已验证。按用户指定尝试识别 Open-LLM-VTuber：源码保留 Electron 和 Rust/Tauri 壳；首次实际窗口枚举中“桌宠”无匹配，“Open-LLM”只命中文件资源管理器，尚未定位运行中的目标应用。未读取其配置、凭据或聊天内容，未修改该项目，也未启动应用；已请求用户打开实际版本。窗口未找到不是 UIA 控件读取回归证据。
+
+用户随后打开根目录桌宠，实际运行的是 Electron 壳。通过专门绑定该项目的分支 CLI 定位窗口并只读取证：浅树先按 maxDepth 截断，maxDepth=16／maxNodes=128 后取得完整的 15 节点，实际最深 12 层，Window 1、Pane 9、Document 1、Group 2、Text 2，遍历错误为 0。外层两处 automationId:unsupported、一处 isOffscreen:unsupported 保留；收窄为唯一 Document 后只读到 5 节点、4 层，树和搜索均完整、属性问题为 0。完整树没有复选框，两个 Group 的 ExpandCollapse 均为 unsupported；不能把普通 DOM Group 当可展开菜单，也不能把这个结果算作非 WPF 导航验收。没有触发点击／展开、读输入值、更改无障碍设置或修改目标项目。该兼容性观察证明普通读取仍能识别实际 Electron 窗口／文档，未覆盖其他提供方或辅助属性故障下的非 WPF 导航。
+
+这个窗口也提供真实的设计证据：整窗很深不代表目标区域同样很深，先缩小到实际 Document 可以取得完整局部证据；不能把固定深度 8 当所有框架的合理完整性门槛。后续若调整，应由明确截断和实际区域决定，而非按 WPF／非 WPF 分叉。Electron 的无障碍树可能由辅助技术或应用 API 启用，参见 [Electron 官方无障碍说明](https://www.electronjs.org/docs/latest/tutorial/accessibility)；本次已观察到 Document，未判断其设置关闭或调用启用 API。
+
+专用识别会话显式 close 后自有 CLI／Gateway 和该窗口 7 次 helper 启动均无残留；用户打开的桌宠保持运行。记录在 `test-tmp/hybrid-fourteenth-checks/non-wpf*.json` 及 `test-tmp/skill-sessions/run-41JWsi/`。
+
+原始记录在上述忽略目录及 `test-tmp/skill-sessions/run-aHsY38/`，可能含本机路径、进程身份和控件内容，不作为匿名附件。只提交实现、三个测试及现有手册／记录的脱敏更新；main 和无关文件保持原状。最终检查五份 MD 的相对链接文件／代码围栏、全部公开新增行的绝对路径／邮箱／密钥形状以及 git diff --check 通过。十个公开变更文件、本轮记录及两个实际 CLI 会话附件共 58 个文件，已知配置 DeepSeek 凭据及 JSON／URL／Base64 变体匹配为零；只在本机内存中比对，未请求模型 API。结论限于已知凭据和所列文件，不延伸为所有未知秘密或全机隐私保证。

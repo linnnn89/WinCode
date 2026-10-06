@@ -13,6 +13,79 @@ const observation = (requestId = 'read-1'): UiInspectResult => ({ schemaVersion:
     states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] } });
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
 
+test('navigation retains auxiliary property gaps while proving the parent and actual child state', async () => {
+  const calls: string[] = [];
+  const checked = await runExpandUiWorkflow(async tool => {
+    calls.push(tool);
+    const value = observation();
+    const child = { ...value.tree!, automationId: 'check', controlType: 'CheckBox', propertyIssues: ['bounds:error'] };
+    const parent = { ...value.tree!, automationId: 'advanced', controlType: 'Group', isEnabled: true,
+      propertyIssues: ['className:error', 'isOffscreen:unsupported'],
+      states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: calls.length >= 5 ? 'Expanded' : 'Collapsed' } };
+    if (calls.length === 1) {
+      delete value.tree;
+      value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] };
+    } else if (calls.length === 2) {
+      value.tree = parent; value.propertyIssueCount = 2;
+      value.queryResult = { status: 'unique', searchComplete: true, visitedNodes: 8, matches: [parent] };
+    } else if (tool === 'wincode_ui_set_expanded') {
+      delete value.tree; value.actionTarget = parent;
+    } else {
+      value.tree = calls.length === 6 ? child : parent;
+      if (calls.length === 5) value.tree.children = [child];
+      value.propertyIssueCount = calls.length === 6 ? 1 : calls.length === 5 ? 3 : 2;
+      value.queryResult!.matches = [value.tree];
+    }
+    return result(value);
+  }, target, { childQuery: { automationId: 'check' } });
+  assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+  assert.equal(checked.report.diagnosis.relationshipVerified, true);
+  assert.equal(checked.report.findings?.state, 'On');
+  assert.equal(calls.filter(tool => tool === 'wincode_ui_set_expanded').length, 1);
+  assert.equal(calls.length, 6);
+  assert.deepEqual(checked.report.steps[2].value.tree?.propertyIssues, ['className:error', 'isOffscreen:unsupported']);
+  assert.deepEqual(checked.report.steps[5].value.tree?.propertyIssues, ['bounds:error']);
+});
+
+test('auxiliary gaps never override missing required navigation evidence or incomplete searches', async () => {
+  for (const scenario of ['identity', 'unclassified-issue', 'unexplained-count', 'enabled', 'disabled', 'search', 'tree', 'state']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async tool => {
+      calls.push(tool);
+      const value = observation();
+      value.tree!.propertyIssues = ['className:error']; value.propertyIssueCount = 1;
+      value.queryResult!.matches = [value.tree!];
+      if (scenario === 'enabled' || scenario === 'disabled') {
+        if (calls.length === 1) {
+          delete value.tree; value.propertyIssueCount = 0;
+          value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] };
+        } else {
+          value.tree!.automationId = 'advanced'; value.tree!.controlType = 'Group';
+          value.tree!.states!.expandCollapse = 'Collapsed';
+          if (scenario === 'enabled') {
+            delete value.tree!.isEnabled;
+            value.tree!.propertyIssues.push('isEnabled:unsupported'); value.propertyIssueCount = 2;
+          }
+        }
+      } else if (scenario === 'identity') { value.tree!.propertyIssues.push('automationId:error'); value.propertyIssueCount = 2; }
+      else if (scenario === 'unclassified-issue') { value.tree!.propertyIssues.push('newField:error'); value.propertyIssueCount = 2; }
+      else if (scenario === 'unexplained-count') value.propertyIssueCount = 2;
+      else if (scenario === 'search') { value.queryResult!.searchComplete = false; value.queryResult!.status = 'incomplete'; }
+      else if (scenario === 'tree') { value.treeComplete = false; value.truncated = true; }
+      else if (scenario === 'state') value.tree!.states!.toggle = 'unknown';
+      return result(value);
+    }, target, { ...(scenario === 'enabled' || scenario === 'disabled' ? { parentQuery: { automationId: 'advanced' } } : {}),
+      childQuery: { automationId: 'check' } });
+    assert.equal(checked.report.success, false, scenario);
+    assert.equal(checked.report.errorCode, scenario === 'enabled' ? 'TARGET_EVIDENCE_INCOMPLETE' :
+      scenario === 'disabled' ? 'TARGET_DISABLED' : scenario === 'search' ? 'QUERY_INCOMPLETE' :
+      scenario === 'state' ? 'STATE_UNAVAILABLE' : 'INCOMPLETE_OBSERVATION', scenario);
+    assert.equal(checked.report.actionAttempted, false, scenario);
+    assert.equal(checked.report.findings, undefined, scenario);
+    assert.ok(calls.every(tool => tool === 'wincode_ui_inspect'), scenario);
+  }
+});
+
 test('automatic expansion reports multiple or absent candidates without performing an action', async () => {
   for (const count of [0, 2]) {
     const calls: string[] = [];

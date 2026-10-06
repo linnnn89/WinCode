@@ -96,9 +96,12 @@ internal static class UiActionExecutor
 
     private static InspectResponse SetExpanded(InspectRequest request, AutomationElement target, UiTargetDto evidence, ResolvedWindow identity)
     {
-        // Unknown enabled/state evidence must not authorize navigation.
-        if (evidence.IsEnabled != true || evidence.PropertyIssues?.Count > 0)
-            return Failed(request, "TARGET_DISABLED", "Target is disabled or its enabled state is unproven; no navigation was attempted.", identity, evidence);
+        if (evidence.IsEnabled == false)
+            return Failed(request, "TARGET_DISABLED", "Target is disabled; no navigation was attempted.", identity, evidence);
+        // Semantic expansion does not consume geometry or class metadata. Retain those gaps in ActionTarget.
+        if (evidence.IsEnabled != true || evidence.PropertyIssues?.Any(issue =>
+            issue.Split(':')[0] is not ("className" or "bounds" or "isOffscreen")) == true)
+            return Failed(request, "TARGET_EVIDENCE_INCOMPLETE", "Required target identity or enabled-state evidence is unavailable; inspect the reported property issues before navigation. No action was attempted.", identity, evidence);
         if (!target.Patterns.ExpandCollapse.TryGetPattern(out var pattern))
             return Failed(request, "NO_EXPAND_COLLAPSE_PATTERN", "Target has no ExpandCollapsePattern; no click fallback was attempted.", identity, evidence);
         var state = pattern.ExpandCollapseState.Value;

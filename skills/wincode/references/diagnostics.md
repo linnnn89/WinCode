@@ -50,7 +50,7 @@ node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标
 
 **选择并继续。** `selection-required` 的 `isError:false` 表示已取得待选择证据，`success:false` 表示任务尚未完成；不要据此回答目标状态。读取完整结果，选择 `diagnosis.candidates` 中与任务相关且有 `nextRequest` 的一项。将该 nextRequest 原样补上新 id 提交到同一 CLI。合法形状示例：`{"id":"nav3","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"},"candidateQuery":{"name":"实际所选候选标题","controlType":"Group"}},"timeoutMs":15000}`；实际各字段使用返回请求中的完整值，不能照抄示例占位值。nextRequest 使用 candidateQuery，下一请求会重新发现并核验该候选；失效选择返回 `NAVIGATION_SELECTION_STALE`，不执行动作。续接本请求时保留返回的 target／childQuery，不默认首项或自动遍历列表；同一用户任务获得新观察后，可以另外发起合法查询修正。本试点最多一次选择与一次展开；选择不足以确定时先只读核查，确有影响任务选择的歧义再澄清，动作结果未知时停止。
 
-**预算与范围的实现边界。** 单次 expand-ui 的 deadline／调用数由程序限制；发现和选择请求各自计时，没有跨请求累计预算或绑定上次任务范围的校验，当前也不要求先新增这些框架。nextRequest 继承原字段属于请求构造，不是不可更改的权限令牌。一次选择、原样提交和停止规则是当前试点边界；沿用用户选定窗口与任务，不为已授权的导航逐步重复确认。不要把实验宿主的历史总预算说成日常 CLI 已实现能力。当前过宽的属性／源码完整性门槛、已展开候选被判失效及成功展开后缺少后续观察，仍是实际实现限制；MD 中的改良方向不代表它们已修复。
+**预算与范围的实现边界。** 单次 expand-ui 的 deadline／调用数由程序限制；发现和选择请求各自计时，没有跨请求累计预算或绑定上次任务范围的校验，当前也不要求先新增这些框架。nextRequest 继承原字段属于请求构造，不是不可更改的权限令牌。一次选择、原样提交和停止规则是当前试点边界；沿用用户选定窗口与任务，不为已授权的导航逐步重复确认。不要把实验宿主的历史总预算说成日常 CLI 已实现能力。第十四轮允许展开导航中的 className／bounds／isOffscreen 缺口并保留记录；TARGET_EVIDENCE_INCOMPLETE 区分启用／身份证据未知与实际禁用。其余属性和普通只读工作流／源码门槛、已展开候选被判失效及成功展开后缺少后续观察仍是实现限制。
 
 **调用与回答的顺序。** 先确认实际窗口及页面，再提交工具／配方请求，等待相同 id 回执，读取完整 `resultFile`，核对 `isError`、业务状态及证据完整性，最后按实际观察回答。`{recipe,parameters}` 只是输入，打印参数不能代替调用。标准 inspect 的 `success:true` 只说明查询完成；仍须检查 `queryResult.status="unique"`、`searchComplete=true`、`treeComplete=true`、截断／属性问题及所选控件的明确状态。`not-found` 不能推成未勾选或数量为零。配方须为 `status="completed"`、`success=true` 且具有符合任务范围的 findings；`stopped` 或 `isError:true` 应保留错误与已有步骤，不自动重放。
 

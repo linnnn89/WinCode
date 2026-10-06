@@ -41,6 +41,20 @@ public partial class MainWindow : Window
 
     public System.Windows.Input.ICommand ReviewActionCommand { get; private set; } = null!;
 
+    private sealed class FixturePropertyException(string message) : InvalidOperationException(message);
+    // Explicit fault fixture: exercise real UIA property failures without changing production readers.
+    private sealed class EvidenceExpander(bool enabledUnknown = false) : Expander
+    {
+        protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer() => new EvidencePeer(this);
+        private sealed class EvidencePeer(EvidenceExpander owner) : System.Windows.Automation.Peers.ExpanderAutomationPeer(owner)
+        {
+            protected override string GetClassNameCore() => throw new FixturePropertyException("Fixture auxiliary property unavailable");
+            protected override bool IsEnabledCore() => owner.enabledUnknown
+                ? throw new FixturePropertyException("Fixture enabled evidence unavailable") : base.IsEnabledCore();
+        }
+        private readonly bool enabledUnknown = enabledUnknown;
+    }
+
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
@@ -59,6 +73,12 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        if (Environment.GetCommandLineArgs().Contains("--navigation-evidence"))
+        {
+            // WPF also reads IsEnabled during event updates. Only handle our injected event fault;
+            // UIA property queries still propagate it through WPF's ElementUtil.Invoke to the client.
+            Dispatcher.UnhandledException += (_, e) => { if (e.Exception is FixturePropertyException) e.Handled = true; };
+        }
         InitializeComponent();
         if (Environment.GetCommandLineArgs().Contains("--code-navigation-fixture"))
         {
@@ -141,6 +161,16 @@ public partial class MainWindow : Window
             System.Windows.Automation.AutomationProperties.SetAutomationId(childCheck, "actionNormalize");
             var navigationCandidates = Environment.GetCommandLineArgs().Contains("--navigation-candidates");
             Add(new Expander { Header = navigationCandidates ? "Speech advanced" : "Advanced", Content = childCheck }, "actionAdvanced");
+            if (Environment.GetCommandLineArgs().Contains("--navigation-evidence"))
+            {
+                foreach (var (id, enabledUnknown, isDisabled) in new[] {
+                    ("actionAuxiliary", false, false), ("actionEnabledUnknown", true, false), ("actionDisabledExpander", false, true) })
+                {
+                    var evidenceChild = new CheckBox { Content = "Evidence check", IsChecked = true };
+                    System.Windows.Automation.AutomationProperties.SetAutomationId(evidenceChild, id + "Check");
+                    Add(new EvidenceExpander(enabledUnknown) { Header = id, Content = evidenceChild, IsEnabled = !isDisabled }, id);
+                }
+            }
             if (navigationCandidates)
             {
                 var displayCheck = new CheckBox { Content = "Dark theme", IsChecked = false };

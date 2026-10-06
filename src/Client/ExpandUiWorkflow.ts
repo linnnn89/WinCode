@@ -73,9 +73,22 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
     return value.tree!;
   };
   const complete = (value: UiInspectResult) => {
-    const issues = (node: UiNode): boolean => Boolean(node.propertyIssues?.length) || node.children.some(issues);
-    if (!value.tree || value.treeComplete !== true || value.truncated || value.traversalErrors || value.propertyIssueCount || issues(value.tree))
+    if (!value.tree || value.treeComplete !== true || value.truncated || value.traversalErrors || blockingPropertyEvidence(value))
       stop('INCOMPLETE_OBSERVATION', 'Required subtree or state evidence is incomplete.');
+  };
+  // Geometry/class metadata is not needed for semantic expansion or toggle-state reads.
+  // Keep all gaps in steps; unclassified issues and unexplained aggregate counts still block.
+  const criticalProperties = (node: UiNode) => node.propertyIssues?.some(issue =>
+    !['classname', 'bounds', 'isoffscreen'].includes(issue.split(':')[0].toLowerCase())) === true;
+  const blockingPropertyEvidence = (value: UiInspectResult) => {
+    let count = 0, critical = false;
+    const visit = (node: UiNode) => {
+      count += node.propertyIssues?.length ?? 0;
+      critical ||= criticalProperties(node);
+      node.children?.forEach(visit);
+    };
+    if (value.tree) visit(value.tree);
+    return critical || (value.propertyIssueCount ?? 0) > count;
   };
   const matches = (node: UiNode, query: UiQuery): boolean =>
     (!query.automationId || node.automationId === query.automationId) && (!query.name || node.name === query.name) &&
@@ -93,8 +106,8 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
     const value = await inspect({ controlType: 'Group', maxSearchNodes: 1000, maxMatches: 20 }, true);
     const query = value.queryResult;
     // This is match-set evidence: root-only tree truncation does not truncate the query search.
-    if (!query?.searchComplete || query.status === 'incomplete' || value.traversalErrors || value.propertyIssueCount ||
-      query.matches.some(node => node.propertyIssues?.length || node.controlType !== 'Group' ||
+    if (!query?.searchComplete || query.status === 'incomplete' || value.traversalErrors || blockingPropertyEvidence(value) ||
+      query.matches.some(node => criticalProperties(node) || node.controlType !== 'Group' ||
         typeof node.isEnabled !== 'boolean' || !['Collapsed', 'Expanded', 'LeafNode', 'PartiallyExpanded', 'unsupported'].includes(node.states?.expandCollapse ?? '')))
       return stop('NAVIGATION_DISCOVERY_INCOMPLETE', 'Group search or candidate state is incomplete. Do not infer uniqueness; inspect the page or supply a proven parentQuery.');
     const candidates = query.matches.filter(node => node.isEnabled === true && node.states?.expandCollapse === 'Collapsed');
@@ -129,10 +142,11 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
       const parentQuery = input.parentQuery ?? await discoverParent();
       const parent = await inspect(parentQuery, true);
       const node = unique(parent);
-      if (parent.propertyIssueCount || parent.traversalErrors || node.propertyIssues?.length ||
+      if (typeof node.isEnabled !== 'boolean') stop('TARGET_EVIDENCE_INCOMPLETE', 'Parent enabled state is unavailable; inspect enabled-state evidence before navigation. No action was attempted.');
+      if (node.isEnabled === false) stop('TARGET_DISABLED', 'Parent is disabled; no navigation was attempted.');
+      if (blockingPropertyEvidence(parent) || parent.traversalErrors ||
         (parent.truncated && parent.truncateReason !== 'maxDepth')) stop('INCOMPLETE_OBSERVATION', 'Parent identity/state evidence is incomplete.');
       diagnosis.parentState = node.states?.expandCollapse;
-      if (node.isEnabled !== true) stop('TARGET_DISABLED', 'Parent is disabled or enabled state is unknown; no navigation was attempted.');
       if (!['Collapsed', 'Expanded'].includes(node.states?.expandCollapse ?? ''))
         stop('NO_EXPAND_COLLAPSE_PATTERN', 'Parent has no proven actionable expand state. Do not substitute a click.');
       if (node.states?.expandCollapse === 'Collapsed') {

@@ -4,7 +4,7 @@
 
 本文记录本分支迭代中实际观察到的问题、修复证据和未解决限制。实验方法、接口和原始测量表见 [只读编排实验说明](hybrid-readonly-orchestration.md)。前七轮实现提交包括 `ce8b517`、`a47b6b3`、`7929cb9`、`e798f99`、`5003ad6`、`a27c7b3`、`ccac194`；第八轮为 `e7350fa`，第九轮为 `ef98cb6`／`91e074b`，均在实验分支，main 未合入。
 
-**当前接手请先读 [下一轮计划的前部](hybrid-next-iteration-plan.md)。** 下文“仍未解决”等标题描述该轮结束时的状态，后续结果按时间追加，不抹去旧失败。当前有限 fixture 的参数化调用已经通过第九轮小样本，实际客户端完整流程与非 fixture 应用仍待验收。
+**当前接手请先读 [下一轮计划的前部](hybrid-next-iteration-plan.md)。** 下文“仍未解决”等标题描述该轮结束时的状态，后续结果按时间追加，不抹去旧失败。第十轮已通过实际 Codex／CLI 的 6 项 fixture 功能任务和 New-tavern 两个单控件范围的只读对照；真实条件导航、多控件范围与稳定性能仍未验证。
 
 ## 已确认并修复的缺陷
 
@@ -173,3 +173,41 @@ T3 真实模型小样本共 40 次尝试、99 次 API 请求。纠错开启的 2
 第九轮小样本原生 47 次模型请求、混合 30 次，差额中的 12 次是格式修正，5 次是条件任务的模型交互；两边 UI 读取均 20 次。schema JSON 体积为 6043／1117 字节，不是 token。按记录扣除原生格式修正阶段后的 token 差异约为 43.5%／60.8%／49.4%，仅用于账目分解，不是重新获得的首次正确对照。对原有 12 个格式失败作静态分类，均在首个 JSON 对象前有额外内容；未放宽解析、重算通过率或调用模型。旧 T1–T4 提示只在旧入口分支使用，未发现误用于参数化入口，不列为缺陷。
 
 计划首页旧状态已更新；最新执行步骤集中到计划前部，历史正文保留。下一轮先做分支使用说明和实际客户端的 6 个功能任务，再确认非 fixture 目标。此交接仅更新文档，没有运行第十轮、同步已安装 Skill、增加 API 调用或重跑历史测试。
+
+## 第十轮实际客户端入口与 New-tavern 验证（2026-10-06）
+
+### 实际入口通过，默认安装仍未切换
+
+当前 Codex 按仓库 Skill 使用持久 PTY CLI：读取 ready、确认目标窗口、逐条提交请求、等待匹配 id 回执、读取完整结果附件并检查证据，最后显式 close。请求由当前客户端实际发出，没有使用固定回复驱动或真实模型基准宿主代替。仓库 Skill 补齐调用／回答顺序、业务成功与查询唯一性的区别，以及指定分支构建的试验方式；没有同步全局 Skill 或修改 MCP 配置。
+
+已有原生连接根正确，但 Gateway buildId 为较早版本。本轮标准 inspect 与混合配方均通过同一个新分支 CLI 会话顺序调用，旧连接只用于有限窗口列表查询。分支 Gateway buildId 为 `ede8590e616a625d276a3a04fffc9de5ac187dce57433a595ad7b70af7ef2f57`，源码／产物身份校验通过；起始交付清单 `matched:true`。UIA Host 内嵌 revision 较早，其交付源码／产物回执校验通过，不将整个原生 Host 冒称重新构建。本次仅修改说明，生产源码和产物未改。受管 Skill 手册变化后，用既有交付脚本刷新本地忽略清单并验证 `matched:true`；清单刷新不是构建或默认安装切换。
+
+| 任务 | 实际原生结果 | 实际混合结果 | 原生／混合 UI 读取 |
+|---|---|---|---|
+| P1：选定 0／3／6 | checkedCount=2，unchecked=[hybridCheck3]，disabled=[hybridCheck6] | 一致 | 1／1 |
+| P2：摘要 On，选定 1／2／3／5／6 | detailsRequired=true，checkedCount=4，未勾选／禁用集合同上 | 一致 | 2／2 |
+| P3：独立 Off fixture | detailsRequired=false，没有请求详情 | 一致，只有摘要步骤 | 1／1 |
+
+6 项功能任务均通过，目标唯一、搜索和子树完整，没有截断或属性／遍历问题；参数更正和格式更正均为 0。混合报告本身的执行耗时约为 850／1711／869 ms。整个使用流程还有 CLI 启动、窗口发现、回执轮询和附件读取成本：本地包装观测冷启动约 10.5 秒，9 次完整附件读取各约 0.80–0.91 秒。PTY 等待存在最短轮询时间，这些数值包含工具调度且未包含全部模型思考时间，不能用作两条路径的性能对照。逐次客户端 token 无法取得，记录为未知；未调用额外 DeepSeek API，未重跑历史大样本。
+
+### New-tavern：首次缺失保留，新的页面证据后观察成功
+
+用户指定 New-tavern 并自行打开语音设置。根据源码的 AutomationId 候选，先在固定 PID/HWND 只读查询 `SpeechNormalize`。原生工具为 `isError=false`、`success=true`，但 `queryResult.status="not-found"`、匹配数 0；不能解释为复选框未勾选。混合配方同范围返回 `isError=true`、`status="stopped"`、`QUERY_NOT_FOUND`，保留失败步骤，没有 findings，实际读取 1 次。该组任务没有取得有效目标，不改算为成功。
+
+用户提供语音页上部截图后，针对可见 `SpeechClearKey` 做一次新的原生／混合对照：两者均找到唯一复选框，Off、启用，checkedCount=0，unchecked=[SpeechClearKey]，disabled=[]；每条路径读取 1 次。用户随后提供“高级合成参数”已展开的截图，再安排原 `SpeechNormalize` 的一组新观察：两者均找到唯一控件，On、启用，checkedCount=1，unchecked=[]，disabled=[]，每条路径读取 1 次。每次只取该复选框及文字子节点，结果均无截图；不读取输入值、点击、填写、保存或触发语音 API。
+
+共 3 组真实页面对照：首组目标缺失，后两组通过。页面状态／查询目标不同，不能合并为成功率或性能样本，也不证明整个语音页、多控件区域或条件摘要已迁移。展开前后结果支持“页面展开状态影响目标可发现性”；首次未独立记录父级的 Collapsed 状态，不能把这一推断写成已完成父子因果证明。
+
+### 真实缺口：错误尚不能指导发现和展开父级
+
+用户指出目标藏在“高级”菜单时，AI 应更准确发现原因并打开次级界面。当前工作流只给出 `QUERY_NOT_FOUND`、通用错误句和搜索证据，没有关联父级、页面前置条件或具体下一步；这是使用指导的缺口。源码候选也不能单独证明运行时目标藏在某个折叠区域中。
+
+当前 [UiTreeReader.cs](../tools/WinCode.UIA.Host/UiTreeReader.cs) 能读取 ExpandCollapse 状态；[UiActionExecutor.cs](../tools/WinCode.UIA.Host/UiActionExecutor.cs) 的 click 只执行 Invoke／Toggle／SelectionItem，没有明确的 ExpandCollapse 操作。部分标题按钮可能支持既有模式，但本轮没有对该菜单执行任何动作，不能宣称现有 click 已验证能展开它。
+
+合理的下一步是有界只读诊断、证据支持的父级／导航候选，以及独立的明确展开操作。优先使用 UIA `ExpandCollapsePattern.Expand` 设置目标状态，避免盲目 toggle；动作后读回 Expanded，再重新定位原目标。微软的 [Expand 方法文档](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.expandcollapsepattern.expand?view=windowsdesktop-10.0) 给出该模式与不可操作／禁用的限制。未知、歧义、disabled 或动作结果不明时停止，不扩成坐标点击或自动重放。此处为后续建议，尚未实现；现有 `readonly-ui` 配方保持只读。
+
+### 清理和记录边界
+
+3 个 CLI 会话均得到 `closed:true` 并实际退出，各自 Gateway／观测到的自有控制台进程退出；2 只自有 fixture 实际退出。fixture 的 10 个审计 helper start、New-tavern 指定控件的 6 个 helper start 均独立检查无残留。用户的 TavernDesk 继续运行，没有关闭用户应用。fixture 的 2280 次有限采样未观察到 fixture 进入前台；该结论不覆盖用户手动开页或整个 New-tavern 过程。
+
+原始参数、PID/HWND、控件附件、PTY 回显、前台进程采样和本地核验脚本保留在忽略的 `test-tmp/hybrid-tenth-checks/` 及本轮 3 个会话附件目录，不提交。原始前台采样可能含其他应用名称，不是匿名附件。公开只保留任务范围、结果与错误类别；用户截图不写入仓库。没有修改 New-tavern、读取其用户数据目录或密钥输入值。最终实际凭据比对覆盖 5 个变更手册／文档与本轮本地记录、附件共 48 个文件：已配置 DeepSeek API Key 的原值／JSON 转义／URL 编码／Base64 匹配为 0；公开新增行的本机绝对路径、密钥形状和邮箱扫描匹配为 0。检查仅覆盖这一已知凭据和所列范围，不等于扫描所有未知个人秘密。相对文档链接和代码围栏核对通过，纯说明改动未新增自动测试、未重跑主回归。

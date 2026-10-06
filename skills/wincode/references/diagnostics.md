@@ -14,6 +14,8 @@
 
 按需模式要求客户端不再自动连接同一个 WinCode：安装切换时将其原生 MCP 配置禁用，并让客户端刷新连接。保留原配置以便恢复；日常调用不自行修改客户端配置。有可用且工作区正确的原生连接时直接使用，不同时再启动按需入口。没有持久执行工具时使用已配置的原生 MCP；不要每次调用都临时启动、关闭服务器。
 
+**明确指定实验构建的验收。** 若已有原生连接绑定正确根，但其 `runtime.build.buildId` 与所验收的分支构建不同，磁盘更新不会热替换该连接。先核对分支构建的源码／产物身份；在已明确要求试用该构建的任务中，可保留旧连接与配置，仅用一个分支 CLI 会话顺序调用标准工具和配方，完成后关闭。不要同时向旧、新连接提交同一业务任务，也不要为了试验静默覆盖安装 Skill 或禁用全局 MCP。这是一轮指定构建的验收，不表示已经切换默认安装。
+
 **启动一次。** 通过 `exec_command` 执行以下命令，必须设置 `tty:true`（普通管道会立即 EOF），保留返回的 `session_id`。PowerShell 路径用正确引号转义，不把不可信文本拼成命令：
 
 ```powershell
@@ -41,6 +43,10 @@ node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标
 示例 PID/HWND 和 AutomationId 必须替换为实际选择结果。summaryAutomationId 可省略；提供时先读摘要，On 才继续，Off 跳过详情，未知停止。明确列出的 1–64 个复选框必须唯一、完整且有确定状态，不从缺失状态推断 false。maxDepth 默认 4、maxNodes 默认 300，可在 parameters 中按原生工具范围调整；timeoutMs 默认 15000、范围 1–30000。只有这一个预置配方，不接受源码、表达式或任意工具名；未知字段在请求执行前拒绝。普通 MCP 工具和旧 JSON 单工具协议继续可用，这不是服务器新增工具。
 
 仍读取 resultFile 的完整 content 并处理 isError；配方 text 是步骤证据与 findings，多个步骤是有序观察而非原子快照。结果可能包含控件文字，不是匿名记录。cancel/close 沿用下文协议，targetId 对应配方请求 id。仅在核实使用本测试分支构建时调用；main 的旧入口没有此 action。
+
+**调用与回答的顺序。** 先确认实际窗口及页面，再提交工具／配方请求，等待相同 id 回执，读取完整 `resultFile`，核对 `isError`、业务状态及证据完整性，最后按实际观察回答。`{recipe,parameters}` 只是输入，打印参数不能代替调用。标准 inspect 的 `success:true` 只说明查询完成；仍须检查 `queryResult.status="unique"`、`searchComplete=true`、`treeComplete=true`、截断／属性问题及所选控件的明确状态。`not-found` 不能推成未勾选或数量为零。配方须为 `status="completed"`、`success=true` 且具有符合任务范围的 findings；`stopped` 或 `isError:true` 应保留错误与已有步骤，不自动重放。
+
+源码中的 AutomationId 是定位候选，先确认运行时页面／展开状态；折叠内容可能不在当前 UIA 树中。缺失后先说明观察范围，不能按源码默认值补答案。用户提供明确的新页面状态后，可重新安排一次有界观察，并将此前失败单独保留；不要反复发送相同请求碰运气。精确查询减少返回内容，但不保证查询搜索过程完全不访问其他节点的属性；日志和原始附件保持本地。
 
 **观察、取消、关闭。** 同样发送单行 JSON：
 

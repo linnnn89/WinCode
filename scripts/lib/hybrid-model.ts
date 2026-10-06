@@ -64,11 +64,15 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
   const tracked: UiReadCaller = async (name, args, opts) => {
     mcpCalls++; const value = await call(name, args, opts);
     intermediateTextBytes += value.content.filter(block => block.type === 'text').reduce((sum, block) => sum + Buffer.byteLength(block.text), 0);
-    const text = value.content.find(block => block.type === 'text');
-    const payload = text?.type === 'text' ? JSON.parse(text.text) : null;
-    if (!value.isError && payload?.success && payload.treeComplete && !payload.truncated && !payload.propertyIssueCount && !payload.traversalErrors)
-      observations.push(String((args.query as { automationId?: string } | undefined)?.automationId ?? ''));
     return value;
+  };
+  const recordObservations = (report: Awaited<ReturnType<typeof runReadonlyUiWorkflow>>['report']) => {
+    // Raw MCP success is provisional. Only an accepted complete workflow can justify a final answer.
+    if (!report.success) return;
+    for (const step of report.steps) {
+      const id = (step.evidence?.nodes as Array<{ automationId?: string }> | undefined)?.[0]?.automationId;
+      if (step.status === 'completed' && typeof id === 'string') observations.push(id);
+    }
   };
   const started = performance.now();
   let findings: unknown, failure: string | undefined;
@@ -91,6 +95,7 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
         if (!mcpCalls) throw new Error('FINAL_WITHOUT_OBSERVATION');
         findings = JSON.parse(choice.message.content ?? ''); break;
       }
+      if (choice.finish_reason !== 'tool_calls') throw new Error('INCOMPLETE_MODEL_RESPONSE');
       if (planned.length > 16 || new Set(planned.map(item => item.id)).size !== planned.length || planned.some(item => !item.id))
         throw new Error('INVALID_MODEL_CALL_IDS');
       let observed = false;
@@ -110,6 +115,7 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
               const recipe = modelTasks.find(candidate => candidate.id === args.recipe);
               if (!recipe) throw new Error('UNKNOWN_RECIPE');
               const value = await runReadonlyUiWorkflow<unknown>(tracked, target, recipe.run, { signal });
+              recordObservations(value.report);
               result = { content: value.content, isError: value.isError };
             } else {
               if (!['wincode_ui_inspect', 'wincode_ui_review'].includes(item.function.name)) throw new Error('UNSUPPORTED_TOOL');
@@ -122,6 +128,7 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
               let original: CallToolResult | undefined;
               const checked = await runReadonlyUiWorkflow(async (...params) => { original = await tracked(...params); return original; }, target,
                 reader => item.function.name === 'wincode_ui_inspect' ? reader.inspect(input) : reader.review(input), { signal });
+              recordObservations(checked.report);
               result = checked.isError ? checked : original;
             }
             observed = true;

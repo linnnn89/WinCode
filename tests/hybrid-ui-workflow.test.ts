@@ -12,6 +12,27 @@ const observation = (requestId = 'read-1'): UiInspectResult => ({ schemaVersion:
     states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] } });
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
 
+test('recipe input errors identify the legal field and correction without echoing rejected values', () => {
+  const valid = { regionAutomationId: 'region', checkboxAutomationIds: ['a', 'b'] };
+  for (const [recipe, parameters, code, field] of [
+    ['synthetic-private-recipe', valid, 'UNSUPPORTED_RECIPE', 'recipe'],
+    ['checkbox-audit', { ...valid, checkboxAutomationIds: [] }, 'INVALID_RECIPE_PARAMETERS', 'checkboxAutomationIds'],
+    ['checkbox-audit', { ...valid, checkboxAutomationIds: ['a', 'a'] }, 'INVALID_RECIPE_PARAMETERS', 'checkboxAutomationIds'],
+    ['checkbox-audit', { ...valid, maxNodes: -1 }, 'INVALID_RECIPE_PARAMETERS', 'maxNodes'],
+    ['checkbox-audit', { ...valid, regionAutomationId: 'synthetic-private-id\n' }, 'INVALID_RECIPE_PARAMETERS', 'regionAutomationId'],
+    ['checkbox-audit', { ...valid, 'synthetic-private-key': 'synthetic-private-value' }, 'INVALID_RECIPE_PARAMETERS', 'parameters'],
+  ] as const) {
+    assert.throws(() => createReadonlyUiRecipe(recipe, parameters), (error: any) => {
+      assert.equal(error.code, code); assert.equal(error.field, field);
+      assert.equal(error.recoveryAction, 'revise_parameters');
+      assert.equal(error.workStarted, false); assert.ok(error.message.length);
+      assert.equal(JSON.stringify(error).includes('synthetic-private'), false);
+      assert.equal(error.message.includes('synthetic-private'), false); return true;
+    });
+  }
+  assert.equal(typeof createReadonlyUiRecipe('checkbox-audit', valid), 'function');
+});
+
 test('installed checkbox recipe branches on observed states and rejects ambiguous or incomplete selections', async () => {
   const parameters = { summaryAutomationId: 'summary', regionAutomationId: 'region', checkboxAutomationIds: ['a', 'b'] };
   const selected = [

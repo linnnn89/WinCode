@@ -73,6 +73,44 @@ const recipeParameters = { summaryAutomationId: 'hybridSummary', regionAutomatio
   checkboxAutomationIds: Array.from({ length: 8 }, (_, i) => 'hybridCheck' + i), maxDepth: 4, maxNodes: 40 };
 const readCliResult = async (receipt: any) => JSON.parse(await fs.readFile(receipt.resultFile, 'utf8'));
 
+it('JSON recipe errors remain cold and corrected subsets reuse the connection with real WPF evidence',
+  { skip: process.platform !== 'win32', timeout: 45000 }, async () => {
+    const f = await fixture(), driver = cli(); let gatewayPid: number | undefined;
+    const auditPath = path.join(process.env.LOCALAPPDATA!, 'WinCode/logs/ui-audit/access.jsonl');
+    const auditBefore = await fs.readFile(auditPath, 'utf8').catch(() => '');
+    try {
+      assert.equal((await driver.wait(value => value.ready)).protocol, 'wincode-skill-session/1');
+      driver.send({ id: 'bad', action: 'readonly-ui', recipe: 'checkbox-audit', target: f.target,
+        parameters: { ...recipeParameters, checkboxAutomationIds: [] } });
+      const rejected = await driver.wait(value => value.id === 'bad');
+      assert.equal(rejected.errorCode, 'INVALID_RECIPE_PARAMETERS'); assert.equal(rejected.field, 'checkboxAutomationIds');
+      assert.equal(rejected.workStarted, false); assert.equal(rejected.recoveryAction, 'revise_parameters'); assert.ok(rejected.requestError);
+      driver.send({ id: 'cold', action: 'status' }); assert.equal((await driver.wait(value => value.id === 'cold')).status.pid, null);
+      for (const [id, ids, checkedCount, conditional] of [['subset-a', [0, 3, 6], 2, false], ['subset-b', [1, 2, 3, 5, 6], 4, true]] as const) {
+        driver.send({ id, action: 'readonly-ui', recipe: 'checkbox-audit', target: f.target, parameters: {
+          regionAutomationId: 'hybridChecks', checkboxAutomationIds: ids.map(index => 'hybridCheck' + index), maxDepth: 4, maxNodes: 40,
+          ...(conditional ? { summaryAutomationId: 'hybridSummary' } : {}) } });
+        const receipt = await driver.wait(value => value.id === id); assert.equal(receipt.isError, false);
+        const value = parse(await readCliResult(receipt));
+        const details = { checkedCount, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] };
+        assert.deepEqual(value.findings, conditional ? { detailsRequired: true, details } : details);
+        assert.equal(value.metrics.dispatchedCalls, conditional ? 2 : 1);
+        driver.send({ id: id + '-status', action: 'status' }); const status = (await driver.wait(value => value.id === id + '-status')).status;
+        if (gatewayPid) assert.equal(status.pid, gatewayPid); else gatewayPid = status.pid;
+      }
+      driver.send({ id: 'close', action: 'close' }); assert.equal((await driver.wait(value => value.id === 'close')).closed, true);
+      await withTimeout(driver.closed, 8000, 'Subset CLI exit'); exited(gatewayPid!); exited(driver.child.pid!);
+      const auditAfter = await fs.readFile(auditPath, 'utf8'); assert.ok(auditAfter.startsWith(auditBefore));
+      const starts = auditAfter.slice(auditBefore.length).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+        .filter(entry => entry.phase === 'start' && entry.target === f.target.pid);
+      assert.equal(starts.length, 3); for (const entry of starts) exited(entry.helper);
+      await fs.mkdir(path.join(root, 'test-tmp/hybrid-eighth-checks'), { recursive: true });
+      await fs.writeFile(path.join(root, 'test-tmp/hybrid-eighth-checks/live-subsets.json'), JSON.stringify({
+        invalidRequestStayedCold: true, unconditionalSubsetReads: 1, conditionalSubsetReads: 2, helperStarts: starts.length,
+        helpersExited: true, connectionReused: true, gatewayExited: true, cliExited: true }));
+    } finally { await killProcessTree(driver.child); await withTimeout(driver.closed, 8000, 'Subset cleanup'); await stopFixture(f.child, f.closed); }
+  });
+
 it('JSON session rejects unsupported recipes while cold and reuses its Gateway for real checkbox evidence and native calls',
   { skip: process.platform !== 'win32', timeout: 45000 }, async () => {
     const f = await fixture(), driver = cli();

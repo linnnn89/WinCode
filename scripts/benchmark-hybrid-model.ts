@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { WinCodeSession } from '../src/Client/SkillSession.js';
 import { killProcessTree, withTimeout } from '../src/Core/ResourceManager.js';
 import type { UiTarget } from '../src/Client/ReadonlyUiWorkflow.js';
-import { httpCompletion, createModelTasks, modelTools, runModelUiTask } from './lib/hybrid-model.js';
+import { httpCompletion, createModelTasks, createParameterizedTasks, modelTools, runModelUiTask } from './lib/hybrid-model.js';
 import { summarizeModelExperiment } from './lib/hybrid-report.js';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -15,9 +15,10 @@ const repetitions = Number(process.argv[2] ?? 20);
 const scenario = process.argv[3] ?? 'summary-on';
 const formatPolicy = process.argv[4] ?? 'repair-on';
 const taskSelection = process.argv[5] ?? 'all';
-if (process.argv.length > 6 || !['all', 'T3'].includes(taskSelection) || !['repair-on', 'repair-off'].includes(formatPolicy) || !['summary-on', 'summary-off'].includes(scenario) || !Number.isInteger(repetitions) || repetitions < 1 || repetitions > 20)
-  throw new Error('Usage: npm run benchmark:hybrid-model -- [1–20 repetitions; default 20] [summary-on|summary-off] [repair-on|repair-off] [all|T3]');
-const modelTasks = createModelTasks(scenario === 'summary-off' ? 'Off' : 'On').filter(task => taskSelection === 'all' || task.id === 'T3');
+if (process.argv.length > 6 || !['all', 'T3', 'parameterized'].includes(taskSelection) || !['repair-on', 'repair-off'].includes(formatPolicy) || !['summary-on', 'summary-off'].includes(scenario) || !Number.isInteger(repetitions) || repetitions < 1 || repetitions > 20)
+  throw new Error('Usage: npm run benchmark:hybrid-model -- [1–20 repetitions; default 20] [summary-on|summary-off] [repair-on|repair-off] [all|T3|parameterized]');
+const modelTasks = taskSelection === 'parameterized' ? createParameterizedTasks(scenario === 'summary-off' ? 'Off' : 'On') :
+  createModelTasks(scenario === 'summary-off' ? 'Off' : 'On').filter(task => taskSelection === 'all' || task.id === 'T3');
 if (process.platform !== 'win32') throw new Error('Real UI model benchmark requires Windows.');
 const model = process.env.WINCODE_MODEL_NAME;
 if (!model || !process.env.WINCODE_MODEL_BASE_URL || !process.env.WINCODE_MODEL_API_KEY)
@@ -72,7 +73,8 @@ try {
   const listed = parse(await session.call('wincode_ui_list_windows', { pid: target.pid, maxWindows: 8 }));
   assert.ok(listed.windows.some((window: UiTarget) => window.pid === target!.pid && BigInt(window.hwnd) === BigInt(target!.hwnd)));
   for (let repeat = 0; repeat < repetitions; repeat++) {
-    for (const task of modelTasks) {
+    const orderedTasks = taskSelection === 'parameterized' ? [...modelTasks.slice(repeat % modelTasks.length), ...modelTasks.slice(0, repeat % modelTasks.length)] : modelTasks;
+    for (const task of orderedTasks) {
       for (const mode of repeat % 2 ? ['hybrid', 'native'] as const : ['native', 'hybrid'] as const) {
         controller.signal.throwIfAborted();
         const result = await runModelUiTask({ task, mode, target, model, complete, call: session.call.bind(session), signal: controller.signal,
@@ -113,9 +115,9 @@ finally {
     integrity: { sourcesUnchanged, gatewayExited, fixtureExited, measurementValid: !failure } });
   const report = { ...summary, experiment: 'real-model-preinstalled-readonly-recipes', scenario, formatPolicy, taskSelection, revision, workingTreeDirty, harnessSources, model,
     settings: { temperature: 0, thinking: 'disabled', maxOutputTokens: 2048, maxModelRequestsPerTask: 8, maxTaskTimeMs: 120000,
-      transportRetries: 0, maxFinalFormatCorrections: formatPolicy === 'repair-on' ? 1 : 0 },
+      transportRetries: 0, maxParameterCorrections: taskSelection === 'parameterized' ? 1 : 0, maxFinalFormatCorrections: formatPolicy === 'repair-on' ? 1 : 0 },
     formalSampleSize: repetitions >= 20, failure,
-    runtime, target, coldConnectionMs, schemaJsonBytes: { native: Buffer.byteLength(JSON.stringify(modelTools('native'))), hybrid: Buffer.byteLength(JSON.stringify(modelTools('hybrid'))) },
+    runtime, target, coldConnectionMs, schemaJsonBytes: { native: Buffer.byteLength(JSON.stringify(modelTools('native'))), hybrid: Buffer.byteLength(JSON.stringify(modelTools('hybrid', modelTasks[0]))) },
     metricSemantics: 'Usage is summed provider prompt+completion tokens including cached prompt tokens and final answers. Model requests include the final answer. Timings exclude shared cold connection and window discovery. Hybrid recipes are preinstalled; no generated-program cost or production harness overhead is measured. One observation barrier per model turn returns a matching deferred result for every later call ID.',
     samples, observedAuditHelperStarts, gatewayExited, fixtureExited, foregroundSamples: foreground.length,
     observedFixtureForeground: target ? foreground.some(line => line.split(' ').at(-1)?.toLowerCase() === target!.hwnd.toLowerCase()) : null };

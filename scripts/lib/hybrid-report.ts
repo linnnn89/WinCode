@@ -1,18 +1,22 @@
 /** Fixed-field public summary. Raw responses, model names and error text stay in local transcripts. */
-export const acceptanceVersion = 3;
+export const acceptanceVersion = 4;
+type Correction = { initialFailure: string | null; attempted: boolean; recovered: boolean; modelRequests: number;
+  elapsedMs: number; measuredUsage: { totalTokens: number } | null };
 type Sample = { task: string; mode: string; success: boolean; failure?: string; elapsedMs: number;
   modelRequests: number; modelToolRounds: number; mcpCalls: number;
   measuredUsage: { totalTokens: number } | null;
   measuredCacheUsage?: { hitTokens: number; missTokens: number } | null;
-  formatCorrection?: { initialFailure: string | null; attempted: boolean; recovered: boolean; modelRequests: number;
-    elapsedMs: number; measuredUsage: { totalTokens: number } | null } };
+  formatCorrection?: Correction; parameterCorrection?: Correction;
+  parameterValidation?: { submittedCalls: number; acceptedCalls: number; rejectedCalls: number; firstAccepted: boolean | null } };
 type Integrity = { sourcesUnchanged: boolean; gatewayExited: boolean; fixtureExited: boolean; measurementValid?: boolean };
 
 const failureCategory = (value: string | undefined) => {
   const known = ['INCOMPLETE_MODEL_RESPONSE', 'INVALID_MODEL_RESPONSE', 'FINAL_WITHOUT_OBSERVATION',
     'FINAL_WITHOUT_REQUIRED_EVIDENCE', 'INCORRECT_FINDINGS', 'MODEL_ROUND_BUDGET_EXCEEDED',
     'MODEL_CONTEXT_BUDGET_EXCEEDED', 'MODEL_RESPONSE_BUDGET_EXCEEDED', 'TASK_CANCELLED_OR_TIMED_OUT',
-    'INVALID_FINAL_JSON', 'FORMAT_CORRECTION_BUDGET_EXHAUSTED', 'FORMAT_CORRECTION_TOOL_CALL'];
+    'INVALID_FINAL_JSON', 'FORMAT_CORRECTION_BUDGET_EXHAUSTED', 'FORMAT_CORRECTION_TOOL_CALL',
+    'TASK_SCOPE_MISMATCH', 'PARAMETER_CORRECTION_BUDGET_EXCEEDED', 'PARAMETERIZED_OBSERVATION_FAILED', 'WORKFLOW_ERROR',
+    'DEPENDENT_READ_NOT_REQUIRED', 'INCOMPLETE_OBSERVATION', 'QUERY_AMBIGUOUS', 'QUERY_NOT_FOUND'];
   return value && known.includes(value) ? value : /^MODEL_HTTP_\d{3}$/.test(value ?? '') ? 'MODEL_HTTP_ERROR' : 'OTHER';
 };
 const mean = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
@@ -20,12 +24,18 @@ const percentile = (values: number[], fraction: number) => values.sort((a, b) =>
 
 export function summarizeModelExperiment(input: { tasks: string[]; repetitions: number; samples: Sample[]; integrity: Integrity }) {
   const { tasks, repetitions, samples } = input;
-  if (!tasks.length || new Set(tasks).size !== tasks.length || tasks.some(task => !['T1', 'T2', 'T3', 'T4'].includes(task)) ||
+  if (!tasks.length || new Set(tasks).size !== tasks.length || tasks.some(task => !['T1', 'T2', 'T3', 'T4', 'P1', 'P2', 'P3'].includes(task)) ||
     !Number.isInteger(repetitions) || repetitions < 1 || repetitions > 20 ||
     samples.some(row => !tasks.includes(row.task) || !['native', 'hybrid'].includes(row.mode) || typeof row.success !== 'boolean' ||
       [row.elapsedMs, row.modelRequests, row.modelToolRounds, row.mcpCalls].some(value => !Number.isFinite(value) || value < 0) ||
       (row.measuredUsage && (!Number.isSafeInteger(row.measuredUsage.totalTokens) || row.measuredUsage.totalTokens < 0)) ||
       (row.measuredCacheUsage && [row.measuredCacheUsage.hitTokens, row.measuredCacheUsage.missTokens].some(value => !Number.isSafeInteger(value) || value < 0)) ||
+      (row.parameterValidation && ([row.parameterValidation.submittedCalls, row.parameterValidation.acceptedCalls, row.parameterValidation.rejectedCalls]
+        .some(value => !Number.isSafeInteger(value) || value < 0) || ![true, false, null].includes(row.parameterValidation.firstAccepted))) ||
+      (row.parameterCorrection && (typeof row.parameterCorrection.attempted !== 'boolean' || typeof row.parameterCorrection.recovered !== 'boolean' ||
+        !Number.isSafeInteger(row.parameterCorrection.modelRequests) || row.parameterCorrection.modelRequests < 0 || row.parameterCorrection.modelRequests > 8 ||
+        !Number.isFinite(row.parameterCorrection.elapsedMs) || row.parameterCorrection.elapsedMs < 0 ||
+        (row.parameterCorrection.measuredUsage && (!Number.isSafeInteger(row.parameterCorrection.measuredUsage.totalTokens) || row.parameterCorrection.measuredUsage.totalTokens < 0)))) ||
       (row.formatCorrection && (typeof row.formatCorrection.attempted !== 'boolean' || typeof row.formatCorrection.recovered !== 'boolean' ||
         !Number.isSafeInteger(row.formatCorrection.modelRequests) || row.formatCorrection.modelRequests < 0 || row.formatCorrection.modelRequests > 1 ||
         !Number.isFinite(row.formatCorrection.elapsedMs) || row.formatCorrection.elapsedMs < 0 ||
@@ -47,8 +57,24 @@ export function summarizeModelExperiment(input: { tasks: string[]; repetitions: 
       const corrections = all.filter(row => row.formatCorrection?.attempted).map(row => row.formatCorrection!);
       const knownCorrectionTokens = corrections.reduce((sum, item) => sum + (item.measuredUsage?.totalTokens ?? 0), 0);
       const missingCorrectionUsage = corrections.filter(item => !item.measuredUsage).length;
+      const parameterCorrections = all.filter(row => row.parameterCorrection?.attempted).map(row => row.parameterCorrection!);
+      const knownParameterTokens = parameterCorrections.reduce((sum, item) => sum + (item.measuredUsage?.totalTokens ?? 0), 0);
+      const missingParameterUsage = parameterCorrections.filter(item => !item.measuredUsage).length;
       for (const row of all.filter(row => !row.success)) { const code = failureCategory(row.failure); failureCategories[code] = (failureCategories[code] ?? 0) + 1; }
       return { samples: all.length, passed: rows.length, failureCategories,
+        firstPassPassed: rows.filter(row => !row.formatCorrection?.initialFailure && !row.parameterCorrection?.initialFailure).length,
+        parameterValidation: { firstAcceptedSamples: all.filter(row => row.parameterValidation?.firstAccepted === true).length,
+          firstRejectedSamples: all.filter(row => row.parameterValidation?.firstAccepted === false).length,
+          submittedCalls: all.reduce((sum, row) => sum + (row.parameterValidation?.submittedCalls ?? 0), 0),
+          acceptedCalls: all.reduce((sum, row) => sum + (row.parameterValidation?.acceptedCalls ?? 0), 0),
+          rejectedCalls: all.reduce((sum, row) => sum + (row.parameterValidation?.rejectedCalls ?? 0), 0) },
+        parameterCorrection: { attemptedSamples: parameterCorrections.length,
+          recoveredSamples: all.filter(row => row.parameterCorrection?.recovered).length,
+          recoveredTaskSamples: rows.filter(row => row.parameterCorrection?.recovered).length,
+          modelRequests: parameterCorrections.reduce((sum, item) => sum + item.modelRequests, 0),
+          elapsedMs: parameterCorrections.reduce((sum, item) => sum + item.elapsedMs, 0),
+          totalTokens: parameterCorrections.length && !missingParameterUsage ? knownParameterTokens : null,
+          knownTotalTokens: knownParameterTokens, missingUsageSamples: missingParameterUsage },
         formatCorrection: { firstPassPassed: rows.filter(row => !row.formatCorrection?.initialFailure).length,
           initialFormatFailures: all.filter(row => row.formatCorrection?.initialFailure === 'INVALID_FINAL_JSON').length,
           attemptedSamples: corrections.length, recoveredSamples: all.filter(row => row.success && row.formatCorrection?.recovered).length,

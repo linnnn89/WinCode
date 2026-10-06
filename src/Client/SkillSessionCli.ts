@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WinCodeSession } from './SkillSession.js';
-import { createReadonlyUiRecipe } from './ReadonlyUiRecipes.js';
+import { createReadonlyUiRecipe, RecipeInputError } from './ReadonlyUiRecipes.js';
 
 const argv = process.argv.slice(2);
 let workspace: string | undefined, roslynConfig: string | undefined;
@@ -94,7 +94,10 @@ function receive(line: string) {
       catch (error) { write({ id: current.id, transportError: errorText(error) }); }
       finally { if (active === current) active = undefined; }
     })();
-  } catch (error) { write({ id, requestError: errorText(error) }); }
+  } catch (error) { write({ id, requestError: errorText(error), ...(error instanceof RecipeInputError ? {
+    errorCode: error.code, field: error.field, errorMessage: error.message,
+    recoveryAction: error.recoveryAction, workStarted: error.workStarted,
+  } : {}) }); }
 }
 
 process.stdin.setEncoding('utf8');

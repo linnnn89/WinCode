@@ -8,6 +8,71 @@ import * as harness from '../scripts/lib/hybrid-model.js';
 
 const reportModule = async () => import(new URL('../scripts/lib/hybrid-report.js', import.meta.url).href).catch(() => ({}));
 
+it('parameterized model tasks execute submitted subsets and bound corrections without laundering scope or evidence', async () => {
+  const createTasks = (harness as any).createParameterizedTasks;
+  assert.equal(typeof createTasks, 'function');
+  for (const task of [...createTasks('On'), ...createTasks('Off')]) for (const mode of ['native', 'hybrid'] as const) {
+    let requests = 0, reads = 0;
+    const answer = task.id === 'P1' ? { checkedCount: 2, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] } :
+      task.id === 'P3' ? { detailsRequired: false } : { detailsRequired: true,
+        details: { checkedCount: 4, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] } };
+    const measured = await runModelUiTask({ task, mode, target, model: 'fixed-test-model',
+      call: async (...args) => { reads++; const value = await call(...args), body = JSON.parse((value.content[0] as any).text);
+        if (task.id === 'P3') body.tree.states.toggle = 'Off'; return { content: [{ type: 'text', text: JSON.stringify(body) }] }; },
+      complete: async request => {
+        assert.equal(request.messages.slice(0, 2).some(message => message.content?.includes('checkedCount":2') || message.content?.includes('checkedCount":4')), false);
+        if (++requests === 1) return reply([mode === 'hybrid' ? invoke('read', 'run_readonly_workflow', { recipe: 'checkbox-audit', parameters: task.parameters }) :
+          invoke('read', 'wincode_ui_inspect', { query: { automationId: task.parameters.summaryAutomationId ?? 'hybridChecks' }, readStates: true })]);
+        if (mode === 'native' && task.id === 'P2' && requests === 2) return reply([invoke('detail', 'wincode_ui_inspect', { query: { automationId: 'hybridChecks' }, readStates: true })]);
+        return reply(undefined, answer);
+      } });
+    assert.equal(measured.success, true, measured.failure); assert.equal(reads, task.id === 'P2' ? 2 : 1);
+  }
+  for (const scenario of ['recover', 'repeat-invalid', 'wrong-scope', 'off-wrong-subset', 'unknown', 'unknown-native', 'unknown-summary', 'state-count', 'state-count-native', 'same-turn', 'recover-native', 'final-format-after-parameter', 'http-after-rejection']) {
+    const task = createTasks(scenario === 'off-wrong-subset' ? 'Off' : 'On')[scenario === 'unknown-summary' ? 1 : 0]; let requests = 0, reads = 0;
+    const valid = { recipe: 'checkbox-audit', parameters: task.parameters };
+    const bad = { ...valid, parameters: { ...task.parameters, checkboxAutomationIds: [] } };
+    const mode = scenario.includes('native') || scenario === 'unknown-summary' ? 'native' : 'hybrid';
+    const nativeArgs = { query: { automationId: scenario === 'unknown-summary' ? 'hybridSummary' : 'hybridChecks' }, readStates: true, maxNodes: 40 };
+    const measured = await runModelUiTask({ task, mode, target, model: 'fixed-test-model',
+      call: async (...args) => { reads++; const value = await call(...args), body = JSON.parse((value.content[0] as any).text);
+        if (scenario === 'unknown' || scenario === 'unknown-native') body.tree.children[0].states.toggle = 'unknown';
+        if (scenario === 'unknown-summary') body.tree.states.toggle = 'unknown';
+        if (scenario.startsWith('state-count')) body.tree.children[0].states.toggle = 'Off';
+        return { content: [{ type: 'text', text: JSON.stringify(body) }] }; },
+      complete: async request => {
+        requests++;
+        if (requests === 1) {
+          const args = scenario.includes('wrong') ? { ...valid, parameters: { ...task.parameters, checkboxAutomationIds: ['hybridCheck0'] } } : scenario.startsWith('unknown') || scenario.startsWith('state-count') ? valid : bad;
+          return reply([invoke('first', mode === 'native' ? 'wincode_ui_inspect' : 'run_readonly_workflow', mode === 'native' ? scenario.startsWith('unknown') || scenario.startsWith('state-count') ? nativeArgs : { ...nativeArgs, maxNodes: 0 } : args),
+            ...(scenario === 'same-turn' ? [invoke('premature', 'run_readonly_workflow', valid)] : [])]);
+        }
+        if (requests === 2 && scenario === 'http-after-rejection') throw new Error('MODEL_HTTP_503');
+        if (requests === 2 && !scenario.includes('wrong') && !scenario.startsWith('unknown') && !scenario.startsWith('state-count')) {
+          assert.equal(reads, 0, 'rejected parameters and later calls in that turn must not read UI');
+          const feedback = request.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content!));
+          assert.equal(feedback[0].workStarted, false); assert.equal(feedback[0].recoveryAction, 'revise_parameters');
+          if (scenario === 'same-turn') assert.equal(feedback[1].errorCode, 'DEFERRED_AFTER_OBSERVATION');
+          return reply([invoke('corrected', mode === 'native' ? 'wincode_ui_inspect' : 'run_readonly_workflow', mode === 'native' ? nativeArgs : scenario === 'repeat-invalid' ? bad : valid)]);
+        }
+        if (requests === 3 && scenario === 'final-format-after-parameter') return malformedFinal();
+        return reply(undefined, { checkedCount: 2, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] });
+      } });
+    const succeeds = ['recover', 'same-turn', 'recover-native', 'final-format-after-parameter'].includes(scenario);
+    assert.equal(measured.success, succeeds, scenario + ':' + measured.failure);
+    assert.equal(reads, succeeds || scenario.startsWith('unknown') || scenario.startsWith('state-count') ? 1 : 0);
+    if (scenario === 'repeat-invalid') assert.equal(measured.failure, 'PARAMETER_CORRECTION_BUDGET_EXCEEDED');
+    if (scenario.includes('wrong')) assert.equal(measured.failure, 'TASK_SCOPE_MISMATCH');
+    if (succeeds) { assert.equal((measured as any).parameterCorrection.recovered, true); assert.equal((measured as any).parameterCorrection.modelRequests, 1);
+      assert.equal((measured as any).parameterCorrection.measuredUsage.totalTokens, 110); }
+    if (scenario === 'http-after-rejection') { assert.equal(measured.measuredUsage, null); assert.equal((measured as any).parameterCorrection.measuredUsage, null); }
+    const { summarizeModelExperiment } = await reportModule();
+    const summary = summarizeModelExperiment({ tasks: [task.id], repetitions: 1, samples: [measured],
+      integrity: { sourcesUnchanged: true, gatewayExited: true, fixtureExited: true } });
+    if (succeeds) { assert.equal(summary.comparisons[0][mode].firstPassPassed, 0); assert.equal(summary.comparisons[0][mode].parameterCorrection.recoveredSamples, 1); }
+  }
+});
+
 const malformedFinal = () => {
   const value = reply(undefined, {}); value.choices[0].message.content = '```json\n{"synthetic":"format-only"}\n```'; return value;
 };
@@ -91,7 +156,7 @@ it('public summaries distinguish first-pass and recovered success without exposi
       privateResponse: 'synthetic-private-value@example.invalid' } };
   const summary = summarizeModelExperiment({ tasks: ['T1'], repetitions: 1, samples: [sample, { ...sample, mode: 'hybrid' }],
     integrity: { sourcesUnchanged: true, gatewayExited: true, fixtureExited: true } });
-  assert.equal(summary.acceptanceVersion, 3);
+  assert.equal(summary.acceptanceVersion, 4);
   assert.deepEqual(summary.comparisons[0].native.formatCorrection, { firstPassPassed: 0, initialFormatFailures: 1,
     attemptedSamples: 1, recoveredSamples: 1, modelRequests: 1, elapsedMs: 10, totalTokens: 110, knownTotalTokens: 110, missingUsageSamples: 0 });
   assert.equal(summary.comparisons[0].native.attempts.totalTokens, 330);

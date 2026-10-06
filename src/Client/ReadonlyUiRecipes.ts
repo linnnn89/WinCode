@@ -10,32 +10,42 @@ export interface CheckboxAuditParameters {
   maxNodes?: number;
 }
 
-function identifier(value: unknown): string {
+/** Known preflight rejection only. Messages and fields never contain rejected input values. */
+export class RecipeInputError extends Error {
+  readonly workStarted = false;
+  readonly recoveryAction = 'revise_parameters';
+  constructor(readonly code: 'INVALID_RECIPE_PARAMETERS' | 'UNSUPPORTED_RECIPE', readonly field: string, message: string) {
+    super(message);
+  }
+}
+
+function identifier(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 256 || /[\x00-\x1f]/.test(value))
-    throw new Error('Supply a nonempty AutomationId of at most 256 characters.');
+    throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', field, 'Supply a nonempty AutomationId of at most 256 characters without control characters.');
   return value;
 }
 
 function budget(value: unknown, fallback: number, maximum: number, name: string): number {
   const checked = value === undefined ? fallback : value;
   if (!Number.isInteger(checked) || (checked as number) < 1 || (checked as number) > maximum)
-    throw new Error(`${name} must be 1–${maximum}.`);
+    throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', name, `${name} must be an integer from 1 to ${maximum}.`);
   return checked as number;
 }
 
 /** Compile only installed recipes, never expressions or model-generated code. Validate before connecting. */
 export function createReadonlyUiRecipe(recipe: unknown, parameters: unknown) {
-  if (recipe !== 'checkbox-audit') throw new Error('Unsupported readonly recipe; use checkbox-audit.');
+  if (recipe !== 'checkbox-audit') throw new RecipeInputError('UNSUPPORTED_RECIPE', 'recipe', 'Unsupported readonly recipe; use checkbox-audit.');
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters) ||
     Object.keys(parameters).some(key => !['summaryAutomationId', 'regionAutomationId', 'checkboxAutomationIds', 'maxDepth', 'maxNodes'].includes(key)))
-    throw new Error('Checkbox audit parameters contain unsupported fields.');
+    throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'parameters',
+      'Supply an object with only summaryAutomationId, regionAutomationId, checkboxAutomationIds, maxDepth and maxNodes.');
   const input = parameters as CheckboxAuditParameters;
-  const region = identifier(input.regionAutomationId);
-  const summary = input.summaryAutomationId === undefined ? undefined : identifier(input.summaryAutomationId);
+  const region = identifier(input.regionAutomationId, 'regionAutomationId');
+  const summary = input.summaryAutomationId === undefined ? undefined : identifier(input.summaryAutomationId, 'summaryAutomationId');
   if (!Array.isArray(input.checkboxAutomationIds) || input.checkboxAutomationIds.length < 1 || input.checkboxAutomationIds.length > 64)
-    throw new Error('Supply 1–64 explicitly selected checkbox AutomationIds.');
-  const ids = input.checkboxAutomationIds.map(identifier);
-  if (new Set(ids).size !== ids.length) throw new Error('Checkbox AutomationIds must be distinct.');
+    throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'checkboxAutomationIds', 'Supply 1–64 explicitly selected checkbox AutomationIds.');
+  const ids = input.checkboxAutomationIds.map((value, index) => identifier(value, `checkboxAutomationIds[${index}]`));
+  if (new Set(ids).size !== ids.length) throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'checkboxAutomationIds', 'Checkbox AutomationIds must be distinct.');
   const maxDepth = budget(input.maxDepth, 4, 50, 'maxDepth');
   const maxNodes = budget(input.maxNodes, 300, 5000, 'maxNodes');
 

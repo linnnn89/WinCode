@@ -13,9 +13,11 @@ import { summarizeModelExperiment } from './lib/hybrid-report.js';
 const root = path.resolve(import.meta.dirname, '..');
 const repetitions = Number(process.argv[2] ?? 20);
 const scenario = process.argv[3] ?? 'summary-on';
-if (process.argv.length > 4 || !['summary-on', 'summary-off'].includes(scenario) || !Number.isInteger(repetitions) || repetitions < 1 || repetitions > 20)
-  throw new Error('Usage: npm run benchmark:hybrid-model -- [1–20 repetitions; default 20] [summary-on|summary-off]');
-const modelTasks = createModelTasks(scenario === 'summary-off' ? 'Off' : 'On');
+const formatPolicy = process.argv[4] ?? 'repair-on';
+const taskSelection = process.argv[5] ?? 'all';
+if (process.argv.length > 6 || !['all', 'T3'].includes(taskSelection) || !['repair-on', 'repair-off'].includes(formatPolicy) || !['summary-on', 'summary-off'].includes(scenario) || !Number.isInteger(repetitions) || repetitions < 1 || repetitions > 20)
+  throw new Error('Usage: npm run benchmark:hybrid-model -- [1–20 repetitions; default 20] [summary-on|summary-off] [repair-on|repair-off] [all|T3]');
+const modelTasks = createModelTasks(scenario === 'summary-off' ? 'Off' : 'On').filter(task => taskSelection === 'all' || task.id === 'T3');
 if (process.platform !== 'win32') throw new Error('Real UI model benchmark requires Windows.');
 const model = process.env.WINCODE_MODEL_NAME;
 if (!model || !process.env.WINCODE_MODEL_BASE_URL || !process.env.WINCODE_MODEL_API_KEY)
@@ -73,7 +75,8 @@ try {
     for (const task of modelTasks) {
       for (const mode of repeat % 2 ? ['hybrid', 'native'] as const : ['native', 'hybrid'] as const) {
         controller.signal.throwIfAborted();
-        const result = await runModelUiTask({ task, mode, target, model, complete, call: session.call.bind(session), signal: controller.signal });
+        const result = await runModelUiTask({ task, mode, target, model, complete, call: session.call.bind(session), signal: controller.signal,
+          formatRepair: formatPolicy === 'repair-on' });
         const transcript = `${repeat}-${task.id}-${mode}.json`;
         await fs.writeFile(path.join(output, transcript), JSON.stringify(result, null, 2));
         const { turns: _turns, toolResults: _results, ...sample } = result;
@@ -108,15 +111,16 @@ finally {
   if (!sourcesUnchanged) failure ??= 'HARNESS_CHANGED_DURING_MEASUREMENT';
   const summary = summarizeModelExperiment({ tasks: modelTasks.map(task => task.id), repetitions, samples,
     integrity: { sourcesUnchanged, gatewayExited, fixtureExited, measurementValid: !failure } });
-  const report = { ...summary, experiment: 'real-model-preinstalled-readonly-recipes', scenario, revision, workingTreeDirty, harnessSources, model,
-    settings: { temperature: 0, thinking: 'disabled', maxOutputTokens: 2048, maxModelRequestsPerTask: 8, maxTaskTimeMs: 120000, retries: 0 },
+  const report = { ...summary, experiment: 'real-model-preinstalled-readonly-recipes', scenario, formatPolicy, taskSelection, revision, workingTreeDirty, harnessSources, model,
+    settings: { temperature: 0, thinking: 'disabled', maxOutputTokens: 2048, maxModelRequestsPerTask: 8, maxTaskTimeMs: 120000,
+      transportRetries: 0, maxFinalFormatCorrections: formatPolicy === 'repair-on' ? 1 : 0 },
     formalSampleSize: repetitions >= 20, failure,
     runtime, target, coldConnectionMs, schemaJsonBytes: { native: Buffer.byteLength(JSON.stringify(modelTools('native'))), hybrid: Buffer.byteLength(JSON.stringify(modelTools('hybrid'))) },
     metricSemantics: 'Usage is summed provider prompt+completion tokens including cached prompt tokens and final answers. Model requests include the final answer. Timings exclude shared cold connection and window discovery. Hybrid recipes are preinstalled; no generated-program cost or production harness overhead is measured. One observation barrier per model turn returns a matching deferred result for every later call ID.',
     samples, observedAuditHelperStarts, gatewayExited, fixtureExited, foregroundSamples: foreground.length,
     observedFixtureForeground: target ? foreground.some(line => line.split(' ').at(-1)?.toLowerCase() === target!.hwnd.toLowerCase()) : null };
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
-  await fs.writeFile(path.join(output, 'public-summary.json'), JSON.stringify({ ...summary, scenario }, null, 2));
+  await fs.writeFile(path.join(output, 'public-summary.json'), JSON.stringify({ ...summary, scenario, formatPolicy, taskSelection }, null, 2));
   console.log(JSON.stringify({ report: path.join(output, 'report.json'), success: report.success, failure, gatewayExited, fixtureExited }));
   if (!report.success) process.exitCode = 1;
 }

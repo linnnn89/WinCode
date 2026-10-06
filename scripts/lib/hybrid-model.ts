@@ -42,6 +42,16 @@ export type ModelReply = { id?: string; model?: string; system_fingerprint?: str
 export type ModelRequest = { model: string; messages: Message[]; tools: unknown[]; temperature: number; max_tokens: number; thinking: { type: string } };
 export type Completion = (request: ModelRequest, signal: AbortSignal) => Promise<ModelReply>;
 
+function sumUsage(turns: Array<{ response: ModelReply }>, requests: number) {
+  return turns.length && requests === turns.length && turns.every(turn => turn.response.usage &&
+    ['prompt_tokens', 'completion_tokens', 'total_tokens'].every(key => Number.isSafeInteger(turn.response.usage![key]) &&
+      (turn.response.usage![key] as number) >= 0)) ? {
+      promptTokens: turns.reduce((sum, turn) => sum + turn.response.usage!.prompt_tokens, 0),
+      completionTokens: turns.reduce((sum, turn) => sum + turn.response.usage!.completion_tokens, 0),
+      totalTokens: turns.reduce((sum, turn) => sum + turn.response.usage!.total_tokens, 0),
+    } : null;
+}
+
 export function modelTools(mode: 'native' | 'hybrid') {
   return mode === 'native' ? WINCODE_TOOLS.filter(tool => ['wincode_ui_inspect', 'wincode_ui_review'].includes(tool.name))
     .map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } })) :
@@ -52,7 +62,7 @@ export function modelTools(mode: 'native' | 'hybrid') {
 
 /** A closed harness: no model source execution, tool discovery, arbitrary files or effect tools. */
 export async function runModelUiTask(options: { task: ModelTask; mode: 'native' | 'hybrid'; target: UiTarget; model: string;
-  complete: Completion; call: UiReadCaller; signal?: AbortSignal; timeoutMs?: number }) {
+  complete: Completion; call: UiReadCaller; signal?: AbortSignal; timeoutMs?: number; formatRepair?: boolean }) {
   const { task, mode, target, model, complete, call } = options;
   const signal = AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? 120000), ...(options.signal ? [options.signal] : [])]);
   const messages: Message[] = [{ role: 'system', content: 'You are testing an isolated Windows fixture. Use only supplied tools. ' +
@@ -84,6 +94,20 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
     }
   };
   const started = performance.now();
+  const formatCorrection = { initialFailure: null as string | null, attempted: false, recovered: false,
+    initialModelRequests: 0, initialElapsedMs: 0, initialUsage: null as ReturnType<typeof sumUsage>,
+    modelRequests: 0, elapsedMs: 0, measuredUsage: null as ReturnType<typeof sumUsage> };
+  let correctionStarted = 0, correctionTurn = 0;
+  const requireEvidence = () => {
+    if (['T1', 'T3'].includes(task.id) && (!['On', 'Off'].includes(observedSummary ?? '') ||
+      (task.expected as { detailsRequired: boolean }).detailsRequired !== (observedSummary === 'On')))
+      throw new Error('FINAL_WITHOUT_REQUIRED_EVIDENCE');
+    const required = task.id === 'T1' ? ['hybridSummary'] : task.id === 'T2' ? ['hybridChecks'] :
+      task.id === 'T3' ? (observedSummary === 'Off' ? ['hybridSummary'] : ['hybridSummary', 'hybridChecks']) : ['btnNormalAction'];
+    let cursor = 0;
+    for (const observed of observations) if (observed === required[cursor]) cursor++;
+    if (cursor !== required.length) throw new Error('FINAL_WITHOUT_REQUIRED_EVIDENCE');
+  };
   let findings: unknown, failure: string | undefined;
   try {
     for (let round = 0; round < 8; round++) {
@@ -102,9 +126,29 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
       if (!planned.length) {
         if (choice.finish_reason !== 'stop') throw new Error('INCOMPLETE_MODEL_RESPONSE');
         if (!mcpCalls) throw new Error('FINAL_WITHOUT_OBSERVATION');
-        findings = JSON.parse(choice.message.content ?? ''); break;
+        requireEvidence();
+        let parsed: unknown;
+        try { parsed = JSON.parse(choice.message.content ?? ''); }
+        catch { /* Only completed, evidence-backed final formatting is eligible for correction. */ }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          if (!formatCorrection.initialFailure) {
+            formatCorrection.initialFailure = 'INVALID_FINAL_JSON';
+            formatCorrection.initialModelRequests = modelRequests;
+            formatCorrection.initialElapsedMs = performance.now() - started;
+            formatCorrection.initialUsage = sumUsage(turns, modelRequests);
+          }
+          if (formatCorrection.attempted || options.formatRepair === false) throw new Error('INVALID_FINAL_JSON');
+          if (round === 7) throw new Error('FORMAT_CORRECTION_BUDGET_EXHAUSTED');
+          formatCorrection.attempted = true; correctionStarted = performance.now(); correctionTurn = turns.length;
+          messages.push({ role: 'user', content: 'INVALID_FINAL_JSON: The previous final response was not a valid JSON object. ' +
+            'Return only the JSON object specified in the original task, without Markdown, explanations or code fences. ' +
+            'Reuse accepted observations and do not change facts. Do not call tools or request new reads. This is the only formatting correction.' });
+          continue;
+        }
+        findings = parsed; break;
       }
       if (choice.finish_reason !== 'tool_calls') throw new Error('INCOMPLETE_MODEL_RESPONSE');
+      if (formatCorrection.attempted) throw new Error('FORMAT_CORRECTION_TOOL_CALL');
       if (planned.length > 16 || new Set(planned.map(item => item.id)).size !== planned.length || planned.some(item => !item.id))
         throw new Error('INVALID_MODEL_CALL_IDS');
       let observed = false;
@@ -169,22 +213,19 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
       }
     }
     if (findings === undefined) throw new Error('MODEL_ROUND_BUDGET_EXCEEDED');
-    const required = task.id === 'T1' ? ['hybridSummary'] : task.id === 'T2' ? ['hybridChecks'] :
-      task.id === 'T3' ? (observedSummary === 'Off' ? ['hybridSummary'] : ['hybridSummary', 'hybridChecks']) : ['btnNormalAction'];
-    let cursor = 0;
-    for (const observed of observations) if (observed === required[cursor]) cursor++;
-    if (cursor !== required.length) throw new Error('FINAL_WITHOUT_REQUIRED_EVIDENCE');
+    requireEvidence();
     // Compare JSON structurally; model key order is irrelevant, while array order is part of the task.
     const canonical = (value: any): string => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
       ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
     if (canonical(findings) !== canonical(task.expected)) throw new Error('INCORRECT_FINDINGS');
   } catch (error) { failure = signal.aborted ? 'TASK_CANCELLED_OR_TIMED_OUT' : error instanceof Error ? error.message : 'HARNESS_ERROR'; }
-  const measuredUsage = turns.length && modelRequests === turns.length && turns.every(turn => turn.response.usage && ['prompt_tokens', 'completion_tokens', 'total_tokens'].every(key =>
-    Number.isSafeInteger(turn.response.usage![key]) && (turn.response.usage![key] as number) >= 0)) ? {
-      promptTokens: turns.reduce((sum, turn) => sum + turn.response.usage!.prompt_tokens, 0),
-      completionTokens: turns.reduce((sum, turn) => sum + turn.response.usage!.completion_tokens, 0),
-      totalTokens: turns.reduce((sum, turn) => sum + turn.response.usage!.total_tokens, 0),
-    } : null;
+  const measuredUsage = sumUsage(turns, modelRequests);
+  if (formatCorrection.attempted) {
+    formatCorrection.modelRequests = modelRequests - formatCorrection.initialModelRequests;
+    formatCorrection.elapsedMs = performance.now() - correctionStarted;
+    formatCorrection.measuredUsage = sumUsage(turns.slice(correctionTurn), formatCorrection.modelRequests);
+    formatCorrection.recovered = !failure;
+  }
   const measuredCacheUsage = measuredUsage && turns.every(({ response: { usage } }) =>
     Number.isSafeInteger(usage!.prompt_cache_hit_tokens) && (usage!.prompt_cache_hit_tokens as number) >= 0 &&
     (usage!.prompt_cache_hit_tokens as number) <= usage!.prompt_tokens) ? {
@@ -196,7 +237,7 @@ export async function runModelUiTask(options: { task: ModelTask; mode: 'native' 
     systemFingerprints: [...new Set(turns.map(turn => turn.response.system_fingerprint).filter(Boolean))],
     modelToolRounds: turns.filter(turn => turn.response.choices?.[0]?.message.tool_calls?.length).length,
     modelLatencyMs, mcpCalls, intermediateTextBytes, deliveredTextBytes, deferredCalls,
-    measuredUsage, measuredCacheUsage, turns, toolResults };
+    measuredUsage, measuredCacheUsage, formatCorrection, turns, toolResults };
 }
 
 /** Existing Chat Completions endpoint. No installation, credentials discovery, retries or redirects. */

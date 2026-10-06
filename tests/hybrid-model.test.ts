@@ -8,6 +8,97 @@ import * as harness from '../scripts/lib/hybrid-model.js';
 
 const reportModule = async () => import(new URL('../scripts/lib/hybrid-report.js', import.meta.url).href).catch(() => ({}));
 
+const malformedFinal = () => {
+  const value = reply(undefined, {}); value.choices[0].message.content = '```json\n{"synthetic":"format-only"}\n```'; return value;
+};
+
+it('one final format correction reuses accepted evidence and counts original failure plus correction cost', async () => {
+  for (const state of ['On', 'Off'] as const) for (const mode of ['native', 'hybrid'] as const) {
+    const task = harness.createModelTasks(state)[2]; let requests = 0, uiCalls = 0, firstFinal = 0;
+    const measured = await runModelUiTask({ task, mode, target, model: 'fixed-test-model',
+      call: async (...args) => {
+        uiCalls++; const value = await call(...args), text = value.content[0] as { type: 'text'; text: string };
+        const body = JSON.parse(text.text); if (body.tree.automationId === 'hybridSummary') body.tree.states.toggle = state;
+        return { content: [{ type: 'text', text: JSON.stringify(body) }] };
+      }, complete: async request => {
+        requests++;
+        if (requests === 1) return reply([mode === 'hybrid' ? invoke('recipe', 'run_readonly_workflow', { recipe: 'T3' }) :
+          invoke('summary', 'wincode_ui_inspect', { query: { automationId: 'hybridSummary' }, readStates: true })]);
+        if (mode === 'native' && state === 'On' && requests === 2) return reply([invoke('detail', 'wincode_ui_inspect', {
+          query: { automationId: 'hybridChecks' }, readStates: true })]);
+        if (!firstFinal) { firstFinal = requests; return malformedFinal(); }
+        assert.equal(request.messages.at(-1)?.role, 'user');
+        assert.match(request.messages.at(-1)?.content ?? '', /INVALID_FINAL_JSON/);
+        assert.match(request.messages.at(-1)?.content ?? '', /do not call tools/i);
+        assert.equal(request.messages.at(-1)?.content?.includes('checkedCount":7'), false);
+        return reply(undefined, state === 'Off' ? { detailsRequired: false } :
+          { detailsRequired: true, details: { checkedCount: 7, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] } });
+      } });
+    assert.equal(measured.success, true, measured.failure); assert.equal(uiCalls, state === 'On' ? 2 : 1);
+    const correction = (measured as any).formatCorrection;
+    assert.equal(correction.initialFailure, 'INVALID_FINAL_JSON'); assert.equal(correction.attempted, true);
+    assert.equal(correction.recovered, true); assert.equal(correction.modelRequests, 1);
+    assert.equal(correction.initialModelRequests, firstFinal);
+    assert.equal(correction.initialUsage.totalTokens, firstFinal * 110);
+    assert.equal(correction.measuredUsage.totalTokens, 110); assert.equal(measured.measuredUsage?.totalTokens, (firstFinal + 1) * 110);
+  }
+});
+
+it('format correction cannot bypass evidence completion budgets or the prohibition on further tool dispatch', async () => {
+  for (const scenario of ['missing-evidence', 'unknown-state', 'unexpected-state', 'incomplete-final', 'wrong-facts', 'second-malformed', 'tool-in-correction', 'exhausted-budget', 'http-in-correction', 'cancel-in-correction', 'disabled']) {
+    let requests = 0, uiCalls = 0; const controller = new AbortController();
+    const measured = await runModelUiTask({ task: modelTasks[0], mode: 'native', target, model: 'fixed-test-model',
+      signal: controller.signal,
+      ...(scenario === 'disabled' ? { formatRepair: false } : {}),
+      call: async (...args) => {
+        uiCalls++; const value = await call(...args); if (!['missing-evidence', 'unknown-state', 'unexpected-state'].includes(scenario)) return value;
+        const body = JSON.parse((value.content[0] as { type: 'text'; text: string }).text);
+        if (scenario === 'missing-evidence') body.queryResult.status = 'ambiguous';
+        else body.tree.states.toggle = scenario === 'unknown-state' ? 'unknown' : 'Off';
+        return { content: [{ type: 'text', text: JSON.stringify(body) }] };
+      }, complete: async () => {
+        requests++;
+        if (requests === 1 || (scenario === 'exhausted-budget' && requests < 8)) return reply([invoke('read-' + requests,
+          'wincode_ui_inspect', { query: { automationId: 'hybridSummary' }, readStates: true })]);
+        if (requests === 2 && scenario === 'wrong-facts') return reply(undefined, { detailsRequired: false });
+        if (requests === 2 && scenario === 'incomplete-final') { const value = malformedFinal(); value.choices[0].finish_reason = 'length'; return value; }
+        if (requests === 3 && scenario === 'tool-in-correction') return reply([invoke('extra', 'wincode_ui_inspect', { query: { automationId: 'hybridSummary' }, readStates: true })]);
+        if (requests === 3 && scenario === 'http-in-correction') throw new Error('MODEL_HTTP_503');
+        if (requests === 3 && scenario === 'cancel-in-correction') { controller.abort(); throw new Error('local cancellation'); }
+        return malformedFinal();
+      } });
+    assert.equal(measured.success, false, scenario);
+    const expected = { 'missing-evidence': 'FINAL_WITHOUT_REQUIRED_EVIDENCE', 'unknown-state': 'FINAL_WITHOUT_REQUIRED_EVIDENCE',
+      'unexpected-state': 'FINAL_WITHOUT_REQUIRED_EVIDENCE', 'incomplete-final': 'INCOMPLETE_MODEL_RESPONSE',
+      'wrong-facts': 'INCORRECT_FINDINGS', 'second-malformed': 'INVALID_FINAL_JSON', 'tool-in-correction': 'FORMAT_CORRECTION_TOOL_CALL',
+      'exhausted-budget': 'FORMAT_CORRECTION_BUDGET_EXHAUSTED', 'http-in-correction': 'MODEL_HTTP_503',
+      'cancel-in-correction': 'TASK_CANCELLED_OR_TIMED_OUT', disabled: 'INVALID_FINAL_JSON' }[scenario];
+    assert.equal(measured.failure, expected, scenario); assert.equal(uiCalls, scenario === 'exhausted-budget' ? 7 : 1);
+    assert.equal(requests, scenario === 'exhausted-budget' ? 8 : ['second-malformed', 'tool-in-correction', 'http-in-correction', 'cancel-in-correction'].includes(scenario) ? 3 : 2);
+    if (scenario === 'http-in-correction') {
+      assert.equal(measured.measuredUsage, null); assert.equal((measured as any).formatCorrection.initialUsage.totalTokens, 220);
+      assert.equal((measured as any).formatCorrection.measuredUsage, null);
+    }
+  }
+});
+
+it('public summaries distinguish first-pass and recovered success without exposing correction transcripts', async () => {
+  const { summarizeModelExperiment } = await reportModule();
+  const sample = { task: 'T1', mode: 'native', success: true, elapsedMs: 30, modelRequests: 3, modelToolRounds: 1, mcpCalls: 1,
+    measuredUsage: { totalTokens: 330 }, measuredCacheUsage: null,
+    formatCorrection: { initialFailure: 'INVALID_FINAL_JSON', attempted: true, recovered: true, initialModelRequests: 2,
+      initialUsage: { totalTokens: 220 }, modelRequests: 1, measuredUsage: { totalTokens: 110 }, elapsedMs: 10,
+      privateResponse: 'synthetic-private-value@example.invalid' } };
+  const summary = summarizeModelExperiment({ tasks: ['T1'], repetitions: 1, samples: [sample, { ...sample, mode: 'hybrid' }],
+    integrity: { sourcesUnchanged: true, gatewayExited: true, fixtureExited: true } });
+  assert.equal(summary.acceptanceVersion, 3);
+  assert.deepEqual(summary.comparisons[0].native.formatCorrection, { firstPassPassed: 0, initialFormatFailures: 1,
+    attemptedSamples: 1, recoveredSamples: 1, modelRequests: 1, elapsedMs: 10, totalTokens: 110, knownTotalTokens: 110, missingUsageSamples: 0 });
+  assert.equal(summary.comparisons[0].native.attempts.totalTokens, 330);
+  assert.equal(JSON.stringify(summary).includes('synthetic-private-value'), false);
+  assert.equal(summary.comparisons[0].validComparison, true);
+});
+
 it('conditional model tasks require On details and accept Off without dispatching dependent reads', async () => {
   for (const state of ['On', 'Off'] as const) for (const mode of ['native', 'hybrid'] as const) {
     const task = (harness as any).createModelTasks?.(state)[2] ?? { ...modelTasks[2],

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WinCodeSession } from './SkillSession.js';
+import { createReadonlyUiRecipe, RecipeInputError } from './ReadonlyUiRecipes.js';
 
 const argv = process.argv.slice(2);
 let workspace: string | undefined, roslynConfig: string | undefined;
@@ -70,21 +71,35 @@ function receive(line: string) {
       active.controller.abort(new Error('Skill request cancelled.'));
       write({ id, cancellationRequested: true, targetId: active.id }); return;
     }
-    if (request.action !== undefined) throw new Error('Unknown session action.');
+    if (request.action !== undefined && !['readonly-ui', 'expand-ui'].includes(request.action)) throw new Error('Unknown session action.');
     if (active) throw new Error('A request is already active; await its result or cancel it explicitly.');
+    const program = request.action === 'readonly-ui' ? createReadonlyUiRecipe(request.recipe, request.parameters) : undefined;
+    if (program || request.action === 'expand-ui') {
+      const fields = request.action === 'expand-ui' ? ['id', 'action', 'target', 'parameters', 'timeoutMs'] : ['id', 'action', 'recipe', 'target', 'parameters', 'timeoutMs'];
+      if (Object.keys(request).some(key => !fields.includes(key)) ||
+        !request.target || typeof request.target !== 'object' || Array.isArray(request.target) ||
+        Object.keys(request.target).some(key => !['pid', 'hwnd'].includes(key)))
+        throw new Error('Readonly recipe requires a fixed target and no unsupported request fields.');
+    }
     const controller = new AbortController();
     const current = { id: id!, controller, done: Promise.resolve() };
     active = current;
     current.done = (async () => {
       try {
-        const result = await session.call(request.tool, request.arguments ?? {}, { signal: controller.signal, timeoutMs: request.timeoutMs });
+        const result = request.action === 'expand-ui' ? await session.expandUiWorkflow(request.target, request.parameters,
+          { signal: controller.signal, timeoutMs: request.timeoutMs }) : program ? await session.readonlyUiWorkflow(request.target, program,
+          { signal: controller.signal, timeoutMs: request.timeoutMs }) :
+          await session.call(request.tool, request.arguments ?? {}, { signal: controller.signal, timeoutMs: request.timeoutMs });
         try { await respond(current.id, result); }
         catch (error) { write({ id: current.id, resultDeliveryError: errorText(error), toolResponded: true, isError: result.isError ?? false }); }
       }
       catch (error) { write({ id: current.id, transportError: errorText(error) }); }
       finally { if (active === current) active = undefined; }
     })();
-  } catch (error) { write({ id, requestError: errorText(error) }); }
+  } catch (error) { write({ id, requestError: errorText(error), ...(error instanceof RecipeInputError ? {
+    errorCode: error.code, field: error.field, errorMessage: error.message,
+    recoveryAction: error.recoveryAction, workStarted: error.workStarted,
+  } : {}) }); }
 }
 
 process.stdin.setEncoding('utf8');

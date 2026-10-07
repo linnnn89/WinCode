@@ -3,6 +3,7 @@ using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
+using FlaUI.Core.Definitions;
 using FlaUI.UIA3;
 using static WinCode.UIA.Host.WindowResolver;
 
@@ -23,7 +24,7 @@ internal static class UiActionExecutor
     private const int MaxInputLength = 4096;
     private const int MaxMessageLength = 200;
 
-    internal static bool IsAction(string? action) => action is "click" or "type" or "setValue";
+    internal static bool IsAction(string? action) => action is "click" or "type" or "setValue" or "setExpanded";
 
     /// <summary>协议层前置校验：定位条件组合、字段形状与输入文本长度必须先成立。</summary>
     internal static bool ValidActionRequest(InspectRequest request)
@@ -35,6 +36,7 @@ internal static class UiActionExecutor
         return request.Action switch
         {
             "click" => request.InputText == null,
+            "setExpanded" => request.InputText == null && !request.ClearBefore && request.Expanded != null,
             "type" => request.InputText is { Length: > 0 and <= MaxInputLength },
             "setValue" => request.InputText is { Length: <= MaxInputLength },
             _ => false,
@@ -65,30 +67,58 @@ internal static class UiActionExecutor
             ControlType = request.TargetControlType,
         };
         var walker = automation.TreeWalkerFactory.GetControlViewWalker();
+        var elapsed = Stopwatch.StartNew();
+        var scopedRoot = UiScopeResolver.Resolve(root, walker, request.ScopePath, elapsed, cancellationToken, out var scopeResult);
+        if (scopedRoot == null)
+            return UiScopeResolver.Failed(request, scopeResult!, identity.Pid, identity.Hwnd);
         var search = new BoundedUiSearch<AutomationElement>();
-        search.Run(root, walker.GetFirstChild, walker.GetNextSibling,
-            element => UiTreeReader.MatchesQuery(element, query), MaxSearchNodes, MaxMatches, cancellationToken);
+        search.Run(scopedRoot, walker.GetFirstChild, walker.GetNextSibling,
+            element => UiTreeReader.MatchesQuery(element, query), MaxSearchNodes, MaxMatches, cancellationToken,
+            milliseconds: request.ScopePath == null ? 2000 : UiScopeResolver.Remaining(elapsed));
+
+        InspectResponse WithScope(InspectResponse response) { response.ScopeResult = scopeResult; return response; }
 
         if (search.Matches.Count > 1)
-            return Failed(request, "TARGET_AMBIGUOUS",
-                "Selector matched multiple controls; only a unique target may be acted on.", identity);
+            return WithScope(Failed(request, "TARGET_AMBIGUOUS",
+                "Selector matched multiple controls; only a unique target may be acted on.", identity));
         if (!search.Complete)
-            return Failed(request, "TARGET_SEARCH_INCOMPLETE",
-                $"Target search stopped early ({search.Reason ?? "unknown"}); uniqueness is unproven.", identity);
+            return WithScope(Failed(request, "TARGET_SEARCH_INCOMPLETE",
+                $"Target search stopped early ({search.Reason ?? "unknown"}); uniqueness is unproven.", identity));
         if (search.Matches.Count == 0)
-            return Failed(request, "TARGET_NOT_FOUND", "No control in the target window matched the selector.", identity);
+            return WithScope(Failed(request, "TARGET_NOT_FOUND", "No control in the selected scope matched the selector.", identity));
 
         var target = search.Matches[0];
         var evidence = Describe(target);
         cancellationToken.ThrowIfCancellationRequested();
 
-        return request.Action switch
+        return WithScope(request.Action switch
         {
             "click" => Click(request, target, evidence, identity),
             "type" => Type(request, automation, target, query, evidence, identity, cancellationToken),
             "setValue" => SetValue(request, target, evidence, identity),
+            "setExpanded" => SetExpanded(request, target, evidence, identity),
             _ => Failed(request, "UNKNOWN_ACTION", $"Unknown action: {request.Action}", identity),
-        };
+        });
+    }
+
+    private static InspectResponse SetExpanded(InspectRequest request, AutomationElement target, UiTargetDto evidence, ResolvedWindow identity)
+    {
+        if (evidence.IsEnabled == false)
+            return Failed(request, "TARGET_DISABLED", "Target is disabled; no navigation was attempted.", identity, evidence);
+        // Semantic expansion does not consume geometry or class metadata. Retain those gaps in ActionTarget.
+        if (evidence.IsEnabled != true || evidence.PropertyIssues?.Any(issue =>
+            issue.Split(':')[0] is not ("className" or "bounds" or "isOffscreen")) == true)
+            return Failed(request, "TARGET_EVIDENCE_INCOMPLETE", "Required target identity or enabled-state evidence is unavailable; inspect the reported property issues before navigation. No action was attempted.", identity, evidence);
+        if (!target.Patterns.ExpandCollapse.TryGetPattern(out var pattern))
+            return Failed(request, "NO_EXPAND_COLLAPSE_PATTERN", "Target has no ExpandCollapsePattern; no click fallback was attempted.", identity, evidence);
+        var state = pattern.ExpandCollapseState.Value;
+        if (state != ExpandCollapseState.Expanded && state != ExpandCollapseState.Collapsed)
+            return Failed(request, "EXPAND_STATE_UNSUPPORTED", "Only an observed Expanded or Collapsed state permits navigation.", identity, evidence);
+        var expanded = request.Expanded == true;
+        if ((state == ExpandCollapseState.Expanded) == expanded)
+            return Succeeded(request, evidence, identity, "ExpandCollapsePattern:no-op", expanded ? "already-expanded" : "already-collapsed");
+        return RunPattern(request, evidence, identity, expanded ? "ExpandCollapsePattern.Expand" : "ExpandCollapsePattern.Collapse",
+            expanded ? "expand-requested" : "collapse-requested", () => { if (expanded) pattern.Expand(); else pattern.Collapse(); });
     }
 
     private static InspectResponse Click(InspectRequest request, AutomationElement target, UiTargetDto evidence, ResolvedWindow identity)

@@ -14,6 +14,8 @@
 
 按需模式要求客户端不再自动连接同一个 WinCode：安装切换时将其原生 MCP 配置禁用，并让客户端刷新连接。保留原配置以便恢复；日常调用不自行修改客户端配置。有可用且工作区正确的原生连接时直接使用，不同时再启动按需入口。没有持久执行工具时使用已配置的原生 MCP；不要每次调用都临时启动、关闭服务器。
 
+**明确指定实验构建的验收。** 若已有原生连接绑定正确根，但其 `runtime.build.buildId` 与所验收的分支构建不同，磁盘更新不会热替换该连接。先核对分支构建的源码／产物身份；在已明确要求试用该构建的任务中，可保留旧连接与配置，仅用一个分支 CLI 会话顺序调用标准工具和配方，完成后关闭。不要同时向旧、新连接提交同一业务任务，也不要为了试验静默覆盖安装 Skill 或禁用全局 MCP。这是一轮指定构建的验收，不表示已经切换默认安装。
+
 **启动一次。** 通过 `exec_command` 执行以下命令，必须设置 `tty:true`（普通管道会立即 EOF），保留返回的 `session_id`。PowerShell 路径用正确引号转义，不把不可信文本拼成命令：
 
 ```powershell
@@ -31,6 +33,32 @@ node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标
 一次只发一个工具请求，等待该 `id` 的回执再继续；若执行工具先返回正在运行，继续轮询同一个执行会话，不重新发送请求。`timeoutMs` 默认 120000，范围 1–180000，包含本次调用的连接等待；单独握手有 30 秒限制。请求行最多 64 KiB。终端回显或折行不是第二个响应，不能当作完整 MCP JSON。
 
 **读取结果。** 回执提供 `resultFile`、`isError` 和 `imageFiles`。用文件/执行工具读取 `resultFile` 中的完整 MCP `CallToolResult`，包括 text、structuredContent、image 等内容块；有图片时按需使用本地图片查看工具读取 `imageFiles[].path`。不要把 `isError:true` 当成成功，也不要只读短回执就推断业务结果。原始 JSON 和图片保存到安装目录的 `test-tmp/skill-sessions/run-*/`，关闭不会自动删除，按本地附件管理；不要提交这些文件。文本结果至少需要一次额外文件读取，这是按需模式的调用成本。
+
+**客户端混合只读配方。** WinCode 0.17.0 提供 `action:"readonly-ui"`，无需宿主执行 TypeScript 或提供模型 API key。先按上面的单工具协议列出窗口并明确选择 PID/HWND，再调用已安装的 `checkbox-audit`：
+
+```json
+{"id":"audit1","action":"readonly-ui","recipe":"checkbox-audit","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"summaryAutomationId":"summaryId","regionAutomationId":"regionId","checkboxAutomationIds":["checkA","checkB"]},"timeoutMs":15000}
+```
+
+示例 PID/HWND 和 AutomationId 必须替换为实际选择结果。summaryAutomationId 可省略；提供时先读摘要，On 才继续，Off 跳过详情，未知停止。明确列出的 1–64 个复选框必须唯一、完整且有确定状态，不从缺失状态推断 false。maxDepth 默认 4、maxNodes 默认 300，可在 parameters 中按原生工具范围调整；timeoutMs 默认 15000、范围 1–30000。只有这一个预置配方，不接受源码、表达式或任意工具名；未知字段在请求执行前拒绝。普通 MCP 工具和旧 JSON 单工具协议继续可用，这不是服务器新增工具。
+
+仍读取 resultFile 的完整 content 并处理 isError；配方 text 是步骤证据与 findings，多个步骤是有序观察而非原子快照。结果可能包含控件文字，不是匿名记录。cancel/close 沿用下文协议，targetId 对应配方请求 id。仅在核实使用 0.17.0 或兼容新构建时调用，旧入口没有此 action。
+
+**明确展开导航。** 用户授权这条导航路径后，可调用 `action:"expand-ui"`；它不是只读配方，不加 `recipe` 字段。例：`{"id":"nav1","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"scopePath":[{"automationId":"实际祖先区域ID"}],"parentQuery":{"name":"实际父级标题","controlType":"Group"},"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"}},"timeoutMs":15000}`。scopePath 可省略；每项来自实际观察，parentQuery／candidateQuery 相对于该范围定位。首次子查询和最终读回限定在指定父级内，不读取旁支同名控件。完整结果保留父级诊断、是否尝试动作、后续状态和归属证据；`isError:true` 或 `status:"stopped"` 时不能引用 findings 为成功，也不能自动重放展开。带父路径的读取需要 inspectionVersion 5，旧连接不会热更新。
+
+已授权在指定窗口尝试发现折叠 Group 时，可省略 `parentQuery`：`{"id":"nav2","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"}},"timeoutMs":15000}`。该形式每请求最多 6 次工具调用、1 次展开；目标已可见则只读取 1 次。唯一候选可继续；多候选返回 `selection-required`，由当前 AI 根据任务与实际候选文字选择。省略字段仍表示授权导航尝试，不是只读查询；Group 之外的路径和递归探索不在本轮能力内。
+
+**选择并继续。** `selection-required` 的 `isError:false` 表示已取得待选择证据，`success:false` 表示任务尚未完成；不要据此回答目标状态。读取完整结果，选择 `diagnosis.candidates` 中与任务相关且有 `nextRequest` 的一项。将该 nextRequest 原样补上新 id 提交到同一 CLI。合法形状示例：`{"id":"nav3","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"},"candidateQuery":{"name":"实际所选候选标题","controlType":"Group"}},"timeoutMs":15000}`；实际各字段使用返回请求中的完整值，不能照抄示例占位值。nextRequest 使用 candidateQuery，下一请求会按该选择器重新定位并核验当前 Group；完整搜索无匹配或多义为 `NAVIGATION_SELECTION_STALE`，其他原因分别报告，见下段。续接本请求时保留返回的 target／childQuery，不默认首项或自动遍历列表；同一用户任务获得新观察后，可以另外发起合法查询修正。每个 expand-ui 请求最多一次展开；获得新的实际观察后可继续同一任务的定位。选择不足以确定时先只读核查，确有影响任务选择的歧义再澄清，动作结果未知时先核查状态。
+
+**状态续接与局部诊断。** 第十五轮的 candidateQuery 直接重新定位所选 Group，不重新发现全窗候选。当前唯一且有效的 Expanded 父级可继续读取，零额外展开；Collapsed 才操作一次。完整搜索无匹配／多义为 NAVIGATION_SELECTION_STALE；实际禁用、证据未知和搜索不完整分别报告准确原因。父级观察 Expanded 后仍缺目标时，读取 diagnosis.localObservation 和 nextAction：它保留本次父树范围、完整性、实际匹配与内层折叠候选，区分缺失、歧义和截断。任务未完成仍没有 findings，不把局部候选当成功答案，也不重放外层动作。局部 id／parentId 只用于本次关系说明；内层项没有可执行 nextRequest，下一步先独立唯一定位，详见[UI 手册](ui.md#操作方式与授权)。
+
+**父范围与版本。** inspect/review/setExpanded 接受 scopePath，需要 inspectionVersion 5；expand-ui 的 parameters 也接受可选 scopePath。发现和选择保留祖先范围，父级确认后的子查询追加实际父选择器，每次重新定位。当父查询的 automationId/name/controlType 与路径末项完全相同时，直接复用该范围，避免把范围根再当作严格后代查找。路径最多 50 项；需要追加父级时，调用方路径最多 49 项。调用方祖先失败报告 SCOPE_NOT_FOUND／SCOPE_AMBIGUOUS／SCOPE_SEARCH_INCOMPLETE，不回退全窗；内部追加父级的失败保留原有 QUERY_* 或候选失效分类，steps 留存原始 scopeResult。即使请求未显式提供 scopePath，expand-ui 有父级时也会在首次／最终子查询构造父路径，因此需要版本 5。setExpanded 带路径时在发送动作前检查能力；VERSION_MISMATCH 不自动重试或改用无路径动作。调用前核对实例能力；字段与示例见[UI 手册](ui.md#操作方式与授权)。
+
+**预算与范围的实现边界。** 单次 expand-ui 的 deadline／调用数由程序限制；发现和选择请求各自计时，没有跨请求累计预算或绑定上次任务范围的校验，当前也不要求先新增这些框架。nextRequest 继承原字段属于请求构造，不是不可更改的权限令牌。沿用用户选定窗口与任务，不为已授权的导航逐步重复确认。不要把实验宿主的历史总预算说成日常 CLI 已实现能力。第十四轮允许展开导航中的 className／bounds／isOffscreen 缺口并保留记录；TARGET_EVIDENCE_INCOMPLETE 区分启用／身份证据未知与实际禁用。其他属性、普通只读工作流／源码门槛和自动递归导航仍是实现限制。
+
+**调用与回答的顺序。** 先确认实际窗口及页面，再提交工具／配方请求，等待相同 id 回执，读取完整 `resultFile`，核对 `isError`、业务状态及证据完整性，最后按实际观察回答。`{recipe,parameters}` 只是输入，打印参数不能代替调用。标准 inspect 的 `success:true` 只说明查询完成；仍须检查 `queryResult.status="unique"`、`searchComplete=true`、`treeComplete=true`、截断／属性问题及所选控件的明确状态。`not-found` 不能推成未勾选或数量为零。配方须为 `status="completed"`、`success=true` 且具有符合任务范围的 findings；`stopped` 或 `isError:true` 应保留错误与已有步骤，不自动重放。
+
+源码中的 AutomationId 是定位候选，先确认运行时页面／展开状态；折叠内容可能不在当前 UIA 树中。缺失后先说明观察范围，不能按源码默认值补答案。用户提供明确的新页面状态后，可重新安排一次有界观察，并将此前失败单独保留；不要反复发送相同请求碰运气。精确查询减少返回内容，但不保证查询搜索过程完全不访问其他节点的属性；日志和原始附件保持本地。
 
 **观察、取消、关闭。** 同样发送单行 JSON：
 

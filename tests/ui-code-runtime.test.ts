@@ -15,7 +15,7 @@ import type { UiReviewResult } from '../src/CompositeTools/UiReview.js';
 const runFile = promisify(execFile);
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const fixtureFiles = ['wpf-ui-review.csproj', 'packages.lock.json', 'App.xaml', 'App.xaml.cs', 'AssemblyInfo.cs', 'MainWindow.xaml', 'MainWindow.xaml.cs'];
+const fixtureFiles = ['wpf-ui-review.csproj', 'packages.lock.json', 'App.xaml', 'App.xaml.cs', 'AssemblyInfo.cs', 'MainWindow.xaml', 'MainWindow.xaml.cs', 'HybridFixture.cs'];
 const defect = 'return false; // R6_SOURCE_DEFECT';
 const repair = 'return true; // R6_SOURCE_FIXED';
 

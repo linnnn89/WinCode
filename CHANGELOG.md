@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0 (unreleased)
+
+- Add opt-in client workflows through the persistent JSON Skill session: bounded readonly-ui steps, checkbox-audit over an explicit set of controls, and expand-ui for one explicit or selected Group. Preserve live observations, conditional reads, target identity, cancellation and owned-process cleanup; unknown or incomplete evidence cannot produce successful findings. No model API or background workflow runs unless explicitly invoked.
+- Add wincode_ui_set_expanded and optional scopePath for inspect/review/setExpanded. Paths resolve each observed ancestor uniquely, and failures never fall back to whole-window operations. Scoped requests require inspectionVersion 5; older Hosts are rejected, and scoped actions check capability before dispatch.
+- Carry scopePath through expand-ui discovery, selection, expansion, readback and nextRequest. Explicit parent requests inspect the child inside that parent from the first read; final child readback resolves the parent again. Duplicate names or IDs in another region cannot supply the result. Each request expands at most once; an already expanded parent needs no extra action. Keep missing, ambiguous, incomplete and unknown outcomes visible without automatic replay or recursive navigation.
+- Keep click/type scopes unchanged. Navigation events and focus requests may bring the application forward even though the helper does not explicitly activate or restore its window. Historical model experiments and performance limits remain separate from functional validation; no universal accuracy, latency or background guarantee is claimed.
+
 ## 0.16.0 (unreleased)
 
 - Add semantic Windows UI actions as `wincode_ui_click` and `wincode_ui_type` (keyboard `type` or `setValue`). A control is acted on only when one bounded search proves the exact selector unique inside the target window; disabled controls, unconfirmed keyboard focus, read-only values, unsupported patterns and ambiguous or incomplete searches are refused with explicit codes. Only UI Automation patterns and keyboard input are used — no coordinate mouse simulation, no activation, restore or z-order change of the target window. The helper inspection structure is now version 3, so an older helper can no longer report a requested action as a successful inspection. Results report the pattern used, the target identity and the accepted input length without echoing the input text; actions are audited as `click`/`type`/`setValue` rather than `inspect`.

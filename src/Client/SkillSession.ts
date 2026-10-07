@@ -4,6 +4,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withTimeout } from '../Core/ResourceManager.js';
+import { runReadonlyUiWorkflow, type UiReader, type UiTarget, type UiWorkflowOptions } from './ReadonlyUiWorkflow.js';
+import { createReadonlyUiRecipe, type CheckboxAuditParameters } from './ReadonlyUiRecipes.js';
+import { runExpandUiWorkflow, type ExpandUiParameters } from './ExpandUiWorkflow.js';
 
 export interface SkillSessionOptions {
   workspace: string;
@@ -61,6 +64,7 @@ export class WinCodeSession {
   private stderr = '';
   private failure?: Error;
   private identity: { instanceId: string; buildId: string; schemaHash: string } | null = null;
+  private readonly workflows = new Set<Promise<unknown>>();
 
   constructor(options: SkillSessionOptions) {
     this.workspace = absolute(options.workspace, 'workspace');
@@ -71,6 +75,33 @@ export class WinCodeSession {
   get status() {
     return { state: this.state, workspace: this.workspace, pid: this.transport?.pid ?? null,
       identity: this.identity ? { ...this.identity } : null, error: this.failure?.message ?? null };
+  }
+
+  /** Explicit navigation is separate from readonly recipes and participates in owner shutdown. */
+  expandUiWorkflow(target: UiTarget, parameters: ExpandUiParameters, options: UiWorkflowOptions = {}) {
+    if (['failed', 'closing', 'closed'].includes(this.state)) throw this.failure ?? new Error('Session is closed; create a new session explicitly.');
+    const running = runExpandUiWorkflow(this.call.bind(this), target, parameters, { ...options,
+      signal: AbortSignal.any([this.shutdown.signal, ...(options.signal ? [options.signal] : [])]) });
+    this.workflows.add(running);
+    const finished = () => { this.workflows.delete(running); };
+    void running.then(finished, finished);
+    return running;
+  }
+
+  /** Installed client recipe; compile/validate parameters before the first tool read. */
+  readonlyUiRecipe(target: UiTarget, recipe: 'checkbox-audit', parameters: CheckboxAuditParameters, options: UiWorkflowOptions = {}) {
+    return this.readonlyUiWorkflow(target, createReadonlyUiRecipe(recipe, parameters), options);
+  }
+
+  /** Reuse this connection; closing the owner also cancels processing between UI reads. */
+  readonlyUiWorkflow<T>(target: UiTarget, workflow: (reader: UiReader) => Promise<T>, options: UiWorkflowOptions = {}) {
+    if (['failed', 'closing', 'closed'].includes(this.state)) throw this.failure ?? new Error('Session is closed; create a new session explicitly.');
+    const running = runReadonlyUiWorkflow(this.call.bind(this), target, workflow, { ...options,
+      signal: AbortSignal.any([this.shutdown.signal, ...(options.signal ? [options.signal] : [])]) });
+    this.workflows.add(running);
+    const finished = () => { this.workflows.delete(running); };
+    void running.then(finished, finished);
+    return running;
   }
 
   async call(name: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal; timeoutMs?: number } = {}) {
@@ -137,7 +168,8 @@ export class WinCodeSession {
     this.state = 'closing';
     this.shutdown.abort(new Error('Skill session closed.'));
     await this.connection?.catch(() => {});
-    await this.disposeTransport();
+    try { await this.disposeTransport(); }
+    finally { await Promise.allSettled([...this.workflows]); }
     this.state = 'closed';
   }
 

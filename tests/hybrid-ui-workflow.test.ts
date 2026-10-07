@@ -1,0 +1,498 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { runReadonlyUiWorkflow, type UiReadCaller } from '../src/Client/ReadonlyUiWorkflow.js';
+import type { UiInspectResult } from '../src/Core/UiContracts.js';
+import { createReadonlyUiRecipe } from '../src/Client/ReadonlyUiRecipes.js';
+import { runExpandUiWorkflow } from '../src/Client/ExpandUiWorkflow.js';
+
+const target = { pid: 42, hwnd: '0x123' };
+const observation = (requestId = 'read-1'): UiInspectResult => ({ schemaVersion: '1.0', protocolVersion: '1.0',
+  requestId, success: true, ...target, treeComplete: true, truncated: false,
+  queryResult: { status: 'unique', searchComplete: true, visitedNodes: 1, matches: [] },
+  tree: { id: 1, parentId: null, automationId: 'check', isEnabled: false,
+    states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] } });
+const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
+
+test('navigation keeps the observed parent path through selection, expansion and the final child read', async () => {
+  const scopePath = [{ automationId: 'voiceRegion' }];
+  const parentQuery = { automationId: 'advanced', controlType: 'Group' };
+  const childQuery = { automationId: 'check' };
+  for (const [selected, parentIsScope] of [[false, false], [true, false], [false, true]]) {
+    const scopedPath = parentIsScope ? [parentQuery] : scopePath;
+    const childPath = parentIsScope ? scopedPath : [...scopedPath, parentQuery];
+    const calls: Array<{ tool: string; args: any }> = [];
+    let expanded = selected;
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push({ tool, args });
+      const value = observation();
+      if (tool === 'wincode_ui_set_expanded') {
+        assert.deepEqual(args.scopePath, scopedPath);
+        expanded = true; delete value.tree;
+      } else if ((args.query as any).automationId === 'check') {
+        assert.deepEqual(args.scopePath, childPath);
+        if (!expanded) {
+          delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 4, matches: [] };
+        } else value.queryResult!.matches = [value.tree!];
+      } else {
+        assert.deepEqual(args.scopePath, scopedPath);
+        value.tree = { ...observation().tree!, automationId: 'advanced', controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: expanded ? 'Expanded' : 'Collapsed' },
+          children: expanded && args.maxDepth !== 1 ? [{ ...observation().tree!, id: 2, parentId: 1 }] : [] };
+        value.queryResult!.matches = [value.tree];
+      }
+      return result(value);
+    }, target, { scopePath: scopedPath, childQuery, ...(selected ? { candidateQuery: parentQuery } : { parentQuery }) });
+    assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+    assert.equal(checked.report.findings?.state, 'On');
+    assert.equal(checked.report.diagnosis.relationshipVerified, true);
+    assert.equal(calls.filter(c => c.tool === 'wincode_ui_set_expanded').length, selected ? 0 : 1);
+  }
+  let dispatched = 0;
+  for (const invalid of [[], [{ automationId: 'region', maxMatches: 1 }], Array(50).fill({ automationId: 'region' })]) {
+    await assert.rejects(runExpandUiWorkflow(async () => { dispatched++; return result(observation()); }, target,
+      { scopePath: invalid, parentQuery, childQuery } as any), /scopePath/);
+  }
+  assert.equal(dispatched, 0);
+  const choices = await runExpandUiWorkflow(async (_tool, args) => {
+    assert.deepEqual(args.scopePath, scopePath);
+    const value = observation();
+    delete value.tree;
+    value.queryResult = (args.query as any).controlType === 'Group'
+      ? { status: 'ambiguous', searchComplete: true, visitedNodes: 4, matches: ['advanced', 'other'].map(automationId =>
+        ({ ...observation().tree!, automationId, controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } })) }
+      : { status: 'not-found', searchComplete: true, visitedNodes: 4, matches: [] };
+    return result(value);
+  }, target, { scopePath, childQuery } as any);
+  assert.equal(choices.report.status, 'selection-required');
+  for (const candidate of choices.report.diagnosis.candidates ?? []) {
+    assert.deepEqual((candidate.nextRequest?.parameters as any).scopePath, scopePath);
+    assert.deepEqual(candidate.nextRequest?.target, target);
+    assert.deepEqual(candidate.nextRequest?.parameters.childQuery, childQuery);
+  }
+  const missing = await runExpandUiWorkflow(async () => result({ ...observation(), success: false,
+    errorCode: 'SCOPE_NOT_FOUND', errorMessage: 'The observed region disappeared.' }), target,
+    { scopePath, parentQuery, childQuery } as any);
+  assert.equal(missing.report.errorCode, 'SCOPE_NOT_FOUND');
+  assert.equal(missing.report.actionAttempted, false);
+  assert.equal(missing.report.findings, undefined);
+  for (const [code, expected] of [['SCOPE_AMBIGUOUS', 'QUERY_AMBIGUOUS'], ['SCOPE_NOT_FOUND', 'QUERY_NOT_FOUND'],
+    ['SCOPE_SEARCH_INCOMPLETE', 'QUERY_INCOMPLETE']] as const) {
+    const failedParent = await runExpandUiWorkflow(async () => result({ ...observation(), success: false, errorCode: code,
+      scopeResult: { resolvedCount: 1, failedIndex: 1, status: 'not-found', visitedNodes: 4 } }), target,
+      { scopePath, parentQuery, childQuery });
+    assert.equal(failedParent.report.errorCode, expected);
+    assert.equal(failedParent.report.actionAttempted, false);
+    assert.equal(failedParent.report.steps[0].value.errorCode, code);
+  }
+  const staleSelection = await runExpandUiWorkflow(async () => result({ ...observation(), success: false,
+    errorCode: 'SCOPE_NOT_FOUND', scopeResult: { resolvedCount: 1, failedIndex: 1, status: 'not-found', visitedNodes: 4 } }), target,
+    { scopePath, candidateQuery: parentQuery, childQuery });
+  assert.equal(staleSelection.report.errorCode, 'NAVIGATION_SELECTION_STALE');
+  assert.equal(staleSelection.report.actionAttempted, false);
+});
+
+test('selected expanded parents resume with local evidence instead of rediscovering unrelated groups', async () => {
+  for (const hidden of [false, true]) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push(tool);
+      const value = observation();
+      if (calls.length === 1) {
+        delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] };
+      } else if (calls.length === 2 || calls.length === 3) {
+        assert.deepEqual(args.query, { automationId: 'outer', controlType: 'Group' });
+        const child = { ...observation().tree!, id: 2, parentId: 1, controlType: hidden ? 'Group' : 'CheckBox',
+          automationId: hidden ? 'inner' : 'check', isEnabled: true,
+          states: { toggle: hidden ? 'unsupported' : 'On', selection: 'unsupported', expandCollapse: hidden ? 'Collapsed' : 'unsupported' } };
+        value.tree = { ...observation().tree!, automationId: 'outer', controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Expanded' },
+          children: calls.length === 3 ? [child] : [] };
+        value.queryResult!.matches = [value.tree];
+      } else value.queryResult!.matches = [value.tree!];
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' }, candidateQuery: { automationId: 'outer', controlType: 'Group' } });
+    assert.equal(checked.report.actionAttempted, false);
+    assert.equal(checked.report.diagnosis.parentState, 'Expanded');
+    assert.equal(checked.report.success, !hidden, JSON.stringify(checked.report));
+    assert.equal(checked.report.diagnosis.cause, hidden ? 'observed-inner-collapsed-candidates' : 'parent-already-expanded');
+    assert.equal(checked.report.findings?.state, hidden ? undefined : 'On');
+    assert.equal(calls.length, hidden ? 3 : 4);
+  }
+});
+
+test('post-expansion diagnostics preserve local candidates, absence, ambiguity and incomplete evidence without another action', async () => {
+  for (const scenario of ['inner', 'absent', 'ambiguous', 'truncated', 'traversal']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push(tool);
+      const value = observation();
+      if (calls.length === 1) {
+        delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] };
+      } else {
+        const child = { ...observation().tree!, id: 2, parentId: 1, automationId: 'check', controlType: 'CheckBox' };
+        const inner = { ...child, automationId: 'inner', name: 'More options', controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } };
+        value.tree = { ...child, id: 1, parentId: null, automationId: 'outer', controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: calls.length >= 4 ? 'Expanded' : 'Collapsed' },
+          children: calls.length < 4 || scenario === 'absent' ? [] : scenario === 'ambiguous'
+            ? [child, { ...child, id: 3 }] : [inner] };
+        value.queryResult!.matches = [value.tree];
+        if (calls.length >= 4 && scenario === 'truncated') { value.treeComplete = false; value.truncated = true; value.truncateReason = 'maxDepth'; }
+        if (calls.length >= 4 && scenario === 'traversal') { value.treeComplete = false; value.traversalErrors = 1; }
+      }
+      return result(value);
+    }, target, { parentQuery: { automationId: 'outer' }, childQuery: { automationId: 'check' } });
+    const diagnostic = checked.report.diagnosis as any;
+    const incomplete = ['truncated', 'traversal'].includes(scenario);
+    assert.equal(checked.report.status, 'stopped');
+    assert.equal(checked.report.findings, undefined);
+    assert.equal(checked.report.errorCode, incomplete ? 'INCOMPLETE_OBSERVATION' : 'CHILD_RELATIONSHIP_UNCONFIRMED');
+    assert.equal(diagnostic.parentState, 'Expanded');
+    assert.equal(diagnostic.localObservation.treeComplete, !incomplete);
+    assert.deepEqual(diagnostic.localObservation.query, { automationId: 'outer' });
+    assert.equal(diagnostic.localObservation.matchCount, scenario === 'ambiguous' ? 2 : 0);
+    assert.equal(diagnostic.localObservation.candidates.length, ['inner', 'truncated', 'traversal'].includes(scenario) ? 1 : 0);
+    if (diagnostic.localObservation.candidates.length) {
+      const candidate = diagnostic.localObservation.candidates[0];
+      assert.equal(candidate.automationId, 'inner'); assert.equal(candidate.parentId, 1);
+      assert.equal(candidate.state, 'Collapsed'); assert.equal(candidate.nextRequest, undefined);
+    }
+    assert.equal(diagnostic.cause, incomplete ? 'local-observation-incomplete' : scenario === 'inner'
+      ? 'observed-inner-collapsed-candidates' : scenario === 'ambiguous' ? 'child-ambiguous-in-parent' : 'child-not-found-in-parent');
+    assert.notEqual(diagnostic.nextAction, 'Stop. Inspect the actual state before deciding on further work; no automatic action replay.');
+    assert.equal(calls.filter(tool => tool === 'wincode_ui_set_expanded').length, 1);
+    assert.equal(calls.length, 4);
+  }
+});
+
+test('navigation retains auxiliary property gaps while proving the parent and actual child state', async () => {
+  const calls: string[] = [];
+  const checked = await runExpandUiWorkflow(async tool => {
+    calls.push(tool);
+    const value = observation();
+    const child = { ...value.tree!, automationId: 'check', controlType: 'CheckBox', propertyIssues: ['bounds:error'] };
+    const parent = { ...value.tree!, automationId: 'advanced', controlType: 'Group', isEnabled: true,
+      propertyIssues: ['className:error', 'isOffscreen:unsupported'],
+      states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: calls.length >= 5 ? 'Expanded' : 'Collapsed' } };
+    if (calls.length === 1) {
+      delete value.tree;
+      value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] };
+    } else if (calls.length === 2) {
+      value.tree = parent; value.propertyIssueCount = 2;
+      value.queryResult = { status: 'unique', searchComplete: true, visitedNodes: 8, matches: [parent] };
+    } else if (tool === 'wincode_ui_set_expanded') {
+      delete value.tree; value.actionTarget = parent;
+    } else {
+      value.tree = calls.length === 6 ? child : parent;
+      if (calls.length === 5) value.tree.children = [child];
+      value.propertyIssueCount = calls.length === 6 ? 1 : calls.length === 5 ? 3 : 2;
+      value.queryResult!.matches = [value.tree];
+    }
+    return result(value);
+  }, target, { childQuery: { automationId: 'check' } });
+  assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+  assert.equal(checked.report.diagnosis.relationshipVerified, true);
+  assert.equal(checked.report.findings?.state, 'On');
+  assert.equal(calls.filter(tool => tool === 'wincode_ui_set_expanded').length, 1);
+  assert.equal(calls.length, 6);
+  assert.deepEqual(checked.report.steps[2].value.tree?.propertyIssues, ['className:error', 'isOffscreen:unsupported']);
+  assert.deepEqual(checked.report.steps[5].value.tree?.propertyIssues, ['bounds:error']);
+});
+
+test('auxiliary gaps never override missing required navigation evidence or incomplete searches', async () => {
+  for (const scenario of ['identity', 'unclassified-issue', 'unexplained-count', 'enabled', 'disabled', 'search', 'tree', 'state']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async tool => {
+      calls.push(tool);
+      const value = observation();
+      value.tree!.propertyIssues = ['className:error']; value.propertyIssueCount = 1;
+      value.queryResult!.matches = [value.tree!];
+      if (scenario === 'enabled' || scenario === 'disabled') {
+        if (calls.length === 1) {
+          delete value.tree; value.propertyIssueCount = 0;
+          value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] };
+        } else {
+          value.tree!.automationId = 'advanced'; value.tree!.controlType = 'Group';
+          value.tree!.states!.expandCollapse = 'Collapsed';
+          if (scenario === 'enabled') {
+            delete value.tree!.isEnabled;
+            value.tree!.propertyIssues.push('isEnabled:unsupported'); value.propertyIssueCount = 2;
+          }
+        }
+      } else if (scenario === 'identity') { value.tree!.propertyIssues.push('automationId:error'); value.propertyIssueCount = 2; }
+      else if (scenario === 'unclassified-issue') { value.tree!.propertyIssues.push('newField:error'); value.propertyIssueCount = 2; }
+      else if (scenario === 'unexplained-count') value.propertyIssueCount = 2;
+      else if (scenario === 'search') { value.queryResult!.searchComplete = false; value.queryResult!.status = 'incomplete'; }
+      else if (scenario === 'tree') { value.treeComplete = false; value.truncated = true; }
+      else if (scenario === 'state') value.tree!.states!.toggle = 'unknown';
+      return result(value);
+    }, target, { ...(scenario === 'enabled' || scenario === 'disabled' ? { parentQuery: { automationId: 'advanced' } } : {}),
+      childQuery: { automationId: 'check' } });
+    assert.equal(checked.report.success, false, scenario);
+    assert.equal(checked.report.errorCode, scenario === 'enabled' ? 'TARGET_EVIDENCE_INCOMPLETE' :
+      scenario === 'disabled' ? 'TARGET_DISABLED' : scenario === 'search' ? 'QUERY_INCOMPLETE' :
+      scenario === 'state' ? 'STATE_UNAVAILABLE' : 'INCOMPLETE_OBSERVATION', scenario);
+    assert.equal(checked.report.actionAttempted, false, scenario);
+    assert.equal(checked.report.findings, undefined, scenario);
+    assert.ok(calls.every(tool => tool === 'wincode_ui_inspect'), scenario);
+  }
+});
+
+test('automatic expansion reports multiple or absent candidates without performing an action', async () => {
+  for (const count of [0, 2]) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push(tool);
+      const value = observation(); delete value.tree;
+      const discovery = calls.length === 2;
+      if (discovery) assert.deepEqual(args.query, { controlType: 'Group', maxSearchNodes: 1000, maxMatches: 20 });
+      value.queryResult = { status: discovery && count ? 'ambiguous' : 'not-found', searchComplete: true,
+        visitedNodes: 8, matches: discovery ? Array.from({ length: count }, (_, i) => ({ ...observation().tree!,
+          automationId: `group${i}`, controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } })) : [] };
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' } });
+    assert.equal(checked.report.errorCode, count ? 'NAVIGATION_CANDIDATE_AMBIGUOUS' : 'NAVIGATION_CANDIDATE_NOT_FOUND');
+    assert.equal(checked.report.diagnosis.candidates?.length, count);
+    if (count) {
+      assert.equal(checked.report.status, 'selection-required');
+      assert.equal(checked.isError, false);
+      assert.equal(checked.report.success, false);
+      assert.deepEqual(checked.report.diagnosis.candidates?.[0].nextRequest, { action: 'expand-ui', target,
+        parameters: { childQuery: { automationId: 'check' }, candidateQuery: { controlType: 'Group', automationId: 'group0' } }, timeoutMs: 15000 });
+    }
+    assert.equal(checked.report.actionAttempted, false);
+    assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect']);
+  }
+});
+
+test('candidate selection is checked against fresh discovery before any action', async () => {
+  for (const scenario of ['disappeared', 'renamed', 'disabled', 'incomplete', 'duplicate']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push(tool);
+      const value = observation(); delete value.tree;
+      const group = { ...observation().tree!, automationId: 'speech', name: scenario === 'renamed' ? 'Other' : 'Speech',
+        controlType: 'Group', isEnabled: scenario !== 'disabled',
+        states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } };
+      const groups = ['disappeared', 'renamed'].includes(scenario) ? [] : scenario === 'duplicate' ? [group, structuredClone(group)] : [group];
+      value.queryResult = calls.length === 1 ? { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] }
+        : { status: scenario === 'incomplete' ? 'incomplete' : groups.length > 1 ? 'ambiguous' : groups.length ? 'unique' : 'not-found',
+          searchComplete: scenario !== 'incomplete', visitedNodes: 8, matches: groups };
+      if (calls.length > 1) { assert.deepEqual(args.query, { automationId: 'speech', name: 'Speech', controlType: 'Group' }); value.tree = group; }
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' }, candidateQuery: { automationId: 'speech', name: 'Speech', controlType: 'Group' } });
+    assert.equal(checked.report.errorCode, scenario === 'incomplete' ? 'QUERY_INCOMPLETE' : scenario === 'disabled'
+      ? 'TARGET_DISABLED' : 'NAVIGATION_SELECTION_STALE', scenario);
+    assert.equal(checked.report.actionAttempted, false);
+    assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect']);
+  }
+});
+
+test('selected navigation preserves failed actions and missing child evidence without replay', async () => {
+  for (const scenario of ['action-failed', 'wrong-parent']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async tool => {
+      calls.push(tool);
+      const value = observation();
+      const group = { ...value.tree!, automationId: 'speech', controlType: 'Group', isEnabled: true,
+        states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: calls.length >= 4 ? 'Expanded' : 'Collapsed' } };
+      if (calls.length === 1) { delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] }; }
+      else { value.tree = group; value.queryResult!.matches = [group]; }
+      if (tool === 'wincode_ui_set_expanded' && scenario === 'action-failed') {
+        value.success = false; value.errorCode = 'UI_ACTION_FAILED'; value.errorMessage = 'Action outcome unknown.';
+      }
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' }, candidateQuery: { automationId: 'speech', controlType: 'Group' } });
+    assert.equal(checked.report.errorCode, scenario === 'action-failed' ? 'UI_ACTION_FAILED' : 'CHILD_RELATIONSHIP_UNCONFIRMED');
+    assert.equal(checked.report.actionAttempted, true);
+    assert.equal(checked.report.findings, undefined);
+    assert.equal(calls.filter(tool => tool === 'wincode_ui_set_expanded').length, 1);
+    assert.equal(calls.length, scenario === 'action-failed' ? 3 : 4);
+  }
+});
+
+test('automatic expansion never infers a unique candidate from incomplete or unaddressable evidence', async () => {
+  for (const scenario of ['search-limit', 'unknown-state', 'unknown-enabled', 'property-issue', 'no-identity']) {
+    const calls: string[] = [];
+    const checked = await runExpandUiWorkflow(async tool => {
+      calls.push(tool);
+      const value = observation(); delete value.tree;
+      const group = { ...observation().tree!, controlType: 'Group', isEnabled: true,
+        states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } };
+      if (scenario === 'unknown-state') group.states.expandCollapse = 'unknown';
+      if (scenario === 'unknown-enabled') delete (group as { isEnabled?: boolean }).isEnabled;
+      if (scenario === 'property-issue') group.propertyIssues = ['Name'];
+      if (scenario === 'no-identity') delete group.automationId;
+      value.queryResult = calls.length === 1
+        ? { status: 'not-found', searchComplete: true, visitedNodes: 8, matches: [] }
+        : { status: scenario === 'search-limit' ? 'incomplete' : 'unique', searchComplete: scenario !== 'search-limit',
+          visitedNodes: 8, matches: [group] };
+      return result(value);
+    }, target, { childQuery: { automationId: 'check' } });
+    assert.equal(checked.report.errorCode, scenario === 'no-identity' ? 'NAVIGATION_CANDIDATE_UNADDRESSABLE' : 'NAVIGATION_DISCOVERY_INCOMPLETE', scenario);
+    assert.equal(checked.report.actionAttempted, false);
+    assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect']);
+  }
+});
+
+test('recipe input errors identify the legal field and correction without echoing rejected values', () => {
+  const valid = { regionAutomationId: 'region', checkboxAutomationIds: ['a', 'b'] };
+  for (const [recipe, parameters, code, field] of [
+    ['synthetic-private-recipe', valid, 'UNSUPPORTED_RECIPE', 'recipe'],
+    ['checkbox-audit', { ...valid, checkboxAutomationIds: [] }, 'INVALID_RECIPE_PARAMETERS', 'checkboxAutomationIds'],
+    ['checkbox-audit', { ...valid, checkboxAutomationIds: ['a', 'a'] }, 'INVALID_RECIPE_PARAMETERS', 'checkboxAutomationIds'],
+    ['checkbox-audit', { ...valid, maxNodes: -1 }, 'INVALID_RECIPE_PARAMETERS', 'maxNodes'],
+    ['checkbox-audit', { ...valid, regionAutomationId: 'synthetic-private-id\n' }, 'INVALID_RECIPE_PARAMETERS', 'regionAutomationId'],
+    ['checkbox-audit', { ...valid, 'synthetic-private-key': 'synthetic-private-value' }, 'INVALID_RECIPE_PARAMETERS', 'parameters'],
+  ] as const) {
+    assert.throws(() => createReadonlyUiRecipe(recipe, parameters), (error: any) => {
+      assert.equal(error.code, code); assert.equal(error.field, field);
+      assert.equal(error.recoveryAction, 'revise_parameters');
+      assert.equal(error.workStarted, false); assert.ok(error.message.length);
+      assert.equal(JSON.stringify(error).includes('synthetic-private'), false);
+      assert.equal(error.message.includes('synthetic-private'), false); return true;
+    });
+  }
+  assert.equal(typeof createReadonlyUiRecipe('checkbox-audit', valid), 'function');
+});
+
+test('installed checkbox recipe branches on observed states and rejects ambiguous or incomplete selections', async () => {
+  const parameters = { summaryAutomationId: 'summary', regionAutomationId: 'region', checkboxAutomationIds: ['a', 'b'] };
+  const selected = [
+    { id: 2, parentId: 1, automationId: 'a', controlType: 'CheckBox', isEnabled: false,
+      states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] },
+    { id: 3, parentId: 1, automationId: 'b', controlType: 'CheckBox', isEnabled: true,
+      states: { toggle: 'Off', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] },
+  ];
+  for (const scenario of ['on', 'off', 'unknown', 'missing', 'duplicate', 'wrong-type', 'unknown-checkbox', 'unknown-enabled']) {
+    const calls: string[] = [];
+    const call: UiReadCaller = async (_name, args) => {
+      const id = (args.query as { automationId: string }).automationId; calls.push(id);
+      const value = observation(); value.tree!.automationId = id;
+      if (id === 'summary') value.tree!.states!.toggle = scenario === 'off' ? 'Off' : scenario === 'unknown' ? 'unknown' : 'On';
+      else {
+        value.tree!.children = structuredClone(selected);
+        if (scenario === 'missing') value.tree!.children.pop();
+        if (scenario === 'duplicate') value.tree!.children.push(structuredClone(selected[0]));
+        if (scenario === 'wrong-type') value.tree!.children[0].controlType = 'Text';
+        if (scenario === 'unknown-checkbox') value.tree!.children[0].states!.toggle = 'Indeterminate';
+        if (scenario === 'unknown-enabled') delete value.tree!.children[0].isEnabled;
+      }
+      return result(value);
+    };
+    const checked = await runReadonlyUiWorkflow(call, target, createReadonlyUiRecipe('checkbox-audit', parameters));
+    assert.deepEqual(calls, scenario === 'off' || scenario === 'unknown' ? ['summary'] : ['summary', 'region']);
+    assert.equal(checked.report.success, scenario === 'on' || scenario === 'off');
+    if (scenario === 'on') assert.deepEqual(checked.report.findings,
+      { detailsRequired: true, details: { checkedCount: 1, unchecked: ['b'], disabled: ['a'] } });
+    if (scenario === 'off') assert.deepEqual(checked.report.findings, { detailsRequired: false });
+    if (!checked.report.success) assert.equal(checked.report.findings, undefined);
+  }
+  const session = createReadonlyUiRecipe('checkbox-audit', { ...parameters, summaryAutomationId: undefined });
+  const unconditional = await runReadonlyUiWorkflow(async () => result({ ...observation(),
+    tree: { ...observation().tree!, automationId: 'region', children: selected } }), target, session);
+  assert.deepEqual(unconditional.report.findings, { checkedCount: 1, unchecked: ['b'], disabled: ['a'] });
+});
+
+test('readonly workflow serializes concurrent requests, evaluates actual observations and retains native image evidence', async () => {
+  let active = 0;
+  const calls: string[] = [];
+  const call: UiReadCaller = async (name, args) => {
+    assert.equal(++active, 1);
+    assert.deepEqual({ pid: args.pid, hwnd: args.hwnd }, target);
+    assert.equal(args.backgroundOnly, true);
+    assert.equal(args.responseFormat, 'compact');
+    calls.push(name);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    active--;
+    const value = observation('read-' + calls.length);
+    const payload = name === 'wincode_ui_review' ? { ...value, sourceEvidence: { fileScanComplete: true, truncated: false } } : value;
+    return args.capture === 'original' ? { ...result(payload), content: [...result(payload).content,
+      { type: 'image' as const, mimeType: 'image/png', data: 'aW1hZ2U=' }] } : result(payload);
+  };
+  const report = await runReadonlyUiWorkflow(call, target, async reader => {
+    const [summary] = await Promise.all([reader.inspect({ query: { automationId: 'check' }, readStates: true }),
+      reader.inspect({ query: { automationId: 'second' } })]);
+    if (summary.tree?.states?.toggle === 'On') await reader.review({ query: { automationId: 'details' },
+      candidateFiles: ['MainWindow.xaml'], capture: 'original' });
+    const disabled = summary.tree?.isEnabled === false;
+    summary.tree!.isEnabled = true;
+    return { disabled };
+  });
+  assert.deepEqual(calls, ['wincode_ui_inspect', 'wincode_ui_inspect', 'wincode_ui_review']);
+  assert.equal(report.isError, false);
+  assert.deepEqual(report.report.findings, { disabled: true });
+  assert.deepEqual(report.report.steps.map(step => step.requestId), ['read-1', 'read-2', 'read-3']);
+  assert.equal((report.report.steps[0].evidence?.nodes as Array<{ isEnabled: boolean }>)[0].isEnabled, false);
+  assert.equal(report.report.steps[2].imageContentIndex, 1);
+  assert.equal(report.content[1].type, 'image');
+  assert.equal((report.content[1] as { data: string }).data, 'aW1hZ2U=');
+});
+
+test('business/MCP errors, ambiguity, incomplete evidence and target drift stop dependents while retaining completed steps', async () => {
+  for (const failure of [
+    { value: { ...observation(), success: false, errorCode: 'TIMEOUT' }, isError: false, code: 'TIMEOUT' },
+    { value: observation(), isError: true, code: 'TOOL_ERROR' },
+    { value: { ...observation(), queryResult: { status: 'ambiguous', searchComplete: true } }, code: 'QUERY_AMBIGUOUS' },
+    { value: { ...observation(), treeComplete: false, truncated: true }, code: 'INCOMPLETE_OBSERVATION' },
+    { value: { ...observation(), pid: 99 }, code: 'TARGET_CHANGED' },
+    { value: { ...observation(), sourceEvidence: { fileScanComplete: false } }, code: 'INCOMPLETE_OBSERVATION' },
+    { value: { ...observation(), codeEvidence: { fileScanComplete: true, truncated: true } }, code: 'INCOMPLETE_OBSERVATION' },
+  ]) {
+    let count = 0;
+    const value = await runReadonlyUiWorkflow(async () => ++count === 1 ? result(observation('completed')) :
+      { ...result(failure.value), isError: failure.isError }, target, async reader => {
+      await reader.inspect({});
+      await Promise.all([reader.inspect({}), reader.inspect({})]);
+    });
+    assert.equal(count, 2);
+    assert.equal(value.isError, true);
+    assert.equal(value.report.errorCode, failure.code);
+    assert.deepEqual(value.report.steps.map(step => step.status), ['completed', 'failed', 'not_started']);
+    assert.equal(value.report.steps[0].requestId, 'completed');
+  }
+});
+
+test('cancellation and input/step/data/output budgets prevent further dispatch without automatic retry', async context => {
+  let calls = 0;
+  const aborted = new AbortController();
+  const cancelled = await runReadonlyUiWorkflow(async (_name, _args, options) => {
+    calls++;
+    aborted.abort();
+    assert.equal(options.signal.aborted, true);
+    return result(observation());
+  }, target, async reader => { await Promise.all([reader.inspect({}), reader.inspect({})]); }, { signal: aborted.signal });
+  assert.equal(calls, 1);
+  assert.equal(cancelled.report.errorCode, 'CANCELLED');
+  const invalid = await runReadonlyUiWorkflow(async () => { throw new Error('must not dispatch'); }, target,
+    async reader => reader.inspect({ action: 'click' } as never));
+  assert.equal(invalid.report.metrics.dispatchedCalls, 0);
+  assert.equal(invalid.report.errorCode, 'INVALID_ARGUMENT');
+  const exceeded = await runReadonlyUiWorkflow(async () => result(observation()), target,
+    async reader => { await reader.inspect({}); await reader.inspect({}); }, { maxSteps: 1 });
+  assert.equal(exceeded.report.errorCode, 'STEP_BUDGET_EXCEEDED');
+  assert.equal(exceeded.report.metrics.dispatchedCalls, 1);
+  const data = await runReadonlyUiWorkflow(async () => result(observation()), target, reader => reader.inspect({}), { maxIntermediateBytes: 1 });
+  assert.equal(data.report.errorCode, 'INTERMEDIATE_BUDGET_EXCEEDED');
+  const output = await runReadonlyUiWorkflow(async () => result(observation()), target, async reader => {
+    await reader.inspect({}); return 'x'.repeat(9000);
+  }, { maxOutputBytes: 8192 });
+  assert.equal(output.report.errorCode, 'OUTPUT_BUDGET_EXCEEDED');
+  assert.equal(output.report.steps[0].status, 'completed');
+  assert.equal(output.report.steps[0].evidenceOmitted, true);
+  const deadline = await runReadonlyUiWorkflow(async () => new Promise(() => {}), target,
+    reader => reader.inspect({}), { timeoutMs: 10 });
+  assert.equal(deadline.report.errorCode, 'DEADLINE_EXCEEDED');
+  let clock = Date.now();
+  const mockedNow = context.mock.method(Date, 'now', () => clock);
+  try {
+    const raced = await runReadonlyUiWorkflow(async () => {
+      clock += 1000; throw new Error('Request timed out');
+    }, target, async reader => { await Promise.all([reader.inspect({}), reader.inspect({})]); }, { timeoutMs: 1000 });
+    assert.equal(raced.report.errorCode, 'DEADLINE_EXCEEDED');
+    assert.equal(raced.report.metrics.dispatchedCalls, 1);
+    assert.deepEqual(raced.report.steps.map(step => step.status), ['failed', 'not_started']);
+  } finally { mockedNow.mock.restore(); }
+});

@@ -1,12 +1,13 @@
 import { defineTool, jsonResult } from './ToolDefinition.js';
 import { uiResponse } from './UiResponse.js';
-import { UI_INSPECT_DEFAULTS, validateUiQuery, validateWindowQuery, validateUiAction,
+import { UI_INSPECT_DEFAULTS, validateUiQuery, validateUiScope, validateWindowQuery, validateUiAction,
   type UiAction, type UiInspectRequest, type UiListWindowsRequest } from '../Core/UiContracts.js';
 import { validateCandidateFiles } from '../Core/UiSourceMapper.js';
 import { validateCandidateCodeFiles } from '../Core/UiCodeMapper.js';
 import { validateTextQueries } from '../Core/UiTextSearch.js';
 
 function validateInspect(args: UiInspectRequest): void {
+  validateUiScope(args.scopePath, 'inspect');
   validateUiQuery(args.query, args.readStates);
   if (args.backgroundOnly === true && (!args.pid || !args.hwnd))
     throw new Error('backgroundOnly requires explicit pid and hwnd.');
@@ -20,6 +21,8 @@ function validateActionRequest(args: UiActionArgs, action: UiAction): void {
     action, pid: args.pid, hwnd: args.hwnd,
     targetAutomationId: args.targetAutomationId, targetName: args.targetName,
     targetControlType: args.targetControlType, inputText: args.inputText, clearBefore: args.clearBefore,
+    expanded: args.expanded,
+    scopePath: args.scopePath,
   });
 }
 
@@ -28,11 +31,23 @@ type UiReviewArgs = UiInspectArgs & { candidateFiles: string[]; candidateCodeFil
 
 /** 动作参数：定位与输入字段与取证参数分开声明，避免把 query/readStates 误当成动作范围。 */
 type UiActionArgs = {
+  scopePath?: UiInspectRequest['scopePath'];
   pid?: number; hwnd?: string;
   targetAutomationId?: string; targetName?: string; targetControlType?: string;
   inputText?: string; clearBefore?: boolean;
+  expanded?: boolean;
 };
 type UiTypeArgs = UiActionArgs & { inputText: string; mode?: 'type' | 'setValue' };
+
+const scopePathProperty = {
+  type: 'array', minItems: 1, maxItems: 50,
+  description: 'inspectionVersion 5: ordered exact parent selectors. Each hop resolves one strict descendant in the previous scope; the final query/action stays inside the last parent. Does not expand hidden parents.',
+  items: { type: 'object', additionalProperties: false, properties: {
+    automationId: { type:'string', minLength:1, maxLength:256 },
+    name: { type:'string', minLength:1, maxLength:256 },
+    controlType: { type:'string', minLength:1, maxLength:256 },
+  }, anyOf: [{required:['automationId']}, {required:['name']}, {required:['controlType']}] },
+};
 
 const actionTargetProperties = {
   pid: { type: 'integer', minimum: 1,
@@ -56,6 +71,7 @@ const inspectDefinition = defineTool<UiInspectArgs>({
   inputSchema: {
     type: 'object', additionalProperties: true,
     properties: {
+      scopePath: scopePathProperty,
       responseFormat: { type: 'string', enum: ['full', 'compact'], default: 'full',
         description: 'compact keeps snapshot IDs/hierarchy/states and image, omits per-node geometry/className, shares code candidates and adds a summary plus live-UI expansion requests. full preserves the complete response shape.' },
       pid: {
@@ -115,7 +131,7 @@ const inspectDefinition = defineTool<UiInspectArgs>({
   requestBudget: 'ui',
   execute: async (args, { router, signal }) => {
     const { responseFormat, ...input } = args;
-    return uiResponse(await router.inspectUi({ ...input, hwnd: input.hwnd?.trim() }, signal), responseFormat);
+    return uiResponse(await router.inspectUi({ ...input, hwnd: input.hwnd?.trim() }, signal), responseFormat, input.scopePath);
   },
 });
 const uiInspectTool = inspectDefinition.tool;
@@ -198,6 +214,21 @@ export const UI_TOOLS = [
   }),
   inspectDefinition,
   clickDefinition,
+  defineTool<UiActionArgs & { expanded: boolean }>({
+    name: 'wincode_ui_set_expanded',
+    description: 'Sets one unique enabled control to an explicit Expanded or Collapsed state using ExpandCollapsePattern. Already in the requested state is a no-op. No mouse, focus, click fallback or automatic retry. Verify state and child controls with inspect afterwards. Requires inspectionVersion 4; optional scopePath requires version 5 and is checked before sending an action.',
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    inputSchema: { type: 'object', additionalProperties: true,
+      properties: { ...actionTargetProperties, scopePath: scopePathProperty, expanded: { type: 'boolean' } }, required: ['expanded'],
+      anyOf: [{ required: ['pid'] }, { required: ['hwnd'] }] },
+  }, {
+    invalidArguments, validate: args => validateActionRequest(args, 'setExpanded'), requestBudget: 'ui',
+    preserveOutcomeOnInterruption: true,
+    execute: async (args, { router, signal }) => {
+      const result = await router.performUiAction({ ...args, hwnd: args.hwnd?.trim(), action: 'setExpanded' }, signal);
+      return jsonResult(result, false, !result.success);
+    },
+  }),
   typeDefinition,
   defineTool<UiReviewArgs>({
     name: 'wincode_ui_review',
@@ -234,7 +265,7 @@ export const UI_TOOLS = [
     requestBudget: 'ui',
     execute: async (args, { router, signal }) => {
       const { candidateFiles, candidateCodeFiles, textQueries, responseFormat, ...input } = args;
-      return uiResponse(await router.reviewUi({ ...input, hwnd: input.hwnd?.trim() }, candidateFiles, signal, textQueries, candidateCodeFiles), responseFormat);
+      return uiResponse(await router.reviewUi({ ...input, hwnd: input.hwnd?.trim() }, candidateFiles, signal, textQueries, candidateCodeFiles), responseFormat, input.scopePath);
     },
   }),
 ];

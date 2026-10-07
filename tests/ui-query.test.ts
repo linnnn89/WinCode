@@ -48,3 +48,43 @@ it('old helper cannot silently ignore a local query', async () => {
   try { assert.equal((await adapter.inspect({pid:1,query:{name:'Save'}})).errorCode,'VERSION_MISMATCH'); }
   finally { await adapter.dispose(); }
 });
+
+it('parent scopes reach inspect and expansion while invalid paths and old helpers never act', async () => {
+  const scopePath = [{ name: 'Speech', controlType: 'Group' }, { name: 'Advanced', controlType: 'Group' }];
+  const router = new ToolRouter(getDefaultConfig(process.cwd()));
+  const server = new WinCodeMcpServer(router);
+  const seen: any[] = [];
+  router.inspectUi = async request => { seen.push(request); return { schemaVersion:'1.0', protocolVersion:'1.0', requestId:'scope', success:true,
+    pid:1, hwnd:'0x1', tree:{ id:1, parentId:null, automationId:'Normalize', children:[] } }; };
+  router.performUiAction = router.inspectUi;
+  const [a,b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name:'scope-contract', version:'1' });
+  const adapter = new FlaUiAdapter(getDefaultConfig(process.cwd()));
+  const dispatched: string[] = [];
+  (adapter as any).executeHost = async (request: any) => {
+    dispatched.push(request.action);
+    return { schemaVersion:'1.0', protocolVersion:'1.0', requestId:request.requestId, success:true, inspectionVersion:4, status:'healthy' };
+  };
+  try {
+    await (server as any).server.connect(a); await client.connect(b);
+    await client.callTool({ name:'wincode_ui_inspect', arguments:{ pid:1, scopePath, query:{ name:'Normalize' } } });
+    await client.callTool({ name:'wincode_ui_set_expanded', arguments:{ pid:1, scopePath, targetName:'Inner', expanded:true } });
+    assert.deepEqual(seen.map(r => r.scopePath), [scopePath, scopePath]);
+    const compact = await client.callTool({ name:'wincode_ui_inspect', arguments:{ pid:1, scopePath, responseFormat:'compact' } });
+    const body = JSON.parse((compact.content as any)[0].text);
+    assert.deepEqual(body.expansionRequests[0].arguments.scopePath, scopePath);
+    for (const invalid of [[], [{}], [{name:''}], [{name:'x',maxMatches:1}], 'Speech']) {
+      const result = await client.callTool({ name:'wincode_ui_inspect', arguments:{ pid:1, scopePath:invalid } });
+      assert.equal(result.isError, true);
+    }
+    assert.equal(seen.length, 3);
+    const old = await adapter.performUiAction({ pid:1, action:'setExpanded', targetName:'Inner', expanded:true, scopePath } as any);
+    assert.equal(old.errorCode, 'VERSION_MISMATCH');
+    assert.deepEqual(dispatched, ['health']);
+    const unsupported = await adapter.performUiAction({ pid:1, action:'click', targetName:'Inner', scopePath } as any);
+    assert.equal(unsupported.errorCode, 'INVALID_ARGUMENT');
+    assert.deepEqual(dispatched, ['health']);
+    const parsed = (adapter as any).parseHostResponse(JSON.stringify({ success:true, inspectionVersion:4 }), { requestId:'old', pid:1, scopePath });
+    assert.equal(parsed.errorCode, 'VERSION_MISMATCH');
+  } finally { await adapter.dispose(); await client.close(); await server.stop(); }
+});

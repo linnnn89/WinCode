@@ -132,6 +132,7 @@ const examples: Record<string, Record<string, unknown>> = {
   wincode_ui_list_windows: { pid: 5 }, wincode_ui_inspect: { pid: 5, query: { name: 'Save' } },
   wincode_ui_click: { pid: 5, targetAutomationId: 'btnSave' },
   wincode_ui_type: { pid: 5, targetAutomationId: 'txtUser', inputText: 'fixture text', mode: 'setValue' },
+  wincode_ui_set_expanded: { pid: 5, targetAutomationId: 'advanced', expanded: true },
   wincode_ui_review: { pid: 5, candidateFiles: ['View.xaml'], candidateCodeFiles: ['View.cs'], textQueries: ['Save'] },
 };
 
@@ -156,6 +157,7 @@ const expectedCalls: Record<string, { method: string; args: unknown[] }> = {
   wincode_ui_inspect: { method: 'inspectUi', args: [{ pid: 5, query: { name: 'Save' }, hwnd: undefined }, '<signal>'] },
   wincode_ui_click: { method: 'performUiAction', args: [{ pid: 5, targetAutomationId: 'btnSave', hwnd: undefined, action: 'click' }, '<signal>'] },
   wincode_ui_type: { method: 'performUiAction', args: [{ pid: 5, targetAutomationId: 'txtUser', inputText: 'fixture text', hwnd: undefined, action: 'setValue' }, '<signal>'] },
+  wincode_ui_set_expanded: { method: 'performUiAction', args: [{ pid: 5, targetAutomationId: 'advanced', expanded: true, hwnd: undefined, action: 'setExpanded' }, '<signal>'] },
   wincode_ui_review: { method: 'reviewUi', args: [{ pid: 5, hwnd: undefined }, ['View.xaml'], '<signal>', ['Save'], ['View.cs']] },
 };
 
@@ -179,7 +181,7 @@ it('calls all published tools and the hidden alias; unknown fields do not reach 
   stub('reviewUi', { success: true });
   stub('performUiAction', { success: true });
   const published = (await client.listTools()).tools;
-  assert.equal(published.length, 19);
+  assert.equal(published.length, 20);
   assert.ok(!published.some(tool => tool.name === 'wincode_workspace_open'));
   assert.deepEqual(new Set([...published.map(tool => tool.name), 'wincode_workspace_open']), new Set(Object.keys(examples)));
   const responses = new Map<string, unknown>();

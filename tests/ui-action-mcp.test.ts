@@ -40,6 +40,7 @@ it('ui actions are rejected at the boundary before any helper is launched', asyn
     await rejected({ action: 'type', pid: 1, targetAutomationId: 'a' }, /inputText/);
     await rejected({ action: 'click', pid: 1, targetAutomationId: 'a', clearBefore: true }, /clearBefore/);
     await rejected({ action: 'click', pid: 1, targetAutomationId: 'a', clearBefore: 'yes' }, /clearBefore/);
+    await rejected({ action: 'setExpanded', pid: 1, targetAutomationId: 'a' }, /expanded/);
     assert.equal(launched, 0, 'rejected action requests must not start the native helper');
     // setValue 的空串用于清空值：它必须通过边界校验并真的走到 Helper，而不是被提前拒绝。
     const cleared = await adapter.performUiAction({ action: 'setValue', pid: 1, targetAutomationId: 'actionValue', inputText: '' } as any);
@@ -67,6 +68,8 @@ it('an old helper cannot report a requested action as a successful inspection', 
     const current = parse({ ...older, inspectionVersion: 3 }, { action: 'click' });
     assert.equal(current.success, true);
     assert.equal(current.actionMethod, 'InvokePattern');
+    assert.equal(parse({ ...older, inspectionVersion: 3 }, { action: 'setExpanded', expanded: true }).errorCode, 'VERSION_MISMATCH');
+    assert.equal(parse({ ...older, inspectionVersion: 4 }, { action: 'setExpanded', expanded: true }).success, true);
     assert.equal(parse({ ...older, inspectionVersion: 3, queryResult: { status: 'unique', searchComplete: true, visitedNodes: 1, matches: [] } },
       { query: { name: 'Save' } }).success, true);
     // 新增的动作门不得放宽既有的 query/状态门：真正更旧的 Helper 仍必须被拒绝。
@@ -85,6 +88,30 @@ describe('semantic UI actions against the real WPF fixture', () => {
   let pid = 0;
   let hwnd = '';
 
+  const startFixture = async (extraArgs: string[] = []) => {
+    const executable = path.resolve(root, 'tests/fixtures/wpf-ui-review/bin/Release/net10.0-windows/win-x64/publish/wpf-ui-review.exe');
+    const built = fs.existsSync(executable);
+    const args = ['--action-fixture', '--navigation-candidates', ...extraArgs, '--auto-close=120000'];
+    const child = spawn(built ? executable : 'dotnet', built ? args :
+      ['run', '--project', 'tests/fixtures/wpf-ui-review/wpf-ui-review.csproj', '--no-build', '--', ...args],
+      { cwd: root, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    try {
+      const target = await new Promise<{ pid: number; hwnd: string }>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('fixture launch timed out waiting for READY')), 20000);
+        let buffer = '';
+        child.stdout?.on('data', (chunk: Buffer) => {
+          buffer += chunk.toString('utf8');
+          const match = buffer.match(/READY\s+(\d+)\s+(0x[0-9a-fA-F]+)/);
+          if (match) { clearTimeout(timer); resolve({ pid: Number(match[1]), hwnd: match[2] }); }
+        });
+        child.on('error', error => { clearTimeout(timer); reject(error); });
+        child.on('close', code => { clearTimeout(timer); reject(new Error(`fixture exited prematurely with code ${code}`)); });
+      });
+      await new Promise(resolve => setTimeout(resolve, 400));
+      return { child, target };
+    } catch (error) { await killProcessTree(child); throw error; }
+  };
+
   before(async () => {
     await fsp.mkdir(cacheDir, { recursive: true });
     const config = getDefaultConfig(root);
@@ -98,24 +125,8 @@ describe('semantic UI actions against the real WPF fixture', () => {
     await client.connect(clientTransport);
 
     // 夹具是独立的真实 WPF 应用：验证的是应用自身的副作用，而不是 Host 自报的 success。
-    const executable = path.resolve(root, 'tests/fixtures/wpf-ui-review/bin/Release/net10.0-windows/win-x64/publish/wpf-ui-review.exe');
-    const built = fs.existsSync(executable);
-    fixture = spawn(built ? executable : 'dotnet',
-      built ? ['--action-fixture', '--auto-close=120000']
-        : ['run', '--project', 'tests/fixtures/wpf-ui-review/wpf-ui-review.csproj', '--no-build', '--', '--action-fixture', '--auto-close=120000'],
-      { cwd: root, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: false });
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('fixture launch timed out waiting for READY')), 20000);
-      let buffer = '';
-      fixture?.stdout?.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString('utf8');
-        const match = buffer.match(/READY\s+(\d+)\s+(0x[0-9a-fA-F]+)/);
-        if (match) { clearTimeout(timer); pid = parseInt(match[1], 10); hwnd = match[2]; resolve(); }
-      });
-      fixture?.on('error', error => { clearTimeout(timer); reject(error); });
-      fixture?.on('close', code => { clearTimeout(timer); reject(new Error(`fixture exited prematurely with code ${code}`)); });
-    });
-    await new Promise(resolve => setTimeout(resolve, 400));
+    const started = await startFixture();
+    fixture = started.child; pid = started.target.pid; hwnd = started.target.hwnd;
   });
 
   after(async () => {
@@ -136,6 +147,198 @@ describe('semantic UI actions against the real WPF fixture', () => {
     assert.equal(body.queryResult?.status, 'unique', JSON.stringify(body.queryResult));
     return body.queryResult.matches[0].name as string;
   };
+
+  const navigate = async (parent = { automationId: 'actionAdvanced' }) => {
+    const { runExpandUiWorkflow } = await import('../src/Client/ExpandUiWorkflow.js');
+    return runExpandUiWorkflow((name, args, options) => client.callTool({ name, arguments: args }, options),
+      { pid, hwnd }, { parentQuery: parent, childQuery: { automationId: 'actionNormalize' } }, { timeoutMs: 15000 });
+  };
+
+  it('resumes an expanded selected group and reports a real nested candidate without changing either region',
+    { timeout: 45000 }, async () => {
+      const nested = await startFixture(['--background-fixture', '--navigation-evidence', '--nested-navigation']);
+      try {
+        const { runExpandUiWorkflow } = await import('../src/Client/ExpandUiWorkflow.js');
+        const caller = (name: string, args: Record<string, unknown>, options: any) => client.callTool({ name, arguments: args }, options);
+        const pending = await runExpandUiWorkflow(caller, nested.target, {
+          candidateQuery: { automationId: 'actionOuterOptions', controlType: 'Group' },
+          childQuery: { automationId: 'actionNestedNormalize' } });
+        assert.equal(pending.report.errorCode, 'CHILD_RELATIONSHIP_UNCONFIRMED', JSON.stringify(pending.report));
+        assert.equal(pending.report.diagnosis.cause, 'observed-inner-collapsed-candidates');
+        assert.equal(pending.report.diagnosis.parentState, 'Expanded');
+        assert.equal(pending.report.actionAttempted, false);
+        assert.equal(pending.report.metrics.dispatchedCalls, 3);
+        const candidate = pending.report.diagnosis.localObservation?.candidates.find(n => n.automationId === 'actionInnerOptions');
+        assert.ok(candidate); assert.equal(candidate.isEnabled, true); assert.equal(candidate.state, 'Collapsed');
+        const resumed = await runExpandUiWorkflow(caller, nested.target, {
+          parentQuery: { automationId: candidate.automationId, controlType: candidate.controlType },
+          childQuery: { automationId: 'actionNestedNormalize' } });
+        assert.equal(resumed.report.success, true, JSON.stringify(resumed.report));
+        assert.equal(resumed.report.findings?.state, 'On');
+        assert.equal(resumed.report.steps.filter(step => step.tool === 'wincode_ui_set_expanded').length, 1);
+        const readBack = await call('wincode_ui_inspect', { ...nested.target,
+          query: { automationId: 'actionOuterOptions' }, readStates: true, maxDepth: 8, maxNodes: 64, capture: 'none' });
+        assert.equal(readBack.body.tree.states.expandCollapse, 'Expanded');
+        const alreadyVisible = await runExpandUiWorkflow(caller, nested.target, {
+          candidateQuery: { automationId: 'actionOuterOptions' }, childQuery: { automationId: 'actionNestedNormalize' } });
+        assert.equal(alreadyVisible.report.success, true);
+        assert.equal(alreadyVisible.report.actionAttempted, false);
+        assert.equal(alreadyVisible.report.metrics.dispatchedCalls, 1);
+      } finally { await killProcessTree(nested.child); }
+    });
+
+  it('parent paths isolate duplicate IDs and expansion without escaping missing or ambiguous scopes',
+    { timeout: 60000 }, async () => {
+      const scoped = await startFixture(['--background-fixture', '--scope-navigation']);
+      const inspect = async (scopePath?: any[], query = { automationId:'scopeAdvanced' }) =>
+        (await call('wincode_ui_inspect', { ...scoped.target, scopePath, query, readStates:true, capture:'none' })).body;
+      const expand = async (scopePath: any[]) =>
+        (await call('wincode_ui_set_expanded', { ...scoped.target, scopePath, targetAutomationId:'scopeAdvanced', expanded:true })).body;
+      try {
+        assert.equal((await inspect()).queryResult.status, 'ambiguous');
+        const voice = [{ automationId:'scopeSpeech' }];
+        const display = [{ automationId:'scopeDisplay' }];
+        assert.equal((await inspect(voice)).tree.states.expandCollapse, 'Collapsed');
+        for (const [scopePath, code, index] of [
+          [[{automationId:'missing'}], 'SCOPE_NOT_FOUND', 0],
+          [[{automationId:'scopeAdvanced'}], 'SCOPE_AMBIGUOUS', 0],
+          [[...voice, {automationId:'scopeSpeech'}], 'SCOPE_NOT_FOUND', 1],
+        ] as const) {
+          const failed = await expand([...scopePath]);
+          assert.equal(failed.success, false); assert.equal(failed.errorCode, code, JSON.stringify(failed));
+          assert.equal(failed.scopeResult.failedIndex, index);
+          assert.equal(failed.actionMethod, undefined);
+        }
+        assert.equal((await inspect(voice)).tree.states.expandCollapse, 'Collapsed');
+        assert.equal((await expand(voice)).success, true);
+        assert.equal((await inspect(display)).tree.states.expandCollapse, 'Collapsed');
+        const path = [...voice, {automationId:'scopeAdvanced'}];
+        const child = await inspect(path, {automationId:'scopeNormalize'});
+        assert.equal(child.queryResult.status, 'unique', JSON.stringify(child));
+        assert.equal(child.tree.states.toggle, 'On');
+        assert.equal(child.scopeResult.resolvedCount, 2);
+        assert.equal((await expand(voice)).actionMethod, 'ExpandCollapsePattern:no-op');
+      } finally { await killProcessTree(scoped.child); }
+    });
+
+  it('real property failures allow auxiliary gaps but distinguish unknown enabled evidence from disabled targets',
+    { timeout: 45000 }, async () => {
+      // Separate fault window keeps unknown-enabled nodes out of the normal discovery scenarios.
+      const fault = await startFixture(['--background-fixture', '--navigation-evidence']);
+      const callFault = (name: string, args: Record<string, unknown>) => call(name, { ...args, ...fault.target });
+      try {
+        for (const [id, expected] of [['actionAuxiliary', undefined], ['actionEnabledUnknown', 'TARGET_EVIDENCE_INCOMPLETE'],
+          ['actionDisabledExpander', 'TARGET_DISABLED']] as const) {
+          const before = await callFault('wincode_ui_inspect', { query: { automationId: id }, readStates: true,
+            backgroundOnly: true, capture: 'none', responseFormat: 'compact' });
+          assert.equal(before.body.tree.states.expandCollapse, 'Collapsed');
+          assert.ok(before.body.tree.propertyIssues?.some((issue: string) => issue.startsWith('className:')));
+          const action = await callFault('wincode_ui_set_expanded', { targetAutomationId: id, expanded: true });
+          if (expected) {
+            assert.equal(action.body.errorCode, expected, JSON.stringify(action));
+            const after = await callFault('wincode_ui_inspect', { query: { automationId: id }, readStates: true });
+            assert.equal(after.body.tree.states.expandCollapse, 'Collapsed');
+          } else {
+            assert.equal(action.body.success, true, JSON.stringify(action));
+            assert.ok(action.body.actionTarget.propertyIssues?.some((issue: string) => issue.startsWith('className:')));
+            await callFault('wincode_ui_set_expanded', { targetAutomationId: id, expanded: false });
+            const { runExpandUiWorkflow } = await import('../src/Client/ExpandUiWorkflow.js');
+            const checked = await runExpandUiWorkflow((name, args, options) => client.callTool({ name, arguments: args }, options),
+              fault.target, { parentQuery: { automationId: id }, childQuery: { automationId: id + 'Check' } });
+            assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+            assert.equal(checked.report.diagnosis.relationshipVerified, true);
+            assert.equal(checked.report.findings?.state, 'On');
+            assert.equal(checked.report.steps.filter(step => step.tool === 'wincode_ui_set_expanded').length, 1);
+            await callFault('wincode_ui_set_expanded', { targetAutomationId: id, expanded: false });
+          }
+        }
+        } finally { await killProcessTree(fault.child); }
+    });
+
+  it('expands a collapsed parent, verifies it and reads its actual child', { timeout: 30000 }, async () => {
+    const collapsed = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionAdvanced', expanded: false });
+    assert.equal(collapsed.body.success, true, JSON.stringify(collapsed));
+    const result = await navigate();
+    assert.equal(result.report.success, true, JSON.stringify(result.report));
+    assert.equal(result.report.steps[0].value.queryResult?.status, 'not-found');
+    assert.equal(result.report.diagnosis.parentState, 'Expanded');
+    assert.equal(result.report.actionAttempted, true);
+    assert.equal(result.report.findings?.state, 'On');
+  });
+
+  it('discovers the collapsed group without a parent selector and skips navigation when the child is visible', { timeout: 30000 }, async () => {
+    const collapsed = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionAdvanced', expanded: false });
+    assert.equal(collapsed.body.success, true, JSON.stringify(collapsed));
+    const { runExpandUiWorkflow } = await import('../src/Client/ExpandUiWorkflow.js');
+    const automatic = () => runExpandUiWorkflow((name, args, options) => client.callTool({ name, arguments: args }, options),
+      { pid, hwnd }, { childQuery: { automationId: 'actionNormalize' } }, { timeoutMs: 15000 });
+    const discovered = await automatic();
+    assert.equal(discovered.report.success, true, JSON.stringify(discovered.report));
+    assert.equal(discovered.report.steps[0].value.queryResult?.status, 'not-found');
+    assert.equal(discovered.report.diagnosis.candidateSource, 'discovered-group');
+    assert.equal(discovered.report.diagnosis.relationshipVerified, true);
+    assert.equal(discovered.report.actionAttempted, true);
+    assert.equal(discovered.report.findings?.state, 'On');
+    assert.equal(discovered.report.metrics.dispatchedCalls, 6);
+    const visible = await automatic();
+    assert.equal(visible.report.success, true, JSON.stringify(visible.report));
+    assert.equal(visible.report.actionAttempted, false);
+    assert.equal(visible.report.findings?.state, 'On');
+    assert.equal(visible.report.metrics.dispatchedCalls, 1);
+  });
+
+  it('keeps an already expanded parent open without another navigation action', { timeout: 30000 }, async () => {
+    const opened = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionAdvanced', expanded: true });
+    assert.equal(opened.body.success, true, JSON.stringify(opened));
+    const result = await navigate();
+    assert.equal(result.report.success, true, JSON.stringify(result.report));
+    assert.equal(result.report.actionAttempted, false);
+    assert.equal(result.report.findings?.state, 'On');
+    const unchanged = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionAdvanced', expanded: true });
+    assert.equal(unchanged.body.status, 'already-expanded');
+  });
+
+  it('returns selectable live candidates and expands only the chosen group', { timeout: 30000 }, async () => {
+    for (const id of ['actionAdvanced', 'actionDisplayAdvanced']) {
+      const collapsed = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: id, expanded: false });
+      assert.equal(collapsed.body.success, true, JSON.stringify(collapsed));
+    }
+    const { runExpandUiWorkflow } = await import('../src/Client/ExpandUiWorkflow.js');
+    const caller = (name: string, args: Record<string, unknown>, options: any) => client.callTool({ name, arguments: args }, options);
+    const first = await runExpandUiWorkflow(caller, { pid, hwnd }, { childQuery: { automationId: 'actionNormalize' } });
+    assert.equal(first.report.status, 'selection-required', JSON.stringify(first.report));
+    assert.equal(first.isError, false);
+    assert.equal(first.report.actionAttempted, false);
+    assert.equal(first.report.diagnosis.candidates?.length, 2);
+    const chosen = first.report.diagnosis.candidates!.find(candidate => candidate.query.name === 'Speech advanced');
+    assert.ok(chosen?.nextRequest);
+    const request = chosen.nextRequest;
+    const selected = await runExpandUiWorkflow(caller, request.target, request.parameters, { timeoutMs: request.timeoutMs });
+    assert.equal(selected.report.success, true, JSON.stringify(selected.report));
+    assert.equal(selected.report.diagnosis.candidateSource, 'selected-group');
+    assert.equal(selected.report.diagnosis.relationshipVerified, true);
+    assert.equal(selected.report.findings?.state, 'On');
+    assert.equal(selected.report.steps.filter(step => step.tool === 'wincode_ui_set_expanded').length, 1);
+    const other = await call('wincode_ui_inspect', { pid, hwnd, query: { automationId: 'actionDisplayAdvanced' }, readStates: true });
+    assert.equal(other.body.tree.states.expandCollapse, 'Collapsed');
+    await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionDisplayAdvanced', expanded: true });
+  });
+
+  it('refuses ambiguous or unsupported navigation and preserves the parent state', { timeout: 30000 }, async () => {
+    await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionAdvanced', expanded: false });
+    for (const [parent, code] of [
+      [{ automationId: 'actionDuplicate' }, 'QUERY_AMBIGUOUS'],
+      [{ automationId: 'actionToggle' }, 'NO_EXPAND_COLLAPSE_PATTERN'],
+    ] as const) {
+      const result = await navigate(parent);
+      assert.equal(result.report.errorCode, code, JSON.stringify(result.report));
+      assert.equal(result.report.actionAttempted, false);
+    }
+    const refused = await call('wincode_ui_set_expanded', { pid, hwnd, targetAutomationId: 'actionToggle', expanded: true });
+    assert.equal(refused.body.errorCode, 'NO_EXPAND_COLLAPSE_PATTERN');
+    const parent = await call('wincode_ui_inspect', { pid, hwnd, query: { automationId: 'actionAdvanced' }, readStates: true });
+    assert.equal(parent.body.tree.states.expandCollapse, 'Collapsed');
+  });
 
   it('clicks, refuses ambiguous/disabled targets and writes text without echoing it', { timeout: 180000 }, async () => {
     assert.equal(await echo(), 'idle');

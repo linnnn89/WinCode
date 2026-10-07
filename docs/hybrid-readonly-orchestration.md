@@ -2,15 +2,15 @@
 
 实验分支：`codex/hybrid-readonly-orchestration`。基线：`038c0ccc7372948da405546cc7ec0add56eea9de`。
 
-文档分工：本文保留接口用法和历史实验方法；[迭代规划](hybrid-next-iteration-plan.md#第十六轮父路径内查询与展开)维护当前状态及已执行方案；[问题记录](hybrid-experiment-findings.md#第十六轮父路径内查询与展开2026-10-07)保存实际失败、验证与限制。第十六轮标准 inspect/review/setExpanded 已支持 scopePath，实际双区域 WPF 与当前 Codex CLI 通过；安装 Skill 同步。客户端 expand-ui 尚未生成父路径或递归执行。新接手不需要按本文历史命令顺序执行。
+文档分工：本文保留接口用法和历史实验方法；[迭代规划](hybrid-next-iteration-plan.md#main-合并验收线)维护 main 合并验收线、后续工作包和当前状态；[问题记录](hybrid-experiment-findings.md#第十六轮父路径内查询与展开2026-10-07)保存实际失败、验证与限制。第十六轮标准 inspect/review/setExpanded 已支持 scopePath，实际双区域 WPF 与当前 Codex CLI 通过；当轮记录了安装 Skill 同步。客户端 expand-ui 尚未接受父路径，自动路径生成与递归执行也未实现。新接手不需要按本文历史命令顺序执行。
 
 当前父路径用法与完整边界见 [Skill UI 手册](../skills/wincode/references/ui.md#操作方式与授权)。inspectionVersion 5 的路径逐层唯一解析、失败不退回整窗；旧 Host 在带范围的展开动作前被识别。当前非 fixture 的 scopePath 与非 WPF 导航未验收，历史 New-tavern 单层结果不能代替本轮能力验证。
 
-**接手入口：先读 [当前状态与未完成清单](hybrid-next-iteration-plan.md#当前未实现与待验证事项)及[第十六轮记录](hybrid-experiment-findings.md#第十六轮父路径内查询与展开2026-10-07)，无需从头重跑本文命令。** 第十一至十三轮增加明确展开、单候选发现与多候选选择后验证；第十四轮允许展开导航的 className／bounds／isOffscreen 辅助缺口；第十五轮增加所选 Expanded 父级直接续接及动作后局部诊断，第十六轮补标准工具的父路径定位。普通只读工作流／统计配方的证据门槛未改。属性故障与嵌套诊断分别在第十四／十五轮通过独立真实 WPF 窗口和当前客户端 CLI 验证，New-tavern 证明实际单层路径。自动递归、其他控件类型、非 fixture 多候选和稳定性能尚未实现／验证。跨请求累计预算当前不要求补齐；任务范围沿用用户选定窗口和目标。本文历史结论、命令和预算不能混作新的执行指令。
+**接手入口：先读 [main 合并验收线](hybrid-next-iteration-plan.md#main-合并验收线)、[后续执行顺序](hybrid-next-iteration-plan.md#后续执行顺序)及[第十六轮记录](hybrid-experiment-findings.md#第十六轮父路径内查询与展开2026-10-07)，无需从头重跑本文命令。** 合并前集中完成客户端父范围接入、真实应用验收和交付／PR 检查，单请求仍最多一次展开。第十一至十三轮增加明确展开、单候选发现与多候选选择后验证；第十四轮允许展开导航的 className／bounds／isOffscreen 辅助缺口；第十五轮增加所选 Expanded 父级直接续接及动作后局部诊断，第十六轮补标准工具的父路径定位。普通只读工作流／统计配方的证据门槛未改。属性故障与嵌套诊断分别在第十四／十五轮通过独立真实 WPF 窗口和当前客户端 CLI 验证，New-tavern 证明实际单层路径。自动递归、其他控件类型、非 fixture 多候选和稳定性能尚未实现／验证，均不作为本次合并前置条件。跨请求累计预算当前不要求补齐；任务范围沿用用户选定窗口和目标。本文历史结论、命令和预算不能混作新的执行指令。
 
 实际发现的缺陷、未解决问题及隐私边界见 [问题与验证边界](hybrid-experiment-findings.md)。失败记录保留在本地，公开文档只提交脱敏汇总。
 
-本文初始迭代增加客户端只读编排和真实 Windows UI 基准，当时标准 MCP 工具、schema、Gateway 准入和 UIA helper 生命周期保持既有路径。第十一轮随后新增标准 set_expanded 工具及版本门，最新接口以当前手册为准。只有显式调用客户端模块才启用混合编排；本分支独立测试，暂不合并到 `main`。
+本文初始迭代增加客户端只读编排和真实 Windows UI 基准，当时标准 MCP 工具、schema、Gateway 准入和 UIA helper 生命周期保持既有路径。第十一轮随后新增标准 set_expanded 工具及版本门，最新接口以当前手册为准。只有显式调用客户端模块才启用混合编排；本分支继续独立开发，满足迭代规划中的 M1–M6 后按 PR 流程合并到 `main`。
 
 ## 构建与验证
 

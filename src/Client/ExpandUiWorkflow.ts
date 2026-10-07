@@ -1,8 +1,8 @@
-import type { UiInspectResult, UiNode, UiQuery } from '../Core/UiContracts.js';
-import { validateUiQuery } from '../Core/UiContracts.js';
+import type { UiInspectResult, UiNode, UiQuery, UiScopeSelector } from '../Core/UiContracts.js';
+import { validateUiQuery, validateUiScope } from '../Core/UiContracts.js';
 import type { UiReadCaller, UiTarget } from './ReadonlyUiWorkflow.js';
 
-export type ExpandUiParameters = { parentQuery?: UiQuery; childQuery: UiQuery; candidateQuery?: UiQuery };
+export type ExpandUiParameters = { parentQuery?: UiQuery; childQuery: UiQuery; candidateQuery?: UiQuery; scopePath?: UiScopeSelector[] };
 type NavigationCandidate = { query: UiQuery; state: string;
   nextRequest?: { action: 'expand-ui'; target: UiTarget; parameters: ExpandUiParameters; timeoutMs: number } };
 type LocalNode = Pick<UiNode, 'id' | 'parentId' | 'automationId' | 'name' | 'controlType' | 'isEnabled' | 'propertyIssues'> & { state?: string };
@@ -20,17 +20,32 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
   if (!target || !Number.isSafeInteger(target.pid) || target.pid < 1 || typeof target.hwnd !== 'string' ||
     target.hwnd.length > 32 || !/^(0x[\da-f]+|\d+)$/i.test(target.hwnd) || BigInt(target.hwnd) <= 0n)
     throw new Error('Supply an explicit positive PID and HWND.');
-  if (!parameters || Object.keys(parameters).some(key => !['parentQuery', 'childQuery', 'candidateQuery'].includes(key)) ||
+  if (!parameters || Object.keys(parameters).some(key => !['parentQuery', 'childQuery', 'candidateQuery', 'scopePath'].includes(key)) ||
     !parameters.childQuery || (parameters.parentQuery !== undefined && parameters.candidateQuery !== undefined))
     throw new Error('Supply childQuery and at most one of parentQuery or candidateQuery; no other parameters are accepted.');
   validateUiQuery(parameters.parentQuery, true);
   validateUiQuery(parameters.childQuery, true);
   validateUiQuery(parameters.candidateQuery, true);
+  validateUiScope(parameters.scopePath);
   if (parameters.candidateQuery && (Object.keys(parameters.candidateQuery).some(key => !['automationId', 'name', 'controlType'].includes(key)) ||
     (!parameters.candidateQuery.automationId && !parameters.candidateQuery.name) ||
     (parameters.candidateQuery.controlType !== undefined && parameters.candidateQuery.controlType !== 'Group')))
     throw new Error('candidateQuery requires an observed exact Group name or automationId and no search-budget fields.');
   const fixed = { ...target }, input = structuredClone(parameters);
+  // Query budgets do not belong to path selectors. Resolve the parent again for the final child read.
+  const parentScope = (query: UiQuery): UiScopeSelector[] => {
+    const selector = { ...(query.automationId ? { automationId: query.automationId } : {}),
+      ...(query.name ? { name: query.name } : {}), ...(query.controlType ? { controlType: query.controlType } : {}) };
+    // A final query can match its scope root. Repeating that same exact selector as a
+    // descendant hop would reject a valid parent-root request (or search a different nested group).
+    const last = input.scopePath?.at(-1);
+    const isScopeRoot = last && (['automationId', 'name', 'controlType'] as const).every(key => last[key] === selector[key]);
+    const path = isScopeRoot ? [...input.scopePath!] : [...(input.scopePath ?? []), selector];
+    validateUiScope(path);
+    return path;
+  };
+  const suppliedParent = input.parentQuery ?? (input.candidateQuery ? { ...input.candidateQuery, controlType: 'Group' } : undefined);
+  const initialScope = suppliedParent ? parentScope(suppliedParent) : input.scopePath;
   const timeoutMs = options.timeoutMs ?? 15000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000) throw new Error('timeoutMs must be 1–30000.');
   const started = performance.now(), deadline = Date.now() + timeoutMs;
@@ -60,12 +75,25 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
     const value = JSON.parse(texts[0].text) as UiInspectResult;
     steps.push({ tool, value: structuredClone(value) });
     checkDeadline();
-    if (result.isError || value.success !== true) stop(value.errorCode ?? 'TOOL_ERROR', value.errorMessage ?? 'Tool failed; do not replay the action.');
+    if (result.isError || value.success !== true) {
+      // The last generated path hop is the supplied parent, not a caller-supplied ancestor.
+      // Preserve existing parent-query/selection errors while retaining raw scope evidence in steps.
+      if (suppliedParent && Array.isArray(args.scopePath) && args.scopePath.length === (input.scopePath?.length ?? 0) + 1 &&
+        value.scopeResult?.failedIndex === args.scopePath.length - 1 &&
+        ['SCOPE_NOT_FOUND', 'SCOPE_AMBIGUOUS', 'SCOPE_SEARCH_INCOMPLETE'].includes(value.errorCode ?? '')) {
+        const incomplete = value.errorCode === 'SCOPE_SEARCH_INCOMPLETE';
+        stop(input.candidateQuery && !incomplete ? 'NAVIGATION_SELECTION_STALE' : incomplete ? 'QUERY_INCOMPLETE' :
+          value.errorCode === 'SCOPE_AMBIGUOUS' ? 'QUERY_AMBIGUOUS' : 'QUERY_NOT_FOUND',
+          value.errorMessage ?? 'Supplied parent could not be resolved; no navigation is permitted.');
+      }
+      stop(value.errorCode ?? 'TOOL_ERROR', value.errorMessage ?? 'Tool failed; do not replay the action.');
+    }
     if (value.pid !== fixed.pid || !value.hwnd || BigInt(value.hwnd) !== BigInt(fixed.hwnd)) stop('TARGET_CHANGED', 'Response does not belong to the fixed target.');
     return value;
   };
-  const inspect = (query: UiQuery, rootOnly = false) => invoke('wincode_ui_inspect', {
+  const inspect = (query: UiQuery, rootOnly = false, scopePath = input.scopePath) => invoke('wincode_ui_inspect', {
     query, readStates: true, backgroundOnly: true, capture: 'none', responseFormat: 'compact',
+    ...(scopePath ? { scopePath } : {}),
     maxDepth: rootOnly ? 1 : 8, maxNodes: rootOnly ? 1 : 128,
   });
   const unique = (value: UiInspectResult) => {
@@ -120,7 +148,8 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
       ...(node.automationId ? { automationId: node.automationId } : {}), ...(node.name ? { name: node.name } : {}) }, state: 'Collapsed' }));
     for (const candidate of diagnosis.candidates) {
       if (candidate.query.automationId || candidate.query.name) candidate.nextRequest = { action: 'expand-ui', target: { ...fixed },
-        parameters: { childQuery: structuredClone(input.childQuery), candidateQuery: { ...candidate.query } }, timeoutMs };
+        parameters: { childQuery: structuredClone(input.childQuery), candidateQuery: { ...candidate.query },
+          ...(input.scopePath ? { scopePath: structuredClone(input.scopePath) } : {}) }, timeoutMs };
     }
     if (!candidates.length) return stop('NAVIGATION_CANDIDATE_NOT_FOUND', 'No enabled collapsed Group was observed. Other control types and recursive discovery are outside this workflow.');
     if (candidates.length !== 1) return stop('NAVIGATION_CANDIDATE_AMBIGUOUS', 'Multiple collapsed Groups were observed. Select a relevant returned nextRequest using task and page evidence; no action was taken.');
@@ -130,12 +159,13 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
     return selected;
   };
   try {
-    const initial = await inspect(input.childQuery);
+    const initial = await inspect(input.childQuery, false, initialScope);
     diagnosis.initialQuery = initial.queryResult?.status;
     // Missing child is evidence, not permission to guess the parent or retry the same query.
     if (initial.queryResult?.status !== 'not-found' || !initial.queryResult.searchComplete) unique(initial);
     if (!input.parentQuery && initial.queryResult?.status === 'unique') {
       readChild(initial);
+      if (suppliedParent) diagnosis.relationshipVerified = true;
       diagnosis.cause = 'target-already-visible';
     } else {
       if (input.parentQuery) diagnosis.candidateSource = 'supplied-parent';
@@ -143,6 +173,7 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
       // A selected target needs its own unique search, not a new census of unrelated Groups.
       const parentQuery = input.parentQuery ?? (input.candidateQuery
         ? { ...input.candidateQuery, controlType: 'Group' } : await discoverParent());
+      const childScope = parentScope(parentQuery);
       const parent = await inspect(parentQuery, true);
       if (input.candidateQuery && parent.queryResult?.searchComplete &&
         ['not-found', 'ambiguous'].includes(parent.queryResult.status))
@@ -159,7 +190,8 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
         diagnosis.cause = 'observed-collapsed-navigation-candidate';
         diagnosis.nextAction = 'Set this unique parent to Expanded once, then verify the parent and child relationship.';
         await invoke('wincode_ui_set_expanded', { targetAutomationId: parentQuery.automationId,
-          targetName: parentQuery.name, targetControlType: parentQuery.controlType, expanded: true });
+          targetName: parentQuery.name, targetControlType: parentQuery.controlType, expanded: true,
+          ...(input.scopePath ? { scopePath: input.scopePath } : {}) });
       } else diagnosis.cause = 'parent-already-expanded';
       const verified = await inspect(parentQuery);
       const expanded = unique(verified);
@@ -200,7 +232,7 @@ export async function runExpandUiWorkflow(call: UiReadCaller, target: UiTarget, 
         stop('CHILD_RELATIONSHIP_UNCONFIRMED', 'Expanded parent does not contain exactly one matching child; see the local observation and diagnosis.');
       }
       diagnosis.relationshipVerified = true;
-      readChild(await inspect(input.childQuery));
+      readChild(await inspect(input.childQuery, false, childScope));
     }
   } catch (error) {
     failure = error instanceof NavigationStop ? error : new NavigationStop('NAVIGATION_ERROR',

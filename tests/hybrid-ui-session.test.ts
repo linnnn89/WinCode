@@ -18,9 +18,9 @@ const parse = (result: Awaited<ReturnType<WinCodeSession['call']>>) => {
 };
 const exited = (pid: number) => assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
 
-async function fixture(marker?: string) {
+async function fixture(marker?: string, fixtureArgs = ['--hybrid-fixture']) {
   const child = spawn(path.join(root, 'tests/fixtures/wpf-ui-review/bin/Release/net10.0-windows/win-x64/publish/wpf-ui-review.exe'),
-    ['--background-fixture', '--hybrid-fixture', '--auto-close=90000'],
+    ['--background-fixture', ...fixtureArgs, '--auto-close=90000'],
     { cwd: root, env: { ...process.env, ...(marker ? { WINCODE_TEST_UI_HOLD_MARKER: marker } : {}) },
       windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
@@ -72,6 +72,58 @@ function cli() {
 const recipeParameters = { summaryAutomationId: 'hybridSummary', regionAutomationId: 'hybridChecks',
   checkboxAutomationIds: Array.from({ length: 8 }, (_, i) => 'hybridCheck' + i), maxDepth: 4, maxNodes: 40 };
 const readCliResult = async (receipt: any) => JSON.parse(await fs.readFile(receipt.resultFile, 'utf8'));
+
+it('JSON navigation isolates duplicate parent and child IDs and keeps scope failures action-free',
+  { skip: process.platform !== 'win32', timeout: 60000 }, async () => {
+    const f = await fixture(undefined, ['--action-fixture', '--scope-navigation']), driver = cli();
+    let gatewayPid: number | undefined;
+    const auditPath = path.join(process.env.LOCALAPPDATA!, 'WinCode/logs/ui-audit/access.jsonl');
+    const auditBefore = await fs.readFile(auditPath, 'utf8').catch(() => '');
+    const reports: any[] = [];
+    const request = async (id: string, fields: Record<string, unknown>) => {
+      driver.send({ id, ...fields });
+      const receipt = await driver.wait(value => value.id === id);
+      assert.ok(receipt.resultFile, JSON.stringify(receipt));
+      const response = await readCliResult(receipt);
+      const value = parse(response); reports.push({ id, receipt, response });
+      return value;
+    };
+    try {
+      await driver.wait(value => value.ready);
+      const childQuery = { automationId: 'scopeNormalize' }, parentQuery = { automationId: 'scopeAdvanced' };
+      const voice = [{ automationId: 'scopeSpeech' }], display = [{ automationId: 'scopeDisplay' }];
+      const inspect = (id: string, scopePath: any[], query = parentQuery) => request(id,
+        { tool: 'wincode_ui_inspect', arguments: { ...f.target, scopePath, query, readStates: true, capture: 'none', backgroundOnly: true } });
+      const navigate = (id: string, scopePath: any[]) => request(id,
+        { action: 'expand-ui', target: f.target, parameters: { scopePath, parentQuery, childQuery } });
+      const first = await navigate('voice', voice);
+      assert.equal(first.success, true, JSON.stringify(first)); assert.equal(first.findings.state, 'On');
+      assert.equal(first.steps.filter((step: any) => step.tool === 'wincode_ui_set_expanded').length, 1);
+      assert.equal(first.steps.at(-1).value.scopeResult.resolvedCount, 2);
+      assert.equal((await inspect('display-unchanged', display)).tree.states.expandCollapse, 'Collapsed');
+      const second = await navigate('display', display);
+      assert.equal(second.success, true, JSON.stringify(second)); assert.equal(second.findings.state, 'Off');
+      const resumed = await navigate('voice-resume', voice);
+      assert.equal(resumed.success, true); assert.equal(resumed.findings.state, 'On'); assert.equal(resumed.actionAttempted, false);
+      const global = await request('global-child', { tool: 'wincode_ui_inspect', arguments: { ...f.target, query: childQuery,
+        readStates: true, capture: 'none', backgroundOnly: true } });
+      assert.equal(global.queryResult.status, 'ambiguous');
+      const missing = await navigate('missing-region', [{ automationId: 'missing-region' }]);
+      assert.equal(missing.errorCode, 'SCOPE_NOT_FOUND'); assert.equal(missing.actionAttempted, false); assert.equal(missing.findings, undefined);
+      assert.equal((await inspect('voice-readback', [...voice, parentQuery], childQuery)).tree.states.toggle, 'On');
+      assert.equal((await inspect('display-readback', [...display, parentQuery], childQuery)).tree.states.toggle, 'Off');
+      driver.send({ id: 'status', action: 'status' }); gatewayPid = (await driver.wait(value => value.id === 'status')).status.pid;
+      driver.send({ id: 'close', action: 'close' }); assert.equal((await driver.wait(value => value.id === 'close')).closed, true);
+      await withTimeout(driver.closed, 8000, 'Scoped CLI exit'); exited(gatewayPid!); exited(driver.child.pid!);
+      const auditAfter = await fs.readFile(auditPath, 'utf8'); assert.ok(auditAfter.startsWith(auditBefore));
+      const starts = auditAfter.slice(auditBefore.length).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+        .filter(entry => entry.phase === 'start' && entry.target === f.target.pid);
+      assert.ok(starts.length > 0); for (const entry of starts) exited(entry.helper);
+      const directory = path.join(root, 'test-tmp/hybrid-merge-checks'); await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, 'scoped-session.json'), JSON.stringify({ success: true, reports,
+        helperStarts: starts.length, helpersExited: true, gatewayExited: true, cliExited: true }, null, 2));
+    } finally { await killProcessTree(driver.child); await withTimeout(driver.closed, 8000, 'Scoped cleanup'); await stopFixture(f.child, f.closed); }
+  });
 
 it('JSON recipe errors remain cold and corrected subsets reuse the connection with real WPF evidence',
   { skip: process.platform !== 'win32', timeout: 45000 }, async () => {

@@ -1451,3 +1451,11 @@
 - 当前 Codex 的 Node 24 真实 Skill 终端对 Tavern 搜索 ShowCharactersAsync 并查询引用，返回诊断总数 11、CS8795=11、App=2、Infrastructure=9、Core=0、加载诊断=0、展示=5、省略=6、排除分析器引用=24。第 127/130 行两处引用按磁盘 UTF-16 位置核验；两个响应复用 snapshotId=d394f23675ab42e382d304601f647b72。原始结果 test-tmp/skill-sessions/run-nolmHH/，入口/Gateway instanceId=0cb7610a-f126-4f76-943f-858fb598f7e2。显式关闭后五个记录所属进程全部退出；Tavern Git 仍仅有原有 .publish-verify/，没有业务源码或资料库改动。
 - Skill 保持短入口，只更新 references/code.md 与 references/diagnostics.md：先看完整统计，再区分框架/依赖加载与生成器覆盖；不凭错误码自动安装包或反复重试。skill-creator quick_validate 以 Python UTF-8 模式通过。现有 sync-skill.mjs --apply 已备份后同步 C:/Users/40218/.agents/skills/wincode，备份目录 .wincode-backup-17cc7064-c86b-4973-b869-b0f34d2f1e9d；再次只读检查四份受管文件 matched=true。合并后复核。
 - 尚待本次 PR 的精确提交 CI 和合并；作者自查不是独立审查。生成器覆盖与宿主冷启动观察仍是已有明确边界，不将本轮通过描述为已解决它们。
+
+## 2026-10-07 — 0.17.0 客户端父范围与 main 合并收尾
+
+- 按 hybrid 计划提交 3d3d019 的 M1–M6 执行：expand-ui 从首次观察到最终子控件读回保留 scopePath，候选 nextRequest 保留祖先范围；同一父选择器与范围根完全匹配时复用，不追加重复严格后代。保持单请求最多一次展开、已有可见候选单次读取、旧失败分类和未知结果不重放。新增 2 项测试，无新依赖、服务或系统安装。
+- 首轮核心 492 通过／0 失败／1 原有跳过；首轮桌面 52 通过／3 失败。三个失败分别为调用次数兼容、内部父路径错误分类、源码夹具漏复制 partial 文件，针对性修复后 3/3 通过。实际隔离 Tavern 另复现范围根重复路径，无动作；修复后同一真实流程通过。首次失败、参考及完整证据边界见[第十七轮记录](hybrid-experiment-findings.md#第十七轮客户端父范围与-main-合并收尾2026-10-07)。
+- 最终完整核心 18 阶段成功，493 项中 492 通过、0 失败、1 原有可选固定 Tavern 夹具跳过；最终完整桌面 7 阶段成功，55/55，含 UIA owner-death、原生托盘及双客户端真实托盘工作流。报告分别为 test-tmp/check/2026-10-07T13-03-35-479Z-core/report.json、test-tmp/check/2026-10-07T13-05-25-034Z-desktop/report.json；首次失败后仅做这一次完整最终复跑。
+- 实际 JSON CLI 同名双区域夹具与隔离 Tavern 通过；Tavern 展开 5 调用／1 动作，独立 On 读回，已展开续接 4 调用／0 动作，可见读取 1 调用／0 动作。18 次 Helper、两个 CLI／Gateway 会话和自有目标应用退出，目标仓库原有改动一致。原始窗口／身份仅在忽略目录，本轮未调用外部模型。
+- 产品与所有原生组件统一 0.17.0，Host inspectionVersion 5；delivery verified。三个既有通用 Skill 位置经备份同步，各 4 个受管文件哈希相同；没有修改 MCP 配置或 adapter。11 份 MD 的 170 个仓库链接、29 个锚点、版本和 whitespace 检查通过，历史本地附件不属于公开交付。完整增量作者自查完成；独立审查未执行。精确 PR head CI／合并状态后续追加。

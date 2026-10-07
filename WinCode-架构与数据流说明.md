@@ -1,6 +1,6 @@
 # WinCode 架构与数据流
 
-**适用版本：0.16.0；更新：2026-09-11（北京时间）。已验证的 main 基线 `631f8ba` 包含 PR #40/#41，Node 22/24 和 CodeQL 检查通过，尚未发布 GitHub Release。本机已完成双连接 UI 及实际 Codex 连接中的单项目 Roslyn 验收，范围和结果见 [README](README.md)。**
+**适用源码版本：0.17.0；更新：2026-10-07（北京时间）。本轮基于 main `038c0ccc` 的实验分支收口；0.17.0 最终本地核心、桌面与实际 CLI／隔离应用验收均通过，精确 PR head 的 CI 尚待完成，状态见 hybrid 计划及工作记录。尚未发布 GitHub Release。**
 
 本说明描述当前源码中已实现的结构。GitHub 分支保护的历史只读核查日期为 2026-09-08；本轮核对 PR 检查状态，不把它等同重新审计全部保护设置。历史实测结果见[工作记录](docs/codex_worklog.md)。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
 
@@ -44,6 +44,8 @@ flowchart TB
 图中箭头表示主要调用或数据联系，不表示每条请求都经过全部组件。原生 Host 的进程隔离用于故障与生命周期控制，**不等于操作系统安全沙盒**。
 
 Codex 可选择 Skill 按需入口：首次使用才创建交互执行会话，`SkillSessionCli` 使用现有 MCP SDK 连接上图中的 Gateway，后续查询复用同一连接。入口启动或读取本地状态不会创建 Gateway；首次工具请求完成工作区、构建和提供方核验后才派发业务。完整 MCP 结果和原始图片作为本地附件交付，入口不重写工具契约或自动重放请求。关闭/所属入口死亡沿用 Gateway 与原生 Host 的清理链路。该模式需禁用客户端自动启动的 WinCode 条目，不能通过 Gateway 内部延迟初始化实现客户端侧零进程；使用方法见 [Skill 会话手册](skills/wincode/references/diagnostics.md#skill-按需会话)。
+
+0.17.0 的客户端可显式调用 readonly-ui／checkbox-audit，或调用独立的 expand-ui 导航。后者接受实际祖先 scopePath，在所选父范围内定位、最多展开一次，并通过再次解析父路径读回子控件状态；不是服务器批处理、原子快照或自动递归引擎。标准 inspect/review/setExpanded 的路径需 UIA Host inspectionVersion 5，旧 Host 不可忽略范围继续操作。click/type 的定位契约保持原样；应用事件可能带来前台变化。具体字段与结果边界见 [UI 手册](skills/wincode/references/ui.md) 和 [合并验收计划](docs/hybrid-next-iteration-plan.md#main-合并验收线)。
 
 | 层 / 模块 | 负责什么 | 设计边界与源码入口 |
 |---|---|---|

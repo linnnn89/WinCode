@@ -465,3 +465,35 @@ inspectionVersion 升至 5。旧 Host 可能认识 setExpanded 却忽略父范�
 原始记录仅在忽略目录 `test-tmp/hybrid-sixteenth-checks/` 及 `test-tmp/skill-sessions/run-Gc6vlr/`、`test-tmp/skill-sessions/run-IXZ3Oj/`。公开只记录方法、失败、合成夹具标识、结果及数量；不提交原始窗口树、截图、进程身份或本机路径。未读取凭据配置、输入真实个人数据或请求外部模型 API。提交前检查公开新增行及这些本地记录的常见凭据形状；这不是已知密钥精确比对，也不承诺排除任意未知秘密，本地附件不作为匿名公开资料。
 
 收尾检查：19 个公开变更文件新增行的本机绝对路径、邮箱及常见凭据形状均为 0；22 个本地 JSON／日志文件常见凭据形状为 0。6 份 MD 的 58 个相对链接、21 个锚点、代码围栏及折叠标签配对通过，git diff --check 通过。原始记录和无关未跟踪文件不进入提交。
+
+## 第十七轮：客户端父范围与 main 合并收尾（2026-10-07）
+
+本轮按计划提交 `3d3d019` 的 M1–M6 执行，产品版本统一为 0.17.0。expand-ui 接受显式 scopePath；初始子查询、有限发现／候选重定位、动作和最终读回保留范围，nextRequest 保留调用方祖先路径。父级明确后最终子控件限定在该父级内，不回退整窗。父查询与路径末项三个定位字段完全相同时复用范围根；否则追加父选择器，总长最多 50。单请求仍最多展开一次，未知结果不重放。
+
+### 首次失败与修复
+
+首轮完整核心检查成功：493 项中 492 通过、0 失败、1 项原有可选 Tavern 固定夹具跳过；报告 `test-tmp/check/2026-10-07T12-44-41-128Z-core/report.json`。首轮完整桌面检查 55 项中 52 通过、3 失败；报告 `test-tmp/check/2026-10-07T12-46-46-565Z-desktop/report.json`，后续阶段当次未执行。失败分别是已展开候选可见读取从 1 调用变成 4 调用、内部父路径歧义改成 SCOPE_AMBIGUOUS 破坏旧 QUERY_AMBIGUOUS 分类、源码修复夹具漏复制新增 partial 文件而报 CS0103。
+
+修复保持可见候选的单次读取；调用方祖先范围失败保留 SCOPE_*，内部追加父级失败沿用 QUERY_*／候选失效分类，steps 保留原始 scopeResult；既有源码夹具复制列表补 HybridFixture.cs。失败生成目录内独立重现漏文件的 CS0103，补同一源码后 publish 成功。三项针对性复验 3/3 通过，没有放宽断言或加长等待。
+
+实际隔离 Tavern 又揭示范围根边界：父级名称／类型与 scopePath 末项相同，原代码仍追加同一严格后代，合法请求在 failedIndex=1 停止，未执行动作。核心回归先固定该失败，再复用相同末项，一次修复后核心场景及同一真实窗口通过。泛化 Pane 祖先另返回 SCOPE_AMBIGUOUS，保留失败，未改成全窗回退。
+
+实现参考了 [Microsoft UIA 查询范围说明](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-obtainingelements)、[FindFirst 的树范围契约](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.automationelement.findfirst?view=windowsdesktop-10.0)、[SDK 默认 Compile 项](https://learn.microsoft.com/dotnet/core/tools/csproj)和 [partial 类型编译规则](https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/partial-classes-and-methods)；最终判断来自本地复现和复验，未修改环境或安装依赖。
+
+### 真实入口与隔离应用
+
+新增 2 项自动测试：一项核心覆盖范围传递、根范围复用、非法输入、失败分类和 nextRequest；一项实际 JSON CLI 双区域 WPF 场景，两个区域有重复父名／ID 和子 ID。语音侧一次展开后 Normalize 为 On，显示侧仍 Collapsed；显示侧再独立展开为 Off，语音续接零动作；全窗同名查询失败，缺失祖先无动作。报告 `test-tmp/hybrid-merge-checks/scoped-session.json`。
+
+真实 Tavern 使用现有 EXE 的隔离 test-root／test-reuse 入口和合成初始资料，导航到语音页；没有改源码、重建应用、调用 Provider 或保存业务值。实际 Codex PTY 中新建 CLI，hello 为 0.17.0、build verified，UIA Host 为 inspectionVersion 5。一条已观察 Group 路径兼作父范围：折叠时 5 次调用／1 次 Expand，父级 Expanded、目标 On；独立 inspect 再次读到 On；明确父级续接 4 次调用／0 动作，可见目标读取 1 次调用／0 动作。18 次 UIA helper 启动全部退出，两个 CLI／Gateway 会话及自有 Tavern 窗口退出，Tavern 原有 Git 状态一致。完整原始结果和身份仅保存在 `test-tmp/hybrid-merge-checks/tavern-report.json` 及两个 `test-tmp/skill-sessions/` 会话目录。
+
+### 验证和范围
+
+最终完整回归、受管 Skill 同步、交付清单、公开文档检查和 PR 精确 head CI 在本节后续追加实际结果。首轮失败不覆盖。对 main 的完整增量按 CONTRIBUTING 做作者自查；这不代表独立审查。模型脚本只通过显式 benchmark 命令运行，本轮未请求外部模型或启动性能实验。
+
+不新增自动递归、多层路径生成、click/type 范围、其他控件导航或非 WPF 支持。单窗口真实应用证据不代表所有程序不会激活窗口，不证明稳定 token／延迟收益，也不代表当前已加载客户端或默认配置自动更新。原始窗口树、进程身份和本机路径保持在忽略目录，不作为匿名附件。
+
+第十七轮最终本地收尾：`npm run check` 18 阶段全部通过，493 项中 492 通过、0 失败、1 原有可选固定 Tavern 夹具跳过；报告 `test-tmp/check/2026-10-07T13-03-35-479Z-core/report.json`。`npm run check:desktop` 7 阶段全部通过，55/55、0 跳过，实际 UIA owner-death、原生 Tray 和双客户端真实 Tray 工作流均成功；报告 `test-tmp/check/2026-10-07T13-05-25-034Z-desktop/report.json`。这是首轮失败后的唯一完整最终复跑，没有再追加 test:all。Gateway buildId=`7c633218b3e7396bb04de03a3f1f80d528a52a5e7fb8f6410b9b58a3753b9872`；delivery contentId=`46291cc1cfe8873e8587c969b3531df6ba57ce3b4cb2b1ef2485ab001ac2e03a`、matched=true。构建 revision 仍为计划提交，未提交的实现由 sourceHash／artifactHash 明确识别，不能只用 revision 宣称精确源码身份。
+
+三个既有通用 Skill 安装位置通过受管脚本先备份再同步，各 4 文件最终 matched=true；独立 adapter 和 MCP 配置未改。11 份 MD 的 170 个仓库相对链接、29 个锚点及代码围栏检查通过；243 个历史忽略目录附件链接保留为本地历史记录，不宣称可公开重取。版本字段与 git diff --check 通过。完整 main 增量作者自查覆盖客户端预算／取消／身份、范围校验／逐次解析、旧 Host 动作前能力门、审计／所属进程清理及模型脚本显式入口；未发现未解决的合并阻塞，未进行独立审查。
+
+2026-10-07 重新读回 main 保护：严格所需 Node 22/24 Windows regression 和三项 CodeQL（javascript-typescript、csharp、actions），管理员受约束，所需人工审批数为 0。合并仍等待精确 PR head 的这些检查；成功的本地回归不替代 CI、源码合并不代表 GitHub Release 或默认客户端刷新。

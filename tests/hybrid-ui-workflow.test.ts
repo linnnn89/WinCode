@@ -13,6 +13,85 @@ const observation = (requestId = 'read-1'): UiInspectResult => ({ schemaVersion:
     states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] } });
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
 
+test('navigation keeps the observed parent path through selection, expansion and the final child read', async () => {
+  const scopePath = [{ automationId: 'voiceRegion' }];
+  const parentQuery = { automationId: 'advanced', controlType: 'Group' };
+  const childQuery = { automationId: 'check' };
+  for (const [selected, parentIsScope] of [[false, false], [true, false], [false, true]]) {
+    const scopedPath = parentIsScope ? [parentQuery] : scopePath;
+    const childPath = parentIsScope ? scopedPath : [...scopedPath, parentQuery];
+    const calls: Array<{ tool: string; args: any }> = [];
+    let expanded = selected;
+    const checked = await runExpandUiWorkflow(async (tool, args) => {
+      calls.push({ tool, args });
+      const value = observation();
+      if (tool === 'wincode_ui_set_expanded') {
+        assert.deepEqual(args.scopePath, scopedPath);
+        expanded = true; delete value.tree;
+      } else if ((args.query as any).automationId === 'check') {
+        assert.deepEqual(args.scopePath, childPath);
+        if (!expanded) {
+          delete value.tree; value.queryResult = { status: 'not-found', searchComplete: true, visitedNodes: 4, matches: [] };
+        } else value.queryResult!.matches = [value.tree!];
+      } else {
+        assert.deepEqual(args.scopePath, scopedPath);
+        value.tree = { ...observation().tree!, automationId: 'advanced', controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: expanded ? 'Expanded' : 'Collapsed' },
+          children: expanded && args.maxDepth !== 1 ? [{ ...observation().tree!, id: 2, parentId: 1 }] : [] };
+        value.queryResult!.matches = [value.tree];
+      }
+      return result(value);
+    }, target, { scopePath: scopedPath, childQuery, ...(selected ? { candidateQuery: parentQuery } : { parentQuery }) });
+    assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+    assert.equal(checked.report.findings?.state, 'On');
+    assert.equal(checked.report.diagnosis.relationshipVerified, true);
+    assert.equal(calls.filter(c => c.tool === 'wincode_ui_set_expanded').length, selected ? 0 : 1);
+  }
+  let dispatched = 0;
+  for (const invalid of [[], [{ automationId: 'region', maxMatches: 1 }], Array(50).fill({ automationId: 'region' })]) {
+    await assert.rejects(runExpandUiWorkflow(async () => { dispatched++; return result(observation()); }, target,
+      { scopePath: invalid, parentQuery, childQuery } as any), /scopePath/);
+  }
+  assert.equal(dispatched, 0);
+  const choices = await runExpandUiWorkflow(async (_tool, args) => {
+    assert.deepEqual(args.scopePath, scopePath);
+    const value = observation();
+    delete value.tree;
+    value.queryResult = (args.query as any).controlType === 'Group'
+      ? { status: 'ambiguous', searchComplete: true, visitedNodes: 4, matches: ['advanced', 'other'].map(automationId =>
+        ({ ...observation().tree!, automationId, controlType: 'Group', isEnabled: true,
+          states: { toggle: 'unsupported', selection: 'unsupported', expandCollapse: 'Collapsed' } })) }
+      : { status: 'not-found', searchComplete: true, visitedNodes: 4, matches: [] };
+    return result(value);
+  }, target, { scopePath, childQuery } as any);
+  assert.equal(choices.report.status, 'selection-required');
+  for (const candidate of choices.report.diagnosis.candidates ?? []) {
+    assert.deepEqual((candidate.nextRequest?.parameters as any).scopePath, scopePath);
+    assert.deepEqual(candidate.nextRequest?.target, target);
+    assert.deepEqual(candidate.nextRequest?.parameters.childQuery, childQuery);
+  }
+  const missing = await runExpandUiWorkflow(async () => result({ ...observation(), success: false,
+    errorCode: 'SCOPE_NOT_FOUND', errorMessage: 'The observed region disappeared.' }), target,
+    { scopePath, parentQuery, childQuery } as any);
+  assert.equal(missing.report.errorCode, 'SCOPE_NOT_FOUND');
+  assert.equal(missing.report.actionAttempted, false);
+  assert.equal(missing.report.findings, undefined);
+  for (const [code, expected] of [['SCOPE_AMBIGUOUS', 'QUERY_AMBIGUOUS'], ['SCOPE_NOT_FOUND', 'QUERY_NOT_FOUND'],
+    ['SCOPE_SEARCH_INCOMPLETE', 'QUERY_INCOMPLETE']] as const) {
+    const failedParent = await runExpandUiWorkflow(async () => result({ ...observation(), success: false, errorCode: code,
+      scopeResult: { resolvedCount: 1, failedIndex: 1, status: 'not-found', visitedNodes: 4 } }), target,
+      { scopePath, parentQuery, childQuery });
+    assert.equal(failedParent.report.errorCode, expected);
+    assert.equal(failedParent.report.actionAttempted, false);
+    assert.equal(failedParent.report.steps[0].value.errorCode, code);
+  }
+  const staleSelection = await runExpandUiWorkflow(async () => result({ ...observation(), success: false,
+    errorCode: 'SCOPE_NOT_FOUND', scopeResult: { resolvedCount: 1, failedIndex: 1, status: 'not-found', visitedNodes: 4 } }), target,
+    { scopePath, candidateQuery: parentQuery, childQuery });
+  assert.equal(staleSelection.report.errorCode, 'NAVIGATION_SELECTION_STALE');
+  assert.equal(staleSelection.report.actionAttempted, false);
+});
+
 test('selected expanded parents resume with local evidence instead of rediscovering unrelated groups', async () => {
   for (const hidden of [false, true]) {
     const calls: string[] = [];

@@ -496,4 +496,4 @@ inspectionVersion 升至 5。旧 Host 可能认识 setExpanded 却忽略父范�
 
 三个既有通用 Skill 安装位置通过受管脚本先备份再同步，各 4 文件最终 matched=true；独立 adapter 和 MCP 配置未改。11 份 MD 的 170 个仓库相对链接、29 个锚点及代码围栏检查通过；243 个历史忽略目录附件链接保留为本地历史记录，不宣称可公开重取。版本字段与 git diff --check 通过。完整 main 增量作者自查覆盖客户端预算／取消／身份、范围校验／逐次解析、旧 Host 动作前能力门、审计／所属进程清理及模型脚本显式入口；未发现未解决的合并阻塞，未进行独立审查。
 
-2026-10-07 重新读回 main 保护：严格所需 Node 22/24 Windows regression 和三项 CodeQL（javascript-typescript、csharp、actions），管理员受约束，所需人工审批数为 0。合并仍等待精确 PR head 的这些检查；成功的本地回归不替代 CI、源码合并不代表 GitHub Release 或默认客户端刷新。
+2026-10-07 重新读回 main 保护：严格所需 Node 22/24 Windows regression 和三项 CodeQL（javascript-typescript、csharp、actions），管理员受约束，所需人工审批数为 0。合并必须满足 [PR #52](https://github.com/linnnn89/WinCode/pull/52) 精确 head 的这些检查；成功的本地回归不替代 CI、源码合并不代表 GitHub Release 或默认客户端刷新。

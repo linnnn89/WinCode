@@ -1458,4 +1458,4 @@
 - 首轮核心 492 通过／0 失败／1 原有跳过；首轮桌面 52 通过／3 失败。三个失败分别为调用次数兼容、内部父路径错误分类、源码夹具漏复制 partial 文件，针对性修复后 3/3 通过。实际隔离 Tavern 另复现范围根重复路径，无动作；修复后同一真实流程通过。首次失败、参考及完整证据边界见[第十七轮记录](hybrid-experiment-findings.md#第十七轮客户端父范围与-main-合并收尾2026-10-07)。
 - 最终完整核心 18 阶段成功，493 项中 492 通过、0 失败、1 原有可选固定 Tavern 夹具跳过；最终完整桌面 7 阶段成功，55/55，含 UIA owner-death、原生托盘及双客户端真实托盘工作流。报告分别为 test-tmp/check/2026-10-07T13-03-35-479Z-core/report.json、test-tmp/check/2026-10-07T13-05-25-034Z-desktop/report.json；首次失败后仅做这一次完整最终复跑。
 - 实际 JSON CLI 同名双区域夹具与隔离 Tavern 通过；Tavern 展开 5 调用／1 动作，独立 On 读回，已展开续接 4 调用／0 动作，可见读取 1 调用／0 动作。18 次 Helper、两个 CLI／Gateway 会话和自有目标应用退出，目标仓库原有改动一致。原始窗口／身份仅在忽略目录，本轮未调用外部模型。
-- 产品与所有原生组件统一 0.17.0，Host inspectionVersion 5；delivery verified。三个既有通用 Skill 位置经备份同步，各 4 个受管文件哈希相同；没有修改 MCP 配置或 adapter。11 份 MD 的 170 个仓库链接、29 个锚点、版本和 whitespace 检查通过，历史本地附件不属于公开交付。完整增量作者自查完成；独立审查未执行。精确 PR head CI／合并状态后续追加。
+- 产品与所有原生组件统一 0.17.0，Host inspectionVersion 5；delivery verified。三个既有通用 Skill 位置经备份同步，各 4 个受管文件哈希相同；没有修改 MCP 配置或 adapter。11 份 MD 的 170 个仓库链接、29 个锚点、版本和 whitespace 检查通过，历史本地附件不属于公开交付。完整增量作者自查完成；独立审查未执行。交付 [PR #52](https://github.com/linnnn89/WinCode/pull/52)；CI／合并状态以该 PR 的实际回执为准。

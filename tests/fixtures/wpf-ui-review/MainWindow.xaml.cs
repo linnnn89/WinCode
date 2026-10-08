@@ -73,7 +73,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        if (Environment.GetCommandLineArgs().Contains("--navigation-evidence"))
+        if (Environment.GetCommandLineArgs().Contains("--navigation-evidence") || Environment.GetCommandLineArgs().Contains("--hybrid-evidence"))
         {
             // WPF also reads IsEnabled during event updates. Only handle our injected event fault;
             // UIA property queries still propagate it through WPF's ElementUtil.Invoke to the client.

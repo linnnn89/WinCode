@@ -30,7 +30,7 @@ WinCode is a local server implementing the Model Context Protocol (MCP) for AI c
 - **Project and code analysis:** Explore declared solution and project references, search text and symbols, read selected code, and assess change impact. Built-in text analysis works by default; optional Roslyn integration provides compiler-backed C# symbol and reference analysis.
 - **Semantic UI actions:** `wincode_ui_click` and `wincode_ui_type` act on exactly one control that a single bounded search proves unique. They use UI Automation patterns and keyboard input only—never coordinate mouse simulation—and do not explicitly activate, restore or raise the target window. Control events and navigation may still bring the application forward. Disabled controls, ambiguous or incomplete matches, read-only values and unconfirmed keyboard focus are refused rather than guessed.
 
-A recorded test with a 222-node window reduced response text from approximately **62 KB to 1.6 KB** by querying a specific control instead of returning the full tree. See the [test record](docs/codex_worklog.md).
+Use a query and an observed parent scope to retrieve the relevant controls, and request compact output when full geometry is unnecessary. Check completeness and ambiguity before drawing conclusions.
 
 ### Example: Investigate a disabled Save button
 
@@ -185,7 +185,7 @@ npm run benchmark:agent -- 1  # Run one iteration of the optional scripted bench
 - [Contributing](CONTRIBUTING.md): builds, test suites and delivery requirements.
 - [Architecture and data flow](WinCode-架构与数据流说明.md): components, interfaces, resource limits and lifecycle management.
 - [Skill and MCP setup](WinCode-Skill制作与MCP配置指南.md): installation and client configuration.
-- [Work log](docs/codex_worklog.md) and [remaining test plan](WinCode-下一轮工程化迭代计划书.md): historical verification, known issues and pending validation.
+- [Iteration plan](docs/next-iteration.md): unfinished improvements, known limitations and acceptance criteria.
 
 ---
 
@@ -202,7 +202,7 @@ WinCode 是面向 AI 编程智能体的本地模型上下文协议（Model Conte
 - **实际使用中更快、更准确：**在日常 Windows/.NET 开发中，使用 WinCode 检查 UI 和定位源码，比基于截图的 Computer Use 工作流更快、更准确。通过直接获取结构化的控件属性和源码位置，可以减少对图像识别的依赖和反复交互；配合定向查询与精简响应，还能减少模型需要处理的数据量。
 - **项目与代码分析：**查看解决方案和项目中声明的引用关系，搜索文本与符号，按需读取代码，并评估变更影响。默认提供内置文本分析，可选的 Roslyn 集成支持基于编译器语义的 C# 符号与引用分析。
 
-在包含 222 个节点的窗口测试中，仅查询指定控件即可将返回文本量从约 **62 KB 减少至 1.6 KB**。详见 [测试记录](docs/codex_worklog.md)。
+通过 query 和实际观察到的父范围只读取相关控件，不需要完整几何信息时使用 compact 输出。得出结论前仍需核对完整性与歧义。
 
 ### 使用示例：排查“保存”按钮被禁用的问题
 
@@ -357,7 +357,7 @@ npm run benchmark:agent -- 1  # 执行一轮可选的脚本化基准测试
 - [贡献指南](CONTRIBUTING.md)：构建、测试套件和交付要求。
 - [架构与数据流](WinCode-架构与数据流说明.md)：组件、接口、资源限制和生命周期管理。
 - [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)：安装与客户端配置。
-- [工作记录](docs/codex_worklog.md) 与 [后续测试计划](WinCode-下一轮工程化迭代计划书.md)：历史验证结果、已知问题和待验证事项。
+- [迭代计划](docs/next-iteration.md)：未完成的改进、已知限制与验收条件。
 
 ---
 

@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/client';
-import { UI_INSPECT_DEFAULTS, validateUiQuery, type UiInspectRequest, type UiNode } from '../Core/UiContracts.js';
+import { UI_INSPECT_DEFAULTS, UI_INSPECTION_VERSIONS, validateUiQuery, validateUiScope, type UiInspectRequest, type UiNode } from '../Core/UiContracts.js';
 import type { UiReviewResult } from '../CompositeTools/UiReview.js';
 
 export type UiTarget = { pid: number; hwnd: string };
-export type UiReadOptions = Pick<UiInspectRequest, 'query' | 'capture' | 'maxDepth' | 'maxNodes' | 'readStates'>;
-export type UiReviewOptions = UiReadOptions & { candidateFiles: string[]; candidateCodeFiles?: string[]; textQueries?: string[] };
+export type UiReadOptions = Pick<UiInspectRequest, 'query' | 'scopePath' | 'capture' | 'maxDepth' | 'maxNodes' | 'readStates'> & {
+  /** Client-only: retain className/bounds/isOffscreen gaps without rejecting a semantic state read. Default is strict. */
+  allowAuxiliaryPropertyGaps?: boolean;
+  /** Client-only: delegate required-property validation to the reader's caller; retain all gaps as evidence. */
+  allowPropertyGaps?: boolean;
+};
+export type UiReviewOptions = Omit<UiReadOptions, 'allowAuxiliaryPropertyGaps' | 'allowPropertyGaps'> & { candidateFiles: string[]; candidateCodeFiles?: string[]; textQueries?: string[] };
 export type UiReadCaller = (name: string, args: Record<string, unknown>, options: { signal: AbortSignal; timeoutMs: number }) => Promise<CallToolResult>;
 export type UiReader = { inspect(options: UiReadOptions): Promise<UiReviewResult>; review(options: UiReviewOptions): Promise<UiReviewResult> };
 export type UiWorkflowOptions = { signal?: AbortSignal; timeoutMs?: number; maxSteps?: number; maxIntermediateBytes?: number; maxOutputBytes?: number };
@@ -31,12 +36,25 @@ function evidence(value: UiReviewResult): Record<string, unknown> {
     children.forEach(visit);
   };
   if (value.tree) visit(value.tree);
-  return { pid: value.pid, hwnd: value.hwnd, queryResult: value.queryResult,
+  return { pid: value.pid, hwnd: value.hwnd, queryResult: value.queryResult, scopeResult: value.scopeResult,
     treeComplete: value.treeComplete, truncated: value.truncated, truncateReason: value.truncateReason,
     totalNodes: value.totalNodes, traversalErrors: value.traversalErrors, propertyIssueCount: value.propertyIssueCount,
     nodes, sourceEvidence: value.sourceEvidence, codeEvidence: value.codeEvidence,
     sourceEvidenceOmitted: value.sourceEvidenceOmitted, codeEvidenceOmitted: value.codeEvidenceOmitted,
     captureMethod: value.captureMethod, captureQuality: value.captureQuality, imageOmitted: value.imageOmitted };
+}
+
+function blockingPropertyIssues(value: UiReviewResult, allowAuxiliary: boolean, allowAll: boolean): boolean {
+  let count = 0, blocking = false;
+  const visit = (node: UiNode) => {
+    count += node.propertyIssues?.length ?? 0;
+    blocking ||= !allowAll && node.propertyIssues?.some(issue => !allowAuxiliary ||
+      !['classname', 'bounds', 'isoffscreen'].includes(issue.split(':')[0].toLowerCase())) === true;
+    node.children.forEach(visit);
+  };
+  if (value.tree) visit(value.tree);
+  // An aggregate gap without its node detail cannot be classified as auxiliary.
+  return blocking || (value.propertyIssueCount ?? 0) > count;
 }
 
 /** Caller must be a connected standard MCP client (for example WinCodeSession.call). No interpreter or server bypass. */
@@ -81,16 +99,22 @@ export async function runReadonlyUiWorkflow<T>(call: UiReadCaller, target: UiTar
       if (stopped) throw stopped;
       const begin = performance.now();
       try {
-        const allowed = ['query', 'capture', 'maxDepth', 'maxNodes', 'readStates',
-          ...(tool === 'wincode_ui_review' ? ['candidateFiles', 'candidateCodeFiles', 'textQueries'] : [])];
+        const allowed = ['query', 'scopePath', 'capture', 'maxDepth', 'maxNodes', 'readStates',
+          ...(tool === 'wincode_ui_review' ? ['candidateFiles', 'candidateCodeFiles', 'textQueries'] : ['allowAuxiliaryPropertyGaps', 'allowPropertyGaps'])];
         if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !allowed.includes(key)))
           throw new WorkflowStop('INVALID_ARGUMENT', 'Readonly options contain unsupported fields.');
         validateUiQuery(input.query, input.readStates);
+        validateUiScope(input.scopePath);
+        const { allowAuxiliaryPropertyGaps, allowPropertyGaps, ...toolInput } = input as UiReadOptions;
+        if (allowAuxiliaryPropertyGaps !== undefined && typeof allowAuxiliaryPropertyGaps !== 'boolean')
+          throw new WorkflowStop('INVALID_ARGUMENT', 'allowAuxiliaryPropertyGaps must be a boolean.');
+        if (allowPropertyGaps !== undefined && typeof allowPropertyGaps !== 'boolean')
+          throw new WorkflowStop('INVALID_ARGUMENT', 'allowPropertyGaps must be a boolean.');
         if (input.capture !== undefined && !['none', 'original', 'annotated'].includes(input.capture))
           throw new WorkflowStop('INVALID_ARGUMENT', 'Unsupported capture mode.');
         if (input.capture && input.capture !== 'none' && images.length)
           throw new WorkflowStop('IMAGE_BUDGET_EXCEEDED', 'A workflow may return at most one native image.');
-        const args = { ...input, ...fixed, backgroundOnly: true, responseFormat: 'compact', capture: input.capture ?? 'none' };
+        const args = { ...toolInput, ...fixed, backgroundOnly: true, responseFormat: 'compact', capture: input.capture ?? 'none' };
         if (Buffer.byteLength(JSON.stringify(args)) > 65536) throw new WorkflowStop('INPUT_BUDGET_EXCEEDED', 'Input exceeds 64 KiB.');
         step.status = 'running';
         let rejectAbort!: () => void;
@@ -115,6 +139,11 @@ export async function runReadonlyUiWorkflow<T>(call: UiReadCaller, target: UiTar
         // The client program receives the payload too; later edits must not rewrite observation evidence.
         step.evidence = structuredClone(evidence(value));
         if (result.isError || !value.success) throw new WorkflowStop(value.errorCode ?? 'TOOL_ERROR', value.errorMessage ?? 'MCP tool failed.');
+        // A connected older tool may discard the new field before the Host sees it.
+        if (input.scopePath && (value.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.PARENT_SCOPE)
+          throw new WorkflowStop('VERSION_MISMATCH', 'scopePath requires inspectionVersion 5.');
+        if (input.scopePath && (value.scopeResult?.status !== 'resolved' || value.scopeResult.resolvedCount !== input.scopePath.length))
+          throw new WorkflowStop('INCOMPLETE_OBSERVATION', 'Requested parent scope was not confirmed; do not use unscoped observations.');
         if (value.pid !== fixed.pid || !value.hwnd || BigInt(value.hwnd) !== BigInt(fixed.hwnd))
           throw new WorkflowStop('TARGET_CHANGED', 'Response does not belong to the fixed PID and HWND.');
         if (value.queryResult && value.queryResult.status !== 'unique')
@@ -123,8 +152,7 @@ export async function runReadonlyUiWorkflow<T>(call: UiReadCaller, target: UiTar
               'Complete search found no match. Verify page/selector and inspect an authorized parent candidate; a collapsed cause is unproven. Readonly workflows never perform navigation.' :
               value.queryResult.status === 'ambiguous' ? 'Selector matched multiple controls. Add an observed exact identifier; no navigation is permitted.' :
               'Search is incomplete. Do not infer absence or state; obtain complete scoped evidence before continuing.');
-        const nodeIssues = (node: UiNode): boolean => Boolean(node.propertyIssues?.length) || node.children.some(nodeIssues);
-        if (!value.tree || value.treeComplete !== true || value.truncated || value.traversalErrors || value.propertyIssueCount || nodeIssues(value.tree) ||
+        if (!value.tree || value.treeComplete !== true || value.truncated || value.traversalErrors || blockingPropertyIssues(value, allowAuxiliaryPropertyGaps === true, allowPropertyGaps === true) ||
           value.queryResult?.searchComplete === false || value.sourceEvidenceOmitted || value.codeEvidenceOmitted ||
           (tool === 'wincode_ui_review' && !value.sourceEvidence) ||
           (value.sourceEvidence && (!value.sourceEvidence.fileScanComplete || value.sourceEvidence.truncated)) ||

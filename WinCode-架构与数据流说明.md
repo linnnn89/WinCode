@@ -1,8 +1,8 @@
 # WinCode 架构与数据流
 
-**适用源码版本：0.17.0；更新：2026-10-07（北京时间）。本轮基于 main `038c0ccc` 的实验分支收口；0.17.0 最终本地核心、桌面与实际 CLI／隔离应用验收均通过，远端 CI／合并状态以 [PR #52](https://github.com/linnnn89/WinCode/pull/52) 为准，验证范围见 hybrid 计划及工作记录。尚未发布 GitHub Release。**
+**适用源码版本：0.17.0；更新：2026-10-08（北京时间）。[PR #52](https://github.com/linnnn89/WinCode/pull/52) 已合并为 `4789771f`，PR 检查及合并后 CI 成功。尚未发布 GitHub Release。未完成任务见[迭代计划](docs/next-iteration.md)。**
 
-本说明描述当前源码中已实现的结构。GitHub 分支保护的历史只读核查日期为 2026-09-08；本轮核对 PR 检查状态，不把它等同重新审计全部保护设置。历史实测结果见[工作记录](docs/codex_worklog.md)。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
+本说明描述当前源码中已实现的结构。历史实测结果按需从对应 PR 或 Git 历史查询。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
 
 N4 实现：`DesignTimeBuild` 使用已有 SDK 的 ProjectCollection 做原项目求值，保留原中间目录的 Compile 排除规则及自定义导入；目标运行仍交给 MSBuildWorkspace，使用每 Host UUID 的私有 IntermediateOutputPath。Configuration/TargetFramework 必须为字面目录段，规范化后的输出必须位于所属 UUID 内；原求值的无效项目异常保持 `PROJECT_LOAD_FAILED`。输入扫描仅过滤已判定不参与默认编译的原中间产物，实际文档/显式输入仍校验，自定义 Compile 保守处理。`OwnedBuildOutputs` 记录原生所有权清单，正常关闭回收；`RoslynHostClient` 在实际退出后调用 `DesignTimeArtifacts` 回收所属命名空间。内部 inputPolicy 为 2，缺失/旧策略 Host 的拒绝和进程回收已有专项测试。当前发布目录通过交付身份核验；复杂 target、任意动态项目图及断电后的孤儿产物仍不在本地通过范围内。
 
@@ -45,7 +45,7 @@ flowchart TB
 
 Codex 可选择 Skill 按需入口：首次使用才创建交互执行会话，`SkillSessionCli` 使用现有 MCP SDK 连接上图中的 Gateway，后续查询复用同一连接。入口启动或读取本地状态不会创建 Gateway；首次工具请求完成工作区、构建和提供方核验后才派发业务。完整 MCP 结果和原始图片作为本地附件交付，入口不重写工具契约或自动重放请求。关闭/所属入口死亡沿用 Gateway 与原生 Host 的清理链路。该模式需禁用客户端自动启动的 WinCode 条目，不能通过 Gateway 内部延迟初始化实现客户端侧零进程；使用方法见 [Skill 会话手册](skills/wincode/references/diagnostics.md#skill-按需会话)。
 
-0.17.0 的客户端可显式调用 readonly-ui／checkbox-audit，或调用独立的 expand-ui 导航。后者接受实际祖先 scopePath，在所选父范围内定位、最多展开一次，并通过再次解析父路径读回子控件状态；不是服务器批处理、原子快照或自动递归引擎。标准 inspect/review/setExpanded 的路径需 UIA Host inspectionVersion 5，旧 Host 不可忽略范围继续操作。click/type 的定位契约保持原样；应用事件可能带来前台变化。具体字段与结果边界见 [UI 手册](skills/wincode/references/ui.md) 和 [合并验收计划](docs/hybrid-next-iteration-plan.md#main-合并验收线)。
+0.17.0 的客户端可显式调用 readonly-ui／checkbox-audit，或调用独立的 expand-ui 导航。后者接受实际祖先 scopePath，在所选父范围内定位、最多展开一次，并通过再次解析父路径读回子控件状态；不是服务器批处理、原子快照或自动递归引擎。标准 inspect/review/setExpanded 的路径需 UIA Host inspectionVersion 5，旧 Host 不可忽略范围继续操作。click/type 的定位契约保持原样；应用事件可能带来前台变化。具体字段与结果边界见 [UI 手册](skills/wincode/references/ui.md) 和 [客户端工作流](docs/hybrid-readonly-orchestration.md)。
 
 | 层 / 模块 | 负责什么 | 设计边界与源码入口 |
 |---|---|---|
@@ -292,7 +292,7 @@ flowchart LR
 
 本说明的架构图、数据表与关口表共同描述当前实现；新增功能应说明接入哪条数据流、使用哪个现有契约、在哪个关口拒绝或降级，以及如何留下真实验收证据。
 
-工作区失败恢复、trash 部分完成、有界负载和基础错误迁移已落实；当前待办见[计划](WinCode-下一轮工程化迭代计划书.md)。实际 Codex 连接已完成单项目 Roslyn 的搜索、引用、影响分析、重构建议及源码变化后的重新定位；新建 stdio 连接的自动化测试与此次客户端验收分别记录。条件性性能研究不表示已发现泄漏。
+当前待办见[迭代计划](docs/next-iteration.md)。单项目 Roslyn 的实际客户端证据不代表所有动态项目图均已验证；条件性性能研究也不表示已发现泄漏。
 
 ## 2026-09-09 职责拆分
 

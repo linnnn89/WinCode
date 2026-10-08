@@ -6,12 +6,144 @@ import { createReadonlyUiRecipe } from '../src/Client/ReadonlyUiRecipes.js';
 import { runExpandUiWorkflow } from '../src/Client/ExpandUiWorkflow.js';
 
 const target = { pid: 42, hwnd: '0x123' };
+
+const rangeParameters = { containerQuery: { name: 'library', controlType: 'Table' },
+  startAfter: { name: '2024', controlType: 'DataItem' }, endBefore: { name: '2023', controlType: 'DataItem' } };
+function flatLibrary(): UiInspectResult {
+  const row = (id: number, name: string) => ({ id, parentId: 2, name, controlType: 'DataItem',
+    propertyIssues: ['automationId:unsupported'], children: [] });
+  return { ...observation(), propertyIssueCount: 6, tree: { id: 1, parentId: null, name: 'library', controlType: 'Table', children: [
+    { id: 2, parentId: 1, propertyIssues: ['controlType:unsupported'], children: [
+      row(3, '2025'), row(4, '2024'), row(5, 'Game A'), row(6, 'Game B'), row(7, '2023'),
+    ] },
+  ] } };
+}
+
+test('sibling range reads named rows without AutomationIds and preserves logical boundaries and native identities', async () => {
+  let calls = 0;
+  const checked = await runReadonlyUiWorkflow(async (tool, args) => {
+    calls++;
+    assert.equal(tool, 'wincode_ui_inspect');
+    assert.equal(args.backgroundOnly, true);
+    assert.equal(args.readStates, false);
+    assert.equal('allowPropertyGaps' in args, false);
+    assert.deepEqual(args.query, rangeParameters.containerQuery);
+    return result(flatLibrary());
+  }, target, createReadonlyUiRecipe('sibling-range', rangeParameters));
+  assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+  const findings = checked.report.findings as any;
+  assert.equal(calls, 1);
+  assert.equal(findings.kind, 'logical-group');
+  assert.equal(findings.basis, 'sibling-order');
+  assert.equal(findings.coverage, 'observed-range-only');
+  assert.equal(findings.businessGroupComplete, 'unknown');
+  assert.deepEqual(findings.items.map((n: any) => [n.id, n.parentId, n.name]), [[5, 2, 'Game A'], [6, 2, 'Game B']]);
+  assert.equal(findings.startAfter.id, 4); assert.equal(findings.endBefore.id, 7);
+  assert.equal(findings.observedCount, 2);
+  assert.equal(checked.report.steps[0].evidence!.propertyIssueCount, 6);
+  const strict = await runReadonlyUiWorkflow(async () => result(flatLibrary()), target, reader => reader.inspect({}));
+  assert.equal(strict.report.errorCode, 'INCOMPLETE_OBSERVATION');
+});
+
+test('sibling range rejects uncertain boundaries, unreadable names and incomplete observations without guessing an empty group', async () => {
+  for (const scenario of ['missing', 'duplicate', 'reversed', 'different-parent', 'unreadable-name', 'name-error', 'truncated', 'search-incomplete']) {
+    const value = flatLibrary(), rows = value.tree!.children[0].children;
+    if (scenario === 'missing') rows.pop();
+    if (scenario === 'duplicate') rows.push({ ...rows[1], id: 8 });
+    if (scenario === 'reversed') rows.reverse();
+    if (scenario === 'different-parent') { const end = rows.pop()!; end.parentId = 1; value.tree!.children.push(end); }
+    if (scenario === 'unreadable-name') delete rows[2].name;
+    if (scenario === 'name-error') rows[2].propertyIssues!.push('name:error');
+    if (scenario === 'truncated') { value.treeComplete = false; value.truncated = true; }
+    if (scenario === 'search-incomplete') value.queryResult!.searchComplete = false;
+    value.propertyIssueCount = 1 + rows.reduce((n, row) => n + row.propertyIssues!.length, 0) + (scenario === 'different-parent' ? 1 : 0);
+    const checked = await runReadonlyUiWorkflow(async () => result(value), target, createReadonlyUiRecipe('sibling-range', rangeParameters));
+    assert.equal(checked.report.success, false, scenario);
+    assert.equal(checked.report.findings, undefined, scenario);
+    assert.ok(checked.report.steps[0].evidence, scenario);
+  }
+  for (const parameters of [{ ...rangeParameters, startAfter: {} }, { ...rangeParameters, endBefore: rangeParameters.startAfter },
+    { ...rangeParameters, maxNodes: 0 }, { ...rangeParameters, scopePath: [] }, { ...rangeParameters, unexpected: true }]) {
+    assert.throws(() => createReadonlyUiRecipe('sibling-range', parameters), (e: any) => e.code === 'INVALID_RECIPE_PARAMETERS' && e.workStarted === false);
+  }
+});
 const observation = (requestId = 'read-1'): UiInspectResult => ({ schemaVersion: '1.0', protocolVersion: '1.0',
   requestId, success: true, ...target, treeComplete: true, truncated: false,
   queryResult: { status: 'unique', searchComplete: true, visitedNodes: 1, matches: [] },
   tree: { id: 1, parentId: null, automationId: 'check', isEnabled: false,
     states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, children: [] } });
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
+
+test('readonly scopes reach inspect, review and both conditional recipe reads without extra calls', async () => {
+  const scopePath = [{ automationId: 'voice' }];
+  const scoped = () => ({ ...observation(), inspectionVersion: 5,
+    scopeResult: { status: 'resolved' as const, resolvedCount: 1, visitedNodes: 3 } });
+  const calls: any[] = [];
+  const read = await runReadonlyUiWorkflow(async (tool, args) => {
+    calls.push({ tool, args });
+    return result({ ...scoped(), ...(tool === 'wincode_ui_review' ? { sourceEvidence: { fileScanComplete: true, truncated: false } } : {}) });
+  }, target, async reader => {
+    await reader.inspect({ scopePath, query: { automationId: 'check' } });
+    await reader.review({ scopePath, candidateFiles: ['MainWindow.xaml'] });
+  });
+  assert.equal(read.report.success, true, JSON.stringify(read.report));
+  assert.deepEqual(calls.map(call => call.tool), ['wincode_ui_inspect', 'wincode_ui_review']);
+  assert.ok(calls.every(call => JSON.stringify(call.args.scopePath) === JSON.stringify(scopePath)));
+  assert.deepEqual(read.report.steps[0].evidence?.scopeResult, scoped().scopeResult);
+  for (const mode of ['on', 'off', 'unconditional', 'unscoped']) {
+    const path = structuredClone(scopePath);
+    const recipe = createReadonlyUiRecipe('checkbox-audit', { regionAutomationId: 'region', checkboxAutomationIds: ['check'],
+      ...(mode === 'unconditional' ? {} : { summaryAutomationId: 'summary' }), ...(mode === 'unscoped' ? {} : { scopePath: path }) });
+    path[0].automationId = 'changed-after-validation';
+    const queries: string[] = [];
+    const checked = await runReadonlyUiWorkflow(async (tool, args) => {
+      assert.equal(tool, 'wincode_ui_inspect');
+      assert.deepEqual(args.scopePath, mode === 'unscoped' ? undefined : scopePath);
+      const id = (args.query as any).automationId; queries.push(id);
+      const value = mode === 'unscoped' ? observation() : scoped();
+      value.tree = { ...value.tree!, automationId: id, children: id === 'region'
+        ? [{ ...observation().tree!, id: 2, parentId: 1, controlType: 'CheckBox' }] : [] };
+      if (mode === 'off') value.tree.states!.toggle = 'Off';
+      return result(value);
+    }, target, recipe);
+    assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+    assert.deepEqual(queries, mode === 'off' ? ['summary'] : mode === 'unconditional' ? ['region'] : ['summary', 'region']);
+    assert.deepEqual(checked.report.findings, mode === 'off' ? { detailsRequired: false } : mode === 'unconditional'
+      ? { checkedCount: 1, unchecked: [], disabled: ['check'] }
+      : { detailsRequired: true, details: { checkedCount: 1, unchecked: [], disabled: ['check'] } });
+  }
+});
+
+test('readonly scopes reject invalid paths, lost scope evidence and unsupported tools before producing findings', async () => {
+  let dispatched = 0;
+  for (const scopePath of [[], [{}], [{ name: '' }], [{ name: 'private', maxMatches: 1 }], Array(51).fill({ name: 'x' })]) {
+    assert.throws(() => createReadonlyUiRecipe('checkbox-audit', { scopePath, regionAutomationId: 'region', checkboxAutomationIds: ['check'] }),
+      (error: any) => error.code === 'INVALID_RECIPE_PARAMETERS' && error.field === 'scopePath' && error.workStarted === false && !error.message.includes('private'));
+    const rejected = await runReadonlyUiWorkflow(async () => { dispatched++; return result(observation()); }, target,
+      reader => reader.inspect({ scopePath } as any));
+    assert.equal(rejected.report.success, false); assert.equal(rejected.report.steps[0].status, 'not_started');
+  }
+  assert.equal(dispatched, 0);
+  const scopePath = [{ automationId: 'voice' }];
+  const cases = [
+    ...['SCOPE_NOT_FOUND', 'SCOPE_AMBIGUOUS', 'SCOPE_SEARCH_INCOMPLETE'].map(errorCode => ({ errorCode,
+      payload: { ...observation(), success: false, errorCode, scopeResult: { resolvedCount: 0, failedIndex: 0, status: 'incomplete', visitedNodes: 3 } } })),
+    ...[undefined, 4].map(inspectionVersion => ({ errorCode: 'VERSION_MISMATCH', payload: { ...observation(), inspectionVersion } })),
+    { errorCode: 'INCOMPLETE_OBSERVATION', payload: { ...observation(), inspectionVersion: 5 } },
+    { errorCode: 'INCOMPLETE_OBSERVATION', payload: { ...observation(), inspectionVersion: 5,
+      scopeResult: { resolvedCount: 0, status: 'resolved', visitedNodes: 3 } } },
+  ];
+  for (const { errorCode, payload } of cases) {
+    let calls = 0;
+    const rejected = await runReadonlyUiWorkflow(async () => { calls++; return result(payload); }, target, async reader => {
+      await reader.inspect({ scopePath });
+      return reader.inspect({});
+    });
+    assert.equal(rejected.report.errorCode, errorCode, JSON.stringify(rejected.report));
+    assert.equal(rejected.report.findings, undefined); assert.equal(calls, 1);
+    assert.deepEqual(rejected.report.steps[0].evidence?.scopeResult, (payload as any).scopeResult);
+  }
+});
 
 test('navigation keeps the observed parent path through selection, expansion and the final child read', async () => {
   const scopePath = [{ automationId: 'voiceRegion' }];
@@ -394,6 +526,71 @@ test('installed checkbox recipe branches on observed states and rejects ambiguou
   const unconditional = await runReadonlyUiWorkflow(async () => result({ ...observation(),
     tree: { ...observation().tree!, automationId: 'region', children: selected } }), target, session);
   assert.deepEqual(unconditional.report.findings, { checkedCount: 1, unchecked: ['b'], disabled: ['a'] });
+});
+
+test('checkbox audit retains auxiliary gaps without rejecting known states or weakening default readers', async () => {
+  for (const scenario of ['on', 'off', 'unconditional']) {
+    const calls: string[] = [];
+    const call: UiReadCaller = async (_tool, args) => {
+      assert.equal('allowAuxiliaryPropertyGaps' in args, false, 'client policy must not reach MCP');
+      const id = (args.query as { automationId: string }).automationId; calls.push(id);
+      const value = observation();
+      value.tree = { ...value.tree!, automationId: id, controlType: 'CheckBox',
+        propertyIssues: ['className:error'], children: id === 'region' ? [
+          { ...observation().tree!, id: 2, parentId: 1, automationId: 'a', controlType: 'CheckBox', propertyIssues: ['bounds:error'] },
+          { ...observation().tree!, id: 3, parentId: 1, automationId: 'b', controlType: 'CheckBox', isEnabled: true,
+            propertyIssues: ['isOffscreen:unsupported'], states: { toggle: 'Off', selection: 'unsupported', expandCollapse: 'unsupported' } },
+        ] : [] };
+      value.tree.states!.toggle = scenario === 'off' ? 'Off' : 'On';
+      value.propertyIssueCount = id === 'region' ? 3 : 1;
+      return result(value);
+    };
+    const checked = await runReadonlyUiWorkflow(call, target, createReadonlyUiRecipe('checkbox-audit', {
+      ...(scenario !== 'unconditional' ? { summaryAutomationId: 'summary' } : {}),
+      regionAutomationId: 'region', checkboxAutomationIds: ['a', 'b'],
+    }));
+    assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+    const details = { checkedCount: 1, unchecked: ['b'], disabled: ['a'] };
+    assert.deepEqual(checked.report.findings, scenario === 'off' ? { detailsRequired: false } :
+      scenario === 'on' ? { detailsRequired: true, details } : details);
+    assert.deepEqual(calls, scenario === 'off' ? ['summary'] : scenario === 'on' ? ['summary', 'region'] : ['region']);
+    assert.equal(checked.report.steps.at(-1)!.evidence!.propertyIssueCount, scenario === 'off' ? 1 : 3);
+    const nodes = checked.report.steps.at(-1)!.evidence!.nodes as Array<{ propertyIssues: string[] }>;
+    assert.deepEqual(nodes[0].propertyIssues, ['className:error']);
+    if (scenario !== 'off') assert.deepEqual(nodes.slice(1).map(node => node.propertyIssues), [['bounds:error'], ['isOffscreen:unsupported']]);
+    const strict = await runReadonlyUiWorkflow(call, target, reader => reader.inspect({ query: { automationId: 'summary' }, readStates: true }));
+    assert.equal(strict.report.errorCode, 'INCOMPLETE_OBSERVATION');
+  }
+});
+
+test('checkbox audit still rejects required property gaps, incomplete coverage and unknown selected states', async () => {
+  for (const scenario of ['identity', 'enabled', 'unknown-property', 'unexplained-count', 'truncated', 'traversal', 'search',
+    'ambiguous', 'drift', 'unknown-toggle', 'missing', 'duplicate']) {
+    let calls = 0;
+    const checked = await runReadonlyUiWorkflow(async () => {
+      calls++;
+      const value = observation();
+      const check = { ...value.tree!, id: 2, parentId: 1, automationId: 'a', controlType: 'CheckBox', propertyIssues: ['className:error'] };
+      value.tree = { ...value.tree!, automationId: 'region', children: [check] }; value.propertyIssueCount = 1;
+      if (scenario === 'identity') check.propertyIssues.push('automationId:error');
+      if (scenario === 'enabled') check.propertyIssues.push('isEnabled:error');
+      if (scenario === 'unknown-property') check.propertyIssues.push('newField:error');
+      if (scenario === 'unexplained-count') value.propertyIssueCount = 2;
+      if (scenario === 'truncated') { value.truncated = true; value.treeComplete = false; }
+      if (scenario === 'traversal') value.traversalErrors = 1;
+      if (scenario === 'search') value.queryResult!.searchComplete = false;
+      if (scenario === 'ambiguous') value.queryResult!.status = 'ambiguous';
+      if (scenario === 'drift') value.pid = 99;
+      if (scenario === 'unknown-toggle') check.states = { ...check.states!, toggle: 'unknown' };
+      if (scenario === 'missing') { value.tree.children = []; value.propertyIssueCount = 0; }
+      if (scenario === 'duplicate') { value.tree.children.push(structuredClone(check)); value.propertyIssueCount = 2; }
+      return result(value);
+    }, target, createReadonlyUiRecipe('checkbox-audit', { regionAutomationId: 'region', checkboxAutomationIds: ['a'] }));
+    assert.equal(checked.report.success, false, scenario); assert.equal(checked.report.findings, undefined, scenario);
+    assert.equal(calls, 1, scenario);
+    assert.equal(checked.report.errorCode, scenario === 'ambiguous' ? 'QUERY_AMBIGUOUS' : scenario === 'drift' ? 'TARGET_CHANGED' :
+      ['unknown-toggle', 'missing', 'duplicate'].includes(scenario) ? 'WORKFLOW_ERROR' : 'INCOMPLETE_OBSERVATION', scenario);
+  }
 });
 
 test('readonly workflow serializes concurrent requests, evaluates actual observations and retains native image evidence', async () => {

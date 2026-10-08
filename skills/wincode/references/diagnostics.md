@@ -1,170 +1,136 @@
-# 诊断与审计
+# 诊断与恢复
 
-## 设计时语义诊断
-
-连接成功、精确符号定位和全项目语义覆盖分别判断。读取 `semanticContext.diagnosticSummary` 的总数、错误码和项目分组，再结合 `excludedAnalyzers`、limitations 样例与实际源码判断影响；展示五条不等于只有五条错误。分组省略数大于零时，未展示的项目或错误码不能当作不存在。引用响应预算不足可显式提高 maxOutputChars；不能容纳必要元数据时会返回 OUTPUT_BUDGET_EXCEEDED，不静默删除统计。
-
-出现 CS0234 等缺失命名空间错误，先核对入口及引用项目各自的 TargetFramework、已有 restore assets 与实际 MetadataReference，再判断是否真缺少包。正常构建成功也不证明设计时加载一致；不要仅凭错误码安装依赖、自动 restore、修改项目框架或扫描 DLL 补引用。单目标依赖应保留自身框架，多目标引用仍遵循现有显式配置，本实现不承诺自动选择最近兼容目标。
-
-出现 CS8795 等 partial 实现缺失，结合声明、项目生成器配置及排除数量核实原因；错误码本身不是生成器故障的充分证据。WinCode 仍排除分析器/生成器，不自行开启或执行它们。queryComplete=false / incomplete 是保守覆盖契约，即使诊断为零也保留；有效局部引用可继续使用，但不能据此主张全局无引用或安全删除。计数未知时先核对已连接 Host 与本地交付版本，不原样反复调用或擅自重启服务。
+按需启动读[会话入口](#skill-按需会话)；连接或版本问题读[连接与交付身份](#连接与交付身份)；运行失败按[错误处理](#错误处理)、[UI 取证失败](#ui-取证失败)或[Roslyn 诊断](#roslyn-诊断)查阅。
 
 ## Skill 按需会话
 
-适用于能保留交互终端会话的 Codex。首次确实需要 WinCode 才启动入口；不要因加载 Skill、开始聊天或查看配置而预热。目标工作区取当前任务的绝对目录，安装目录取已核实的本机交付位置（已有 MCP 配置中的 `dist/index.js` 路径也可用于定位）；不照抄其他机器或历史测试项目的路径。
+已有正确工作区的原生 MCP 连接时直接使用。按需模式适合能保留交互终端的客户端；安装切换需禁用原生 WinCode 自动连接并刷新客户端，日常调用不自行改配置。没有持久终端时使用已配置的原生连接。
 
-按需模式要求客户端不再自动连接同一个 WinCode：安装切换时将其原生 MCP 配置禁用，并让客户端刷新连接。保留原配置以便恢复；日常调用不自行修改客户端配置。有可用且工作区正确的原生连接时直接使用，不同时再启动按需入口。没有持久执行工具时使用已配置的原生 MCP；不要每次调用都临时启动、关闭服务器。
+安装路径从实际客户端配置或已核实交付目录取得，不沿用别人的机器路径。工作区使用本任务的绝对目录。
 
-**明确指定实验构建的验收。** 若已有原生连接绑定正确根，但其 `runtime.build.buildId` 与所验收的分支构建不同，磁盘更新不会热替换该连接。先核对分支构建的源码／产物身份；在已明确要求试用该构建的任务中，可保留旧连接与配置，仅用一个分支 CLI 会话顺序调用标准工具和配方，完成后关闭。不要同时向旧、新连接提交同一业务任务，也不要为了试验静默覆盖安装 Skill 或禁用全局 MCP。这是一轮指定构建的验收，不表示已经切换默认安装。
+### 启动与复用
 
-**启动一次。** 通过 `exec_command` 执行以下命令，必须设置 `tty:true`（普通管道会立即 EOF），保留返回的 `session_id`。PowerShell 路径用正确引号转义，不把不可信文本拼成命令：
+通过 exec_command 启动，设置 tty:true，保存返回的 session_id：
 
 ```powershell
 node "<WinCode安装目录>/dist/Client/SkillSessionCli.js" --workspace "<目标工作区绝对路径>"
 ```
 
-仅目标项目已有明确授权的 Roslyn 配置时追加 `--roslyn-config "<配置文件绝对路径>"`；不沿用其他项目的配置，也不从工作区自动发现并执行配置。默认 local-text 不执行 MSBuild。`ready` 回执包含入口 `ownerPid`；此时 `status.state="unused"`、Gateway `pid=null`。首次工具请求才创建 Gateway，并校验工作区、构建和提供方；随后复用同一 Gateway、Host 和有效快照。
+只有目标项目已获准使用 Roslyn 时才追加 `--roslyn-config "<配置文件绝对路径>"`。入口 ready 包含 ownerPid；初始 status.state=unused、pid=null，首次工具请求才创建 Gateway。一次任务复用此会话，不逐次启动新进程。
 
-**连续调用。** 使用 `write_stdin` 向同一个 `session_id` 发送单行 JSON；Windows 交互终端的 `chars` 以 `\r` 结束。请求 `id` 使用本会话内不同的 1–64 位字母、数字、点、下划线或连字符。示例请求体：
+使用 write_stdin 向同一个 session_id 发送单行 JSON。Windows 交互终端的 chars 以 `\r` 结束；一次请求收到回执后再发下一次。工具返回仍在运行时继续等待原会话，不重复提交。
 
 ```json
 {"id":"q1","tool":"wincode_search_text","arguments":{"query":"Save","scopePaths":["src"]},"timeoutMs":120000}
 ```
 
-一次只发一个工具请求，等待该 `id` 的回执再继续；若执行工具先返回正在运行，继续轮询同一个执行会话，不重新发送请求。`timeoutMs` 默认 120000，范围 1–180000，包含本次调用的连接等待；单独握手有 30 秒限制。请求行最多 64 KiB。终端回显或折行不是第二个响应，不能当作完整 MCP JSON。
+id 为1–64位字母、数字、点、下划线或连字符，任务内不重复。单工具 timeoutMs 默认120000、范围1–180000，包含连接等待；单行请求不超过64KiB。
 
-**读取结果。** 回执提供 `resultFile`、`isError` 和 `imageFiles`。用文件/执行工具读取 `resultFile` 中的完整 MCP `CallToolResult`，包括 text、structuredContent、image 等内容块；有图片时按需使用本地图片查看工具读取 `imageFiles[].path`。不要把 `isError:true` 当成成功，也不要只读短回执就推断业务结果。原始 JSON 和图片保存到安装目录的 `test-tmp/skill-sessions/run-*/`，关闭不会自动删除，按本地附件管理；不要提交这些文件。文本结果至少需要一次额外文件读取，这是按需模式的调用成本。
+### 读取完整结果
 
-**客户端混合只读配方。** WinCode 0.17.0 提供 `action:"readonly-ui"`，无需宿主执行 TypeScript 或提供模型 API key。先按上面的单工具协议列出窗口并明确选择 PID/HWND，再调用已安装的 `checkbox-audit`：
+回执中的 resultFile 指向完整 MCP CallToolResult；读取该文件，核对 isError 和业务 success，保留全部内容块。imageFiles 指向原始图片，可用本地图片查看工具读取。终端回显、折行或仅有路径都不是完整结果。
 
-```json
-{"id":"audit1","action":"readonly-ui","recipe":"checkbox-audit","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"summaryAutomationId":"summaryId","regionAutomationId":"regionId","checkboxAutomationIds":["checkA","checkB"]},"timeoutMs":15000}
-```
+结果保存到安装目录的 test-tmp/skill-sessions/run-*，关闭后仍保留；可能含源码和窗口内容，不直接公开或提交。每次调用需要额外读取结果文件，这是按需入口的实际成本。
 
-示例 PID/HWND 和 AutomationId 必须替换为实际选择结果。summaryAutomationId 可省略；提供时先读摘要，On 才继续，Off 跳过详情，未知停止。明确列出的 1–64 个复选框必须唯一、完整且有确定状态，不从缺失状态推断 false。maxDepth 默认 4、maxNodes 默认 300，可在 parameters 中按原生工具范围调整；timeoutMs 默认 15000、范围 1–30000。只有这一个预置配方，不接受源码、表达式或任意工具名；未知字段在请求执行前拒绝。普通 MCP 工具和旧 JSON 单工具协议继续可用，这不是服务器新增工具。
+### 客户端 UI 流程
 
-仍读取 resultFile 的完整 content 并处理 isError；配方 text 是步骤证据与 findings，多个步骤是有序观察而非原子快照。结果可能包含控件文字，不是匿名记录。cancel/close 沿用下文协议，targetId 对应配方请求 id。仅在核实使用 0.17.0 或兼容新构建时调用，旧入口没有此 action。
+先列窗并确定 PID/HWND，再选择[UI 手册](ui.md#只读配方)中的请求：
 
-**明确展开导航。** 用户授权这条导航路径后，可调用 `action:"expand-ui"`；它不是只读配方，不加 `recipe` 字段。例：`{"id":"nav1","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"scopePath":[{"automationId":"实际祖先区域ID"}],"parentQuery":{"name":"实际父级标题","controlType":"Group"},"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"}},"timeoutMs":15000}`。scopePath 可省略；每项来自实际观察，parentQuery／candidateQuery 相对于该范围定位。首次子查询和最终读回限定在指定父级内，不读取旁支同名控件。完整结果保留父级诊断、是否尝试动作、后续状态和归属证据；`isError:true` 或 `status:"stopped"` 时不能引用 findings 为成功，也不能自动重放展开。带父路径的读取需要 inspectionVersion 5，旧连接不会热更新。
+| action | 用途 |
+|---|---|
+| readonly-ui + recipe:checkbox-audit | 指定复选框统计，可按摘要状态决定是否读详情 |
+| readonly-ui + recipe:sibling-range | 读取两个同级标题之间的条目 |
+| expand-ui | 最多展开一次父级，再读目标复选框；带状态验证 |
 
-已授权在指定窗口尝试发现折叠 Group 时，可省略 `parentQuery`：`{"id":"nav2","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"}},"timeoutMs":15000}`。该形式每请求最多 6 次工具调用、1 次展开；目标已可见则只读取 1 次。唯一候选可继续；多候选返回 `selection-required`，由当前 AI 根据任务与实际候选文字选择。省略字段仍表示授权导航尝试，不是只读查询；Group 之外的路径和递归探索不在本轮能力内。
+这些是客户端 action，不是 MCP 工具名，不接受任意源码或表达式。timeoutMs 默认15000、上限30000。非法配方参数在连接／读取前拒绝，回执带 requestError、errorCode、field、recoveryAction 和 workStarted:false；据反馈修正参数，不把修正建议当已执行结果。
 
-**选择并继续。** `selection-required` 的 `isError:false` 表示已取得待选择证据，`success:false` 表示任务尚未完成；不要据此回答目标状态。读取完整结果，选择 `diagnosis.candidates` 中与任务相关且有 `nextRequest` 的一项。将该 nextRequest 原样补上新 id 提交到同一 CLI。合法形状示例：`{"id":"nav3","action":"expand-ui","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"childQuery":{"automationId":"实际子控件ID","controlType":"CheckBox"},"candidateQuery":{"name":"实际所选候选标题","controlType":"Group"}},"timeoutMs":15000}`；实际各字段使用返回请求中的完整值，不能照抄示例占位值。nextRequest 使用 candidateQuery，下一请求会按该选择器重新定位并核验当前 Group；完整搜索无匹配或多义为 `NAVIGATION_SELECTION_STALE`，其他原因分别报告，见下段。续接本请求时保留返回的 target／childQuery，不默认首项或自动遍历列表；同一用户任务获得新观察后，可以另外发起合法查询修正。每个 expand-ui 请求最多一次展开；获得新的实际观察后可继续同一任务的定位。选择不足以确定时先只读核查，确有影响任务选择的歧义再澄清，动作结果未知时先核查状态。
-
-**状态续接与局部诊断。** 第十五轮的 candidateQuery 直接重新定位所选 Group，不重新发现全窗候选。当前唯一且有效的 Expanded 父级可继续读取，零额外展开；Collapsed 才操作一次。完整搜索无匹配／多义为 NAVIGATION_SELECTION_STALE；实际禁用、证据未知和搜索不完整分别报告准确原因。父级观察 Expanded 后仍缺目标时，读取 diagnosis.localObservation 和 nextAction：它保留本次父树范围、完整性、实际匹配与内层折叠候选，区分缺失、歧义和截断。任务未完成仍没有 findings，不把局部候选当成功答案，也不重放外层动作。局部 id／parentId 只用于本次关系说明；内层项没有可执行 nextRequest，下一步先独立唯一定位，详见[UI 手册](ui.md#操作方式与授权)。
-
-**父范围与版本。** inspect/review/setExpanded 接受 scopePath，需要 inspectionVersion 5；expand-ui 的 parameters 也接受可选 scopePath。发现和选择保留祖先范围，父级确认后的子查询追加实际父选择器，每次重新定位。当父查询的 automationId/name/controlType 与路径末项完全相同时，直接复用该范围，避免把范围根再当作严格后代查找。路径最多 50 项；需要追加父级时，调用方路径最多 49 项。调用方祖先失败报告 SCOPE_NOT_FOUND／SCOPE_AMBIGUOUS／SCOPE_SEARCH_INCOMPLETE，不回退全窗；内部追加父级的失败保留原有 QUERY_* 或候选失效分类，steps 留存原始 scopeResult。即使请求未显式提供 scopePath，expand-ui 有父级时也会在首次／最终子查询构造父路径，因此需要版本 5。setExpanded 带路径时在发送动作前检查能力；VERSION_MISMATCH 不自动重试或改用无路径动作。调用前核对实例能力；字段与示例见[UI 手册](ui.md#操作方式与授权)。
-
-**预算与范围的实现边界。** 单次 expand-ui 的 deadline／调用数由程序限制；发现和选择请求各自计时，没有跨请求累计预算或绑定上次任务范围的校验，当前也不要求先新增这些框架。nextRequest 继承原字段属于请求构造，不是不可更改的权限令牌。沿用用户选定窗口与任务，不为已授权的导航逐步重复确认。不要把实验宿主的历史总预算说成日常 CLI 已实现能力。第十四轮允许展开导航中的 className／bounds／isOffscreen 缺口并保留记录；TARGET_EVIDENCE_INCOMPLETE 区分启用／身份证据未知与实际禁用。其他属性、普通只读工作流／源码门槛和自动递归导航仍是实现限制。
-
-**调用与回答的顺序。** 先确认实际窗口及页面，再提交工具／配方请求，等待相同 id 回执，读取完整 `resultFile`，核对 `isError`、业务状态及证据完整性，最后按实际观察回答。`{recipe,parameters}` 只是输入，打印参数不能代替调用。标准 inspect 的 `success:true` 只说明查询完成；仍须检查 `queryResult.status="unique"`、`searchComplete=true`、`treeComplete=true`、截断／属性问题及所选控件的明确状态。`not-found` 不能推成未勾选或数量为零。配方须为 `status="completed"`、`success=true` 且具有符合任务范围的 findings；`stopped` 或 `isError:true` 应保留错误与已有步骤，不自动重放。
-
-源码中的 AutomationId 是定位候选，先确认运行时页面／展开状态；折叠内容可能不在当前 UIA 树中。缺失后先说明观察范围，不能按源码默认值补答案。用户提供明确的新页面状态后，可重新安排一次有界观察，并将此前失败单独保留；不要反复发送相同请求碰运气。精确查询减少返回内容，但不保证查询搜索过程完全不访问其他节点的属性；日志和原始附件保持本地。
-
-**观察、取消、关闭。** 同样发送单行 JSON：
+### 取消与关闭
 
 ```json
-{"id":"s1","action":"status"}
-{"id":"c1","action":"cancel","targetId":"q1"}
-{"id":"end","action":"close"}
+{"id":"cancel1","action":"cancel","targetId":"q1"}
+{"id":"status1","action":"status"}
+{"id":"close1","action":"close"}
 ```
 
-`status` 只读本地连接状态，不启动 Gateway。取消必须对应当前活动请求；`cancellationRequested` 只证明信号已发送，不能解释为 Host 已退出。任务结束、放弃或准备换工作区时发送 `close`，等 `closed:true` 和入口退出；一轮内仍需后续查询时保留连接。调用异常时也在收尾中关闭。EOF/入口死亡会关闭 Gateway 输入，原有 Gateway/Host 所属进程清理继续生效；当前终端工具持续保留入口时不会自动到期释放。
+cancel 的 targetId 指向当前请求；确认收到取消不表示工作已回滚，仍读取目标的最终结果。任务结束或放弃时发送 close，检查 closed/status 和进程退出。stdin EOF 同样触发清理；关闭失败保留错误，不因为终端结束就宣称清理成功。
 
-`requestError` 是入口拒绝，`transportError` 是连接/协议/取消失败，不能据此认定业务没有执行；`resultDeliveryError` 且 `toolResponded:true` 表示已收到工具结果、但附件交付失败。出现这些错误先核对实际状态，尤其文件移动，不自动重放。关闭或失联后要显式建新会话并重新搜索声明，不能复用旧 `location`。不要使用 Node REPL 绕过模块限制：当前 SDK 需要 `node:process`，本机 REPL 不允许该导入；支持的入口是上述交互终端。
+### 指定构建验收
 
-## 原生 MCP 连接与故障诊断
+用户明确要求测试当前分支构建，且现有连接 buildId 不符时，可保留旧配置，用一个分支 CLI 会话顺序调用；核对磁盘与实际 hello 身份，结束后关闭。不同时向旧、新连接提交同一业务任务，也不为测试静默替换默认连接。
 
-跨项目入口：新构建的 `WORKSPACE_MISMATCH` 响应包含 `connectionGuide`，其中 `configuration.command/args` 是独立 STDIO 连接配置，`verification` 给出连接后检查工作区的调用。也可运行 `node <WinCode安装目录>/dist/index.js --print-connection --workspace <目标绝对路径>` 输出同一配置；不创建缓存、不注册或重启客户端、不启动项目 Host。配置默认 local-text，不复制已有 Roslyn、开发或托盘选项；目录存在性在实际连接启动时校验。选择已有正确连接优先，建立新连接仍遵守用户授权。刷新连接后再使用新增导航工具或 UI 精简参数，磁盘重建和 Skill 同步不会热替换旧 MCP Schema。
+## 连接与交付身份
 
-0.16.0 的 WORKSPACE_MISMATCH 是固定工作区拒绝：检查 activeWorkspace/requestedWorkspace，选择对应项目连接。错误发生在工作区资源变更之前，不表示旧根已切换或需要清空缓存。hello.health.workspaceBinding 给出固定根及启动来源；argument 是显式 CLI 参数，cwd 是启动目录回退，configuration 是嵌入式配置。显式 --workspace 必须有绝对目录值；已有连接不会因磁盘重建或配置保存自行更新。
+工具和参数不符时调用 `wincode_hello_world({toolName:"具体工具名"})`，比较 tools/list、schemaHash、runtime.instanceId/build.buildId 和 workspace。hello 只读已有状态，不启动探测；unknown、available:null 或 not-observed 都表示未知，不能当作不可用或零值。
 
-0.16.0 的 health.admission 返回 business/status 的 active、executing、waiting、accepted、completed、rejected、cancelled、timedOut、peakActive，以及累计 waitMs/executionMs 和 maxWaitMs。每实例最多 32 个未完成业务请求、4 个共享轻量状态请求；内层互斥保持 FIFO，运行中取消须在实际清理后归还容量。workspace_open 占用业务容量，但不计入它自己等待排空的 inFlight。状态不等待慢查询或同根恢复；tools/list 满额以协议错误 data.errorCode=SERVER_BUSY 表达。
+需要主动检查环境时用 `wincode_diagnose_project({})`；它检查SDK及Repomix/UIA，对Roslyn只读已有状态。不要给 hello/diagnose 传 forceReconnect、toolNames、version 等未声明字段。
 
-计时口径：waitMs/maxWaitMs 按已结束请求累计其显式队列等待；executionMs 是队列以外的墙钟耗时，包含 I/O 和取消清理，不是 CPU 用时。active/executing/waiting 为当前请求数；取消/超时计数是 completed 的子集。
+原生 stdio 启动命令为 node，独立参数为 `<安装目录>/dist/index.js`、`--workspace`、`<绝对工作区>`。不要把整条终端安装命令填入启动命令。配置保存、磁盘构建和 Skill 同步都不会热更新运行实例；按客户端正常方式重连。
 
-SERVER_BUSY 附 workStarted=false、retryable=true 和容量快照，仅说明该次请求尚未开始。按需稍后重试，不自动重放或重启 Host。REQUEST_TIMEOUT 包括启动、排队和执行预算，retryable=false；核对实际结果和恢复状态。原始参数（含未知字段）按 UTF-8 JSON 限制为 64 KiB，超限为 INVALID_ARGUMENT；该限制不消除 SDK 已解析帧的瞬时分配，也不保证总 RSS 或挂起 OS I/O 的强制终止。
+生产使用完整 Release 发布目录。UIA 查询／状态、语义动作、展开、父路径分别需要 inspectionVersion 2、3、4、5。VERSION_MISMATCH 时核对实际 Host 身份及发布文件，不删除范围或状态参数绕过版本检查。
 
-hello.health.cache 仅读取内存及最近显式磁盘观察：diskObservation=not-observed 时 diskEntries/estimatedDiskBytes/diskObservedAt 为 null；incomplete 表示读取不完整。known 及其 diskObservedAt 可能已过时。主动 diagnose_project 才刷新磁盘统计。
+| 仓内维护命令 | 证明范围 |
+|---|---|
+| npm run check | 锁定构建、核心回归、生产 stdio、交付清单 |
+| npm run check:desktop | 隔离桌面流程，不代表任意用户软件通过 |
+| npm run delivery:verify | 磁盘Gateway、Host、四份受管Skill文件一致；不验证现有客户端 |
+| npm run test:roslyn-host / test:roslyn-gateway | 生成夹具的语义与进程验证，可能还原夹具依赖 |
+| npm run skill:check -- <绝对Skill目录> | 只读比较四份手册；不一致退出码2 |
+| npm run skill:sync -- <绝对Skill目录> | 先备份旧手册，再同步并校验哈希；保留其他文件 |
 
-0.13.0 已退役外部 Serena。默认 local-text 不提供编译器语义，C# 语义需显式配置直接 Roslyn；维护入口为 test:roslyn-host 与 test:roslyn-gateway。
+维护命令从 WinCode 仓库执行，环境要求以 global.json 和包配置为准。缺少SDK或依赖时按用户授权处理，不自动安装。Skill备份位于同级 .wincode-backup-*，文件用 .bak 后缀；同步不改MCP配置，也不证明当前会话重新加载了Skill。
 
-从 0.12.4 起 Repomix 健康探测和打包都由当前 Node 可执行文件直接启动已安装的 JavaScript CLI；不经过 cmd、npx 或 PATH 包装脚本，也不下载包。默认按目标工作区和 WinCode 安装目录的 Node 模块路径读取 repomix/package.json 的 bin 入口；不搜索 npx 缓存或 npm 自定义全局前缀。非标准安装需在宿主 WinCodeConfig.adapters.repomix.customCliPath 提供绝对 .js/.cjs/.mjs 路径；该字段不是 MCP 工具参数，不能传给 hello/prepare_context。显式路径无效时返回 builtin fallback，不执行另一份安装；useCli=false 仍完全禁止探测和启动。执行已安装脚本不提供沙盒或脚本可信性保证。
+## 错误处理
 
-`hello` 从 0.12.1 起只读取版本、能力和已知状态，不启动上游、CLI 或 UI Host 探测进程。`health.healthObservation` 区分 `known/unknown` 并给出 `observedAt`；`unknown` 或 `available:null` 表示尚未探测，不能解释为不可用。配置禁用属于已知策略，但观察时间可为 null。已知健康结果可能陈旧，需要当前检查时调用现有 `wincode_diagnose_project({})`，不向 hello 添加未声明的 force/probe 字段。
+先保存完整响应、requestId、实际阶段和必要日志，再决定下一步。isError 与业务 success 都要检查；领域工具还可能返回 partial。未知动作结果先读回，不能统一按“未执行”重发。
 
-`wincode_diagnose_project` 会检查 SDK 并主动探测 Repomix/UIA；对 Roslyn 只读取已有加载状态，不会启动 Code Host 或执行项目加载。已授权配置 Roslyn 后，首次明确的符号搜索才触发加载。`health.healthObservation` 当前包含 text/repomix/flaui；Roslyn 的观察时间与快照状态在 `health.roslyn`，不要按旧 Serena 字段判断。
+| 错误／状态 | 处理 |
+|---|---|
+| WORKSPACE_MISMATCH | 按 activeWorkspace/requestedWorkspace 选择连接，原根未切换 |
+| WORKSPACE_RECOVERY_REQUIRED | 查看 recoveryAction；workspace_open 只恢复同根，restart_gateway 则先核查自有资源清理，再重建对应连接 |
+| SERVER_BUSY | workStarted:false 表示尚未开始。等在途工作结束后按需重试，不循环请求或重启Host |
+| REQUEST_TIMEOUT / CANCELLED | 包含启动、排队、执行或收尾；核对实际结果及恢复状态 |
+| HOST_UNAVAILABLE / VERSION_MISMATCH | 核对配置路径、完整发布目录与实际版本 |
+| OUTPUT_BUDGET_EXCEEDED | 根据具体工具缩小范围或提高允许的输出预算；保留缺口 |
+| OUTSIDE_WORKSPACE / UNSUPPORTED_LINK | 修正为授权范围内的实际路径，不放宽边界 |
 
-代码查询、引用、上下文、影响分析和重构建议接收 MCP 取消信号；停止后续扫描/打包，等待当前读操作或自有上游清理后释放请求占用。Roslyn 取消传播到自有 Host；合作取消未及时完成时按既有超时策略清理自有进程树。磁盘单次 OS I/O 不保证瞬时中断。同根资源恢复在等待和提交前可取消；已开始恢复时保留实际一致性状态，不声称已回滚。
+每实例最多32个在途业务请求、4个轻量状态请求，UI仍有独立互斥。health.admission 的 waitMs 是队列等待，executionMs 包含I/O与清理，不是CPU时间。health.resourceCleanup 是有界内存记录；需要证明退出时同时核对自有PID，不按客户端名称清理其他进程。
 
-`health.resourceCleanup` 是最多 100 条资源关闭记录（owner、kind、closed/failed 与最多 1024 字符错误），`omitted` 表示更早记录被省略。进程数量为零不能替代这些结果或真实 PID 退出证据。关闭失败会向调用方抛出，重复关闭保留失败；初始化失败会尝试释放已取得资源。记录只保存在当前进程内，不是持久审计或防篡改证明。
+缓存统计也可能是历史观察。overflow附件失效就重新取得上下文；不为修复单个问题全局删除缓存。Repomix未配置或失败时可返回builtin-fallback，查看实际source/lastError；显式customCliPath是宿主配置，不是MCP参数，不用npx临时下载补救。
 
-规范输入：`wincode_hello_world` 仅支持可选 `greeting`（字符串，最长 1024）和 `toolName`（非空字符串，最长 128，选择本实例支持的工具）；`wincode_diagnose_project` 没有业务参数。`toolNames`、`forceReconnect`、`version` 不是这些工具的规范请求字段，额外字段被忽略，不会重连、切换版本或批量查询。示例：`wincode_hello_world({toolName:"wincode_prepare_context"})`。未知字段容忍不等于已有字段错误类型也能通过。
+## UI 取证失败
 
-更新仓库后，先用 `npm run skill:check -- <已安装 wincode 目录的绝对路径>` 核对四份受管手册；不一致退出码为 2。明确更新时使用 `npm run skill:sync -- <同一路径>`，先在同级 .wincode-backup-* 目录以 .bak 后缀备份旧手册（避免备份被发现为重复 Skill），再写入并校验哈希；其他文件保持原样。此操作不注册 MCP、不改客户端配置、不重启运行实例。检查本机安装内容与仓库一致也不证明当前连接加载了新版。
+Host 必须显示 REC/WinCoding 提示并写入审计。`Recording indicator could not be displayed` 表示提示未就绪，UI访问被拒绝；保留原生错误、审计阶段及耗时，检查自有Helper是否退出。没有根因证据时，不修改提示门槛或把后续成功当成已修复。
 
-仅遇到故障或用户要求时调用 wincode_hello_world({}) 查看适配器、工作区及 runtime；环境问题再用 wincode_diagnose_project({})。本地文本健康成功不证明 Roslyn 已配置或项目已加载；watcher 停止、最近超时和清理错误如实报告，不自动安装依赖或循环重启。
+AUDIT_BUSY 表示另一Helper持有审计锁，等其完成；不终止目标应用。日志位于 `%LOCALAPPDATA%/WinCode/logs/ui-audit`，1MiB提醒，接近2MiB时预留结束记录空间并拒绝新访问。出现 auditNotice.message 时简短转告大小、完整路径和建议。
 
-原生模式工具不可用：先确认客户端是否启用了 wincode MCP；已保存配置通常需重新加载客户端/会话。按需模式按本手册首节使用执行会话，不要求注册 MCP。安装路径取实际客户端配置，不沿用历史机器的 I:/WinCode。STDIO 配置结构（占位路径需替换）：
-- 命令：node
-- 独立参数：<WinCode安装目录>/dist/index.js、--workspace、<目标工作区绝对路径>
-
-不要把 codex mcp add 整条终端命令填入启动命令。不要重复注册或静默修改配置。VERSION_MISMATCH 可能表示新网关配了旧 Host，局部查询/状态要求 inspectionVersion=2；按授权重新构建发布。HOST_UNAVAILABLE 时检查已配置 Host 路径/发布产物；构建或环境变更按用户授权执行。
-
-出现 auditNotice.message 时把大小、建议和完整路径简短转告原用户。日志目录为 %LOCALAPPDATA%/WinCode/logs/ui-audit：1 MiB 提醒，2 MiB 前预留结束空间并拒绝新 UI 访问；不自动删除。AUDIT_BUSY 表示另一 Helper 占用审计锁，等其完成后再按需要重试，勿杀目标应用。
-
-需要手动检查时执行已有只读脚本：
+需要检查时使用安装目录的现有脚本：
 
 ```powershell
 pwsh -NoProfile -File "<WinCode安装目录>/scripts/check-ui-audit.ps1"
 ```
 
-仅用户明确需要桌面弹窗时加 -Desktop；不例行弹窗。日志只有 start 表示结果未知；本地日志不是防篡改证据。清理须获得授权、停止相关调用并保留用户需要的记录，不能为了恢复取证静默删除。
+只有用户需要弹窗时加 -Desktop。日志只有start表示结果未知。清理日志需用户授权并保留所需记录，不为恢复访问静默删除。截图失败、黑图或窗口最小化按[UI手册](ui.md#选择目标与取证)处理。
 
-从 0.12.2 起，生产模式仅使用发布的 Release Host，缺失时明确不可用；`npm run dev`（`--development`）才允许 Debug/dotnet-run 回退。`customHostPath` 是显式配置覆盖，不是 MCP 请求字段。Host 响应的 `hostIdentity` 来自实际程序集，包含 version、informationalVersion、configuration 与 framework；旧 Host 未提供身份时不能推定版本一致。
+## Roslyn 诊断
 
-仓内 `npm run check` 执行锁定构建、核心回归和生产 stdio，生成并校验 `dist/delivery-manifest.json`；`npm run check:desktop` 单独运行隔离桌面闭环。`npm run delivery:verify` 检查 Gateway、发布 Host 全部文件及四份受管手册的一致性，不启动 Host，也不验证另一个客户端实例或签名真实性。构建要求 Node 24（22 兼容）和 `global.json` 中锁定的 SDK；缺少环境时按授权安装，不自动修改环境。
+先读 semanticContext.diagnosticSummary 的总数、错误码与项目分组，再看limitations中的样例。CS0234等缺失命名空间先核对入口及引用项目各自的TargetFramework、restore assets、实际MetadataReference；正常编译不证明设计时加载相同。CS8795等partial缺失需结合生成器配置及排除数量；不凭错误码安装包、改框架或开启生成器。
 
-WORKSPACE_RECOVERY_REQUIRED 表示固定根内资源恢复尚未完成或自有资源清理失败。业务工具被拒绝；被动 hello 可读取 health.workspaceRecovery，status=recovery_required。recoveryAction=workspace_open 表示对同一绑定路径重试恢复，只有完整重置/初始化及 watcher 绑定成功才恢复请求；不能传另一根绕过恢复门。restart_gateway 表示当前实例保留清理失败，重新打开无法恢复；先检查 Gateway 自有资源清理，再按客户端正常流程重建连接，不自动重启或终止目标应用。永久失败后的同根确认不会反复重建会话。CANCELLED 若附带 workspaceRecovery，按其 recoveryAction 处理；健康概览取消仍保持原状态。
+| 错误 | 处理 |
+|---|---|
+| SNAPSHOT_STALE / INPUTS_CHANGED | 重新显式搜索符号，获得新location；失败的引用请求不自动重放 |
+| HOST_RESTART_REQUIRED | 按recoveryAction对同一工作区恢复；配置变化仍需重建连接 |
+| HOST_TIMEOUT / HOST_CRASHED | 旧location失效，下一次显式搜索才启动新Host |
+| PROJECT_LOAD_FAILED | 修复实际项目输入，再显式搜索；不继续使用旧快照 |
+| INPUT_UNAVAILABLE | 核查配置、项目及additionalInputs，恢复缺失文件，不静默移除输入 |
+| HOST_VERSION_MISMATCH / HOST_PROTOCOL_ERROR | 核对Gateway与Code Host版本、Release发布、协议及输入策略；不混用交付 |
+| LEGACY_SYMBOL_ID / SYMBOL_MISMATCH | 重新搜索并传回实际名称和完整location |
+| UNSUPPORTED_SYMBOL_LOCATION | 当前实例未配置Roslyn；文本定位不能冒充语义身份 |
+| INPUT_BUDGET_EXCEEDED | 分清枚举数量与输入字节超限，缩小合法范围，不接受截断快照 |
 
-0.13.1 中，已知工具执行失败的 JSON 文本与 structuredContent 同源；Gateway 异常含 success=false、errorCode、errorMessage、provider 和 recoveryAction。UI/trash 保留领域字段及实际位置，不要求所有领域错误具有 Gateway 字段；图片保持独立 image 块。未知工具在正常受理状态下返回 JSON-RPC -32602 协议错误，不返回 isError 结果；关闭/取消的入口拒绝优先于工具查找。旧连接不能套用此契约，先核对实际版本。恢复动作不表示已经回滚或允许原样重试。
+queryComplete:false可能是生成器或加载图的覆盖限制，不一定是运行故障；可使用已验证的局部证据，但零引用不证明全局没有引用。
 
-直接 Roslyn Host 与 UIA Host 是不同组件。新 Gateway 的 hello.codeProvider 和 health.roslyn 报告显式选择的提供方、已知观察、processAlive、snapshotId 及重载/重启/清理状态；hello 不启动 Roslyn 或执行项目，进程存活不等于当前磁盘语义已验证。ready 是内部握手帧，UIA 的 VERSION_MISMATCH、inspectionVersion 等不能套到 Code Host。当前 npm run check / delivery:verify 不替代 test:roslyn-host/test:roslyn-gateway；当前交付清单已覆盖 Code Host 完整发布目录，但不证明实际客户端已启用 Roslyn。
+## 关闭与可选托盘
 
-Roslyn 运行中已观察到的加载、查询或清理错误也纳入 health.lastAdapterError，provider=roslyn；health.roslyn.health.lastError 保留对应观察。lastError 是历史最后一次失败，不表示每次 hello 都执行了健康探测，也不能据此自行重放业务请求。工作区完整重置后观察清空。
+close/EOF 会取消活动工作并在统一预算内清理自有资源。所属进程退出保护只针对本实例Helper及已覆盖的后代，不终止目标应用；不要手工伪造所属PID。清理失败保留非零结果，不能靠反复关闭掩盖。
 
-Code Host 内部协议 v2 的失败包含 success=false、errorCode 和 error，且不附带旧引用。SNAPSHOT_STALE/INPUTS_CHANGED 在内部协议层要求等写入稳定后显式 reload，再用新身份定位；MCP 客户端应重新调用 wincode_find_code_symbol，由适配器执行所需重载，不存在 wincode_reload 工具；PROJECT_LOAD_FAILED 表示结构化 MSBuild 加载失败，先修复项目输入，再 reload，不能继续使用最后一次成功快照。源码的 compilationErrors 可随有用的部分引用返回，不能据此宣称完整。
-
-Roslyn 的已知领域错误通过 MCP 的 isError=true 和 JSON 文本 success=false/errorCode/errorMessage 返回；失败的 JSON 文本与 structuredContent 一致，仍保留领域差异。健康状态下同根 workspace_open 保留 Host 和 snapshot；它不是强制冷启动命令，也不是等待在途业务清理完成的屏障。普通同根确认取消不进入恢复；客户端取消先返回时，后台操作仍可能正在清理，不能把客户端 Promise 结束当作 Host 已退出。HOST_RESTART_REQUIRED（SDK/监听状态）应对当前路径执行 workspace_open，此时才关闭旧 Host，再由显式搜索重新选择 SDK。INPUTS_CHANGED/SNAPSHOT_STALE 按 search_again 重新搜索，普通打开不清除已知重载要求。启动时的项目、Configuration、TFM 和可执行文件配置固定于 Adapter；修改客户端启动配置后须正常重建连接，workspace_open 不热应用配置文件。清理失败则按 WORKSPACE_RECOVERY_REQUIRED 的 restart_gateway 处理，不能通过再次打开恢复。HOST_TIMEOUT/HOST_CRASHED 后旧定位不可用，下一次显式搜索才启动新 Host；不会重放失败引用。
-
-INPUT_UNAVAILABLE/HOST_UNAVAILABLE 先检查明确的配置文件、SDK/Host/项目路径，以及 additionalInputs 中的文件是否存在；补充文件缺失时，重载也会失败，恢复文件后再显式搜索。不要为恢复查询而静默移除真实构建输入。HOST_VERSION_MISMATCH 先核对 Code Host 与 Gateway 的版本、Release 配置和协议；不要继续使用混合交付。HOST_PROTOCOL_ERROR 同时检查协议 v2、inputPolicy.version=2 和实际补充列表；旧 Host 没有确认新策略时不能绕过。LEGACY_SYMBOL_ID 要求重新搜索 Roslyn 身份；UNSUPPORTED_SYMBOL_LOCATION 表示该实例未配置 Roslyn；SYMBOL_MISMATCH 表示名称和定位不一致。INPUT_BUDGET_EXCEEDED 区分枚举规模与受跟踪输入字节限制，先缩小受支持范围，不能接受截断指纹。内部 BUSY 表示队列已满，DUPLICATE_REQUEST 要求新的 id；CANCELLED 是目标终止结果，取消确认不替代它。OUTSIDE_WORKSPACE/UNSUPPORTED_LINK 拒绝越界或链接路径，不放松校验来恢复。
-
-维护接口变更时，同步检查 Gateway 工具定义、相应 references 手册、实际客户端 Schema 和已安装四份受管文件；更新源码手册后运行 skill:sync，再以 skill:check 校验。仍须单独确认 MCP 实例的版本/构建/Schema，不能用手册同步代替重连。公共接口尚未发布时，只记录实验边界，不提前把新参数加入 MCP 规范字段表。
-
-
-`npm run test:error-contracts` 使用生成夹具验证错误、部分完成与恢复；Node 22 CI 执行该专项并保存有界报告。UI 图片场景使用注入响应，只验证序列化，不冒充真实屏幕验收。
-
-## 源码缓存与附件（0.14.0）
-
-缓存初始化、写入与清理拒绝 cacheDir 及其祖先中的符号链接/junction；已打开缓存目录被替换时拒绝后续磁盘变更。新条目采用 `wincode-v1_` 文件名和格式标记，清理只处理可识别的本版本条目及保留命名的 overflow。旧版 JSON、无法识别的文件和无关附件保留，不计入受管配额；不会自动迁移或删除整个旧目录。回收站目标必须实际位于工作区内，移动后元数据失败仍返回 partial 和实际文件位置。这些检查不等于原生句柄级原子路径隔离。
-
-本地文本查询每次重新枚举有界输入，声明解析按实际内容复用；内置上下文打包按实际选中文件的内容复用。工作区 fingerprint 和 watcher 只是变更提示，不能证明完整源码身份。旧连接仍返回过时正文时，先核对运行 buildId，再由客户端正常重连，不以 git add 或反复释放 Host 代替升级。overflow 在命中时复核存在性，缺失则重建；它没有永久租约，后续读取失败可重新请求上下文，不全局删除其他实例的缓存。
-
-## 连接关闭（0.13.2）
-
-正式入口在 stdin EOF/close、传输关闭或管道错误时停止接收请求，取消初始化和活动操作，并按统一 8 秒预算清理自有资源。关闭失败保留非零退出结果；缓存写入不能无限延迟退出。不能把此行为等同于 Codex 当前连接已更新，也不能承诺强杀 Gateway 时所有后代均受同一个 Windows Job 保护。升级后刷新对应 MCP 连接，不必一概重启整个 Codex。
-
-## 原生 Helper 所属进程退出（0.13.3）
-
-Gateway 通过子进程私有环境传递所属 PID；两个 .NET Host 在项目求值或 UI 读取前核验真实祖先链和创建时间，并持有该进程对象句柄。直接运行 Host 时使用实际父进程。无法核验时拒绝开始重操作，不按 Codex/Claude 等客户端名称扫描。所属进程死亡后先取消，独立线程宽限两秒后仅硬退出当前 Helper；Code Host 的既有 Job 处理其覆盖的后代，UIA 不终止目标窗口应用。UIA 的 stdin EOF 仍表示请求输入结束。此机制不检测仍存活但卡死的 Gateway，也不自动覆盖独立 Repomix 子进程。开发启动包装链最多八层；不要手工设置任意 WINCODE_OWNER_PID 绕过核验。
-
-## UIA 首用与被动状态（0.13.4）
-
-启动只核验 UIA 平台、配置和发布文件，不运行健康探测进程。文件存在且尚无运行观察时，hello 的 flaui.available=null、source=unknown，不能理解为已安装 Host 不可用。首次 UI 请求直接执行请求；成功响应更新已知 Host 观察，失败保留 lastAdapterError，即使健康状态仍 unknown。需要主动验证时使用现有 wincode_diagnose_project；hello 不补发探测。缺失文件仍可在启动被报告，文件恢复后显式 UI 请求重新解析发布路径，不必重新初始化整个 Gateway。
-
-## 手动 Roslyn 释放与可选托盘（0.14.0）
-
-自动释放关闭，本版不创建 idle timer。用户可按 README 手动启动独立 Tray，并给希望管理的 Gateway 启动参数添加 --tray 后刷新连接。托盘只管理已注册的实例，不扫描/终止外部客户端或目标应用；公开工具名称以当前连接实际暴露的 Schema 为准，不在文档里写死数量；没有让 Agent 自动代替用户释放的管理工具。默认不启用托盘连接、不设置自启动。
-
-手动释放遇到业务在途、语义排队/收尾、工作区确认或恢复门时拒绝，不自动延后执行。释放完成后新请求继续；旧 symbolLocation 返回 SNAPSHOT_STALE，显式重新搜索取得当前定位。保留 Gateway、watcher、缓存与最后诊断。清理失败进入 restart_gateway 恢复门，不能靠反复点击清除错误。local-text 没有可释放的 Roslyn。
-
-概览只读内存快照，不为状态启动 Host 或枚举缓存目录。状态是注册/打开/刷新时的观察，不代表 Agent 在两次请求之间已结束整个任务。失联/超时表示未知，控制命令不自动重放；退出 Tray 不停止 Gateway。首版最多八个同用户/会话实例，按同权限级别使用；版本必须匹配。需要停止时由用户确认“停止此实例”，走该 Gateway 既有关闭路径，客户端可能重新建立新实例。
+托盘为显式可选组件，默认不启用、不自启动。它只管理已注册的同用户／会话实例；释放Roslyn保留Gateway，旧location失效。业务在途时释放可能被拒绝，清理失败进入恢复状态。退出托盘不会停止Gateway，概览也不证明Agent当前空闲。

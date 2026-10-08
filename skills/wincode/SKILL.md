@@ -1,39 +1,26 @@
 ---
 name: wincode
-description: 使用 WinCode MCP 分析 Windows/.NET 项目源码、引用与变更影响，并通过 Windows UI Automation 检查控件、执行语义点击与表单填写、验证桌面交互流程。适用于源码定位、界面问题排查及支持 UIA 的 Windows 应用测试。
+description: 使用 WinCode MCP 定位项目源码、查询 C# 引用和变更影响，或通过 Windows UI Automation 读取、操作和验证桌面界面。用于代码排查与支持 UIA 的 Windows 应用测试。
 ---
 
 # WinCode
 
-适用于 WinCode 0.17.0。已有正确工作区的 MCP 连接时直接使用；采用按需模式时，首次需要 WinCode 才按[诊断手册的会话入口](references/diagnostics.md#skill-按需会话)启动。Skill 被发现或读取不需要预启动任何进程。
+适用于 0.17.0。优先复用目标工作区已有的 MCP 连接；需要按需启动时，读[会话入口](references/diagnostics.md#skill-按需会话)。仅加载 Skill 不启动进程。
 
-客户端提供 `readonly-ui`／`expand-ui` CLI action，不是标准 MCP 工具名。展开导航接受实际观察得到的 scopePath，并将父范围保留到最终子控件读取；父路径需要 inspectionVersion 5。每请求最多一次展开，支持已展开续接及局部诊断，不自动生成父路径或递归执行。使用前按手册核对当前连接／入口能力，旧连接不会因 Skill 更新获得新功能。
+## 按任务读取
 
-只读取与当前任务有关的手册：
+| 当前任务 | 手册 |
+|---|---|
+| 找代码、读上下文、查引用或影响 | [代码与工作区](references/code.md) |
+| 找窗口、读控件、统计复选框、读取列表分组或操作界面 | [窗口与 UI](references/ui.md) |
+| 启动或关闭按需会话、核对版本、处理错误 | [诊断与恢复](references/diagnostics.md) |
 
-- [代码与工作区](references/code.md)：源码搜索、上下文、引用、影响分析和 Roslyn 配置。
-- [窗口与 UI](references/ui.md)：窗口与控件定位、语义操作与激活边界、前台键盘输入（需授权）、结果验证和源码候选。
-- [诊断与恢复](references/diagnostics.md)：按需会话的启动、复用、结果读取和关闭，以及版本和故障恢复。按需模式先只读该手册首节。
+只读当前任务需要的部分。参数以已连接实例的 Schema 为准；不确定时调用 `wincode_hello_world({toolName:"具体工具名"})`。更新磁盘文件不会更新运行中的连接。
 
-连接固定到启动工作区；已知根一致时直接查询，不例行重复打开。`WORKSPACE_MISMATCH` 时选择目标项目的连接，可参考 `connectionGuide`；`workspace_open` 只能确认或恢复原工作区。
+## 使用原则
 
-按需模式在一次任务内保留执行会话 ID，多次查询复用同一连接；读取回执中的完整结果文件，保留所有 MCP 内容块与 `isError`。任务结束或放弃时显式关闭；断线后不自动重放，旧符号定位不能跨新连接使用。工具名和参数以运行实例的 Schema 为准，疑问时使用 `wincode_hello_world({toolName:"具体工具名"})`。
-
-默认 `local-text` 提供文本线索；显式启用 Roslyn 才有 C# 语义证据。需要精确引用时先搜索声明，再传回完整 `location`，不猜定位或复用过期快照。
-
-日常导航用 `wincode_search_text` 限定目录查字面量、`wincode_file_outline` 查看行数和声明，再把返回的 `nextRequest` 交给 `wincode_prepare_context`。先看 `summary` 的范围和缺口，再核对正文与覆盖率。UI 首轮可显式用 `responseFormat:"compact"`，需要几何或更多信息时按 `expansionRequests` 展开；仅使用本连接已声明的能力。
-
-优先按文件、符号和行范围获取小结果。参数遵循手册与实际 Schema；保留截断、降级和歧义，UI 源码候选不等于已验证的运行时映射。`SERVER_BUSY` 或超时后先按诊断手册处理，不自动重放请求或重启连接。
-
-用户要求执行或测试界面流程时，可在授权范围内完成定位、点击、输入与结果验证；只要求评估或查看时保持只读。操作前遵循下面的前台边界，字段与流程细节见 [窗口与 UI](references/ui.md)。
-
-## 注意事项：后台取证不等于所有操作都不会抢前台
-
-“工具不主动激活窗口”与“目标应用不会跳到前台”是两件事。不要因使用 WinCode、UIA 或某个 AI 客户端，就承诺所有步骤都不会打扰用户。
-
-- **只看界面或截图时，保持只读。**复用已有实例；对确定的 PID/HWND 使用 `wincode_ui_inspect` 或 `wincode_ui_review`，设置 `backgroundOnly:true`；仅需控件信息时用 `capture:"none"`，需要图像时用 `capture:"original"`。不要为查看而额外点击、换页或填写。
-- **后台截图直接用 PrintWindow，不先把窗口提到前台。**`backgroundOnly:true` 禁止屏幕截图回退；它只约束 inspect/review 的取证方式，不是 click/type 的“禁止激活”开关。截图失败、黑图或窗口最小化时报告实际限制，不为了截图调用 `SetForegroundWindow`、恢复窗口或重新启动实例。
-- **填写必须明确选择模式。**后台写值使用 `wincode_ui_type` 且显式传 `mode:"setValue"`；省略 mode 会走默认的 `"type"`，请求焦点并发送键盘输入。控件不支持 ValuePattern 时，不自动改成 type、SendKeys 或自写聚焦脚本。setValue 不请求键盘焦点，但写值触发的应用事件仍需验证。
-- **语义点击不等于保证不激活。**`wincode_ui_click` 只调用 Invoke/Toggle/SelectionItem，不先聚焦、不模拟鼠标；目标控件的事件、导航、视图装载或弹窗仍可能带来前台变化。已有 WPF 导航按钮的反馈中，自写脚本与 WinCode 对同一按钮使用 InvokePattern 都出现了前台切换，而只读取证未观察到切换。该证据只限具体路径，不能推成“所有 Invoke/Select 都抢前台”，也不能归因于 AI 客户端身份。
-- **只授权后台操作时，不擅自进入前台路径。**启动应用、恢复最小化窗口、Focus/SetFocus、键盘或鼠标模拟都可能改变前台状态，不能当成后台步骤的自动补救。某个动作已知会抢前台，就说明该步骤的限制；没有前台授权不再执行它。若执行中观察到抢前台，停止后续动作，先只读检查状态，不反复重放来“确认”。
-- **区分复现与根因。**动作返回成功只说明调用被接受；先读回业务状态。没有发现显式 Activate 调用不等于已排除应用或框架；有限采样未见前台变化只能报告“本轮未观察到”，不能保证绝不激活。用户未要求追查时，不自行追加对照实验。
+- 连接固定到启动工作区。已知根一致时直接查询；`WORKSPACE_MISMATCH` 时换用对应连接，`workspace_open` 只能确认或恢复原根。
+- 代码先定位再定向读取。默认 `local-text` 提供文本线索；Roslyn 引用需要当前搜索结果中的完整 `location`。
+- 查看界面保持只读：明确 PID/HWND，使用 `backgroundOnly:true`。操作界面按用户授权执行，动作后读回结果。后台写值显式用 `mode:"setValue"`；默认 `type` 会请求键盘焦点。
+- 检查完整结果中的业务状态、范围、截断和缺口。空结果不证明不存在；动作受理不证明业务结果已经发生。结果未知时先观察实际状态，不重发原动作。
+- 按需会话在任务内复用，读回 `resultFile` 的完整内容，结束时显式关闭。`readonly-ui` 和 `expand-ui` 是客户端 action，不能作为 MCP 工具名调用。

@@ -120,7 +120,9 @@ it('one Skill session preserves a real Roslyn snapshot across calls and rejects 
     const stale = await session.call('wincode_find_references', { symbolName: 'Save', symbolLocation: selected.location });
     assert.equal(stale.isError, true); assert.equal(payload(stale).errorCode, 'SNAPSHOT_STALE');
     const refreshed = payload(await session.call('wincode_find_code_symbol', { query: 'Save' })).symbols.find((item: any) => item.name === 'Save');
-    assert.equal(payload(await session.call('wincode_find_references', { symbolName: 'Save', symbolLocation: refreshed.location })).references.length, 2);
+    const refreshedReferences = await session.call('wincode_find_references', { symbolName: 'Save', symbolLocation: refreshed.location });
+    assert.notEqual(refreshedReferences.isError, true, JSON.stringify(refreshedReferences));
+    assert.equal(payload(refreshedReferences).references.length, 2);
     assert.notEqual(refreshed.location.snapshotId, selected.location.snapshotId);
     processes = ownedProcesses(session.status.pid);
     await session.close(); await session.close();

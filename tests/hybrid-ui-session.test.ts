@@ -73,6 +73,128 @@ const recipeParameters = { summaryAutomationId: 'hybridSummary', regionAutomatio
   checkboxAutomationIds: Array.from({ length: 8 }, (_, i) => 'hybridCheck' + i), maxDepth: 4, maxNodes: 40 };
 const readCliResult = async (receipt: any) => JSON.parse(await fs.readFile(receipt.resultFile, 'utf8'));
 
+it('JSON scoped checkbox audit separates identical IDs and refuses missing or ambiguous ancestors without fallback',
+  { skip: process.platform !== 'win32', timeout: 90000 }, async () => {
+    const output = await fs.mkdtemp(path.join(root, 'test-tmp', 'checkbox-scopes-'));
+    console.log(JSON.stringify({ checkboxScopeArtifacts: output }));
+    const f = await fixture(undefined, ['--hybrid-fixture', '--hybrid-scopes']), driver = cli();
+    const records: Record<string, any> = {};
+    const auditPath = path.join(process.env.LOCALAPPDATA!, 'WinCode/logs/ui-audit/access.jsonl');
+    const auditBefore = await fs.readFile(auditPath, 'utf8').catch(() => '');
+    const parameters = { ...recipeParameters, checkboxAutomationIds: ['hybridCheck0', 'hybridCheck1'] };
+    const voice = [{ automationId: 'hybridVoice' }], display = [{ automationId: 'hybridDisplay' }];
+    const request = async (id: string, fields: Record<string, unknown>) => {
+      driver.send({ id, ...fields }); const receipt = await driver.wait(value => value.id === id);
+      assert.ok(receipt.resultFile, JSON.stringify(receipt));
+      const response = await readCliResult(receipt); records[id] = { receipt, response };
+      await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(records, null, 2));
+      return parse(response);
+    };
+    try {
+      await driver.wait(value => value.ready);
+      const audit = (id: string, scopePath: any[] | undefined, conditional = true) => request(id,
+        { action: 'readonly-ui', recipe: 'checkbox-audit', target: f.target,
+          parameters: { ...parameters, scopePath, ...(conditional ? {} : { summaryAutomationId: undefined }) } });
+      const on = await audit('voice', voice);
+      assert.equal(on.success, true, JSON.stringify(on)); assert.equal(on.metrics.dispatchedCalls, 2);
+      assert.deepEqual(on.findings, { detailsRequired: true, details: { checkedCount: 1, unchecked: ['hybridCheck1'], disabled: [] } });
+      assert.ok(on.steps.every((step: any) => step.evidence.scopeResult.status === 'resolved' && step.evidence.scopeResult.resolvedCount === 1));
+      const off = await audit('display-off', display);
+      assert.equal(off.success, true, JSON.stringify(off)); assert.equal(off.metrics.dispatchedCalls, 1);
+      assert.deepEqual(off.findings, { detailsRequired: false });
+      const other = await audit('display-details', display, false);
+      assert.equal(other.success, true, JSON.stringify(other)); assert.equal(other.metrics.dispatchedCalls, 1);
+      assert.deepEqual(other.findings, { checkedCount: 1, unchecked: ['hybridCheck0'], disabled: ['hybridCheck1'] });
+      for (const [id, scopePath, code] of [
+        ['missing', [{ automationId: 'missing' }], 'SCOPE_NOT_FOUND'],
+        ['ambiguous', [{ name: 'Settings', controlType: 'Group' }], 'SCOPE_AMBIGUOUS'],
+        ['unscoped', undefined, 'QUERY_AMBIGUOUS'],
+      ] as const) {
+        const failed = await audit(id, scopePath ? [...scopePath] : undefined);
+        assert.equal(failed.success, false, JSON.stringify(failed)); assert.equal(failed.errorCode, code);
+        assert.equal(failed.findings, undefined); assert.equal(failed.metrics.dispatchedCalls, 1);
+        if (scopePath) assert.equal(failed.steps[0].evidence.scopeResult.failedIndex, 0);
+      }
+      // Independent native reads verify each side's final state, rather than reusing recipe findings.
+      for (const [id, scopePath, expected] of [['voice-final', voice, 'On'], ['display-final', display, 'Off']] as const) {
+        const independent = await request(id, { tool: 'wincode_ui_inspect', arguments: { ...f.target, scopePath,
+          query: { automationId: 'hybridCheck0' }, readStates: true, capture: 'none', backgroundOnly: true } });
+        assert.equal(independent.success, true, JSON.stringify(independent)); assert.equal(independent.tree.states.toggle, expected);
+      }
+      driver.send({ id: 'status', action: 'status' }); const gateway = (await driver.wait(value => value.id === 'status')).status;
+      driver.send({ id: 'close', action: 'close' }); assert.equal((await driver.wait(value => value.id === 'close')).closed, true);
+      await withTimeout(driver.closed, 8000, 'Scoped CLI exit'); exited(gateway.pid); exited(driver.child.pid!);
+      const auditAfter = await fs.readFile(auditPath, 'utf8'); assert.ok(auditAfter.startsWith(auditBefore));
+      const starts = auditAfter.slice(auditBefore.length).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+        .filter(entry => entry.phase === 'start' && entry.target === f.target.pid);
+      assert.equal(starts.length, 9);
+      for (const entry of starts) { assert.equal(entry.op, 'inspect'); exited(entry.helper); }
+      records.cleanup = { helpersExited: true, gatewayExited: true, cliExited: true, helperStarts: starts.length };
+    } finally {
+      await killProcessTree(driver.child); await withTimeout(driver.closed, 8000, 'Scoped cleanup'); await stopFixture(f.child, f.closed);
+      records.fixtureExited = true;
+      await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(records, null, 2));
+    }
+  });
+
+it('JSON checkbox audit reads real auxiliary property failures while preserving required-state failures',
+  { skip: process.platform !== 'win32', timeout: 120000 }, async () => {
+    const output = await fs.mkdtemp(path.join(root, 'test-tmp', 'checkbox-evidence-'));
+    console.log(JSON.stringify({ checkboxEvidenceArtifacts: output }));
+    for (const mode of ['on', 'off', 'enabled-unknown']) {
+      const f = await fixture(undefined, ['--hybrid-fixture', '--hybrid-evidence',
+        ...(mode === 'off' ? ['--hybrid-summary-off'] : mode === 'enabled-unknown' ? ['--hybrid-enabled-unknown'] : [])]);
+      const driver = cli(), records: Record<string, any> = {};
+      const auditPath = path.join(process.env.LOCALAPPDATA!, 'WinCode/logs/ui-audit/access.jsonl');
+      const auditBefore = await fs.readFile(auditPath, 'utf8').catch(() => '');
+      try {
+        await driver.wait(value => value.ready);
+        const request = async (id: string, fields: Record<string, unknown>) => {
+          driver.send({ id, ...fields }); const receipt = await driver.wait(value => value.id === id);
+          assert.ok(receipt.resultFile, JSON.stringify(receipt));
+          const response = await readCliResult(receipt); records[id] = { receipt, response };
+          await fs.writeFile(path.join(output, mode + '.json'), JSON.stringify(records, null, 2));
+          return parse(response);
+        };
+        const before = await request('before', { tool: 'wincode_ui_inspect', arguments: { ...f.target, ...summary,
+          backgroundOnly: true, responseFormat: 'compact', capture: 'none' } });
+        assert.equal(before.success, true); assert.equal(before.treeComplete, true);
+        assert.ok(before.tree.propertyIssues.some((issue: string) => /^className:(error|unsupported)$/.test(issue)));
+        const checked = await request('audit', { action: 'readonly-ui', recipe: 'checkbox-audit', target: f.target, parameters: recipeParameters });
+        assert.equal(checked.success, mode !== 'enabled-unknown', JSON.stringify(checked));
+        assert.equal(checked.metrics.dispatchedCalls, mode === 'off' ? 1 : 2);
+        assert.ok(checked.steps[0].evidence.nodes.some((node: any) => node.propertyIssues?.some((issue: string) => /^className:(error|unsupported)$/.test(issue))));
+        if (mode === 'enabled-unknown') {
+          assert.equal(checked.errorCode, 'INCOMPLETE_OBSERVATION'); assert.equal(checked.findings, undefined);
+          assert.ok(checked.steps[1].evidence.nodes.some((node: any) => node.automationId === 'hybridCheck0' && node.propertyIssues?.some((issue: string) => /^isEnabled:(error|unsupported)$/.test(issue))));
+        } else if (mode === 'off') assert.deepEqual(checked.findings, { detailsRequired: false });
+        else {
+          assert.deepEqual(checked.findings, { detailsRequired: true,
+            details: { checkedCount: 7, unchecked: ['hybridCheck3'], disabled: ['hybridCheck6'] } });
+          const independent = await request('independent', { tool: 'wincode_ui_inspect', arguments: { ...f.target, ...detail,
+            backgroundOnly: true, responseFormat: 'compact', capture: 'none' } });
+          const nodes: any[] = []; const visit = (node: any) => { nodes.push(node); node.children.forEach(visit); }; visit(independent.tree);
+          assert.equal(nodes.find(node => node.automationId === 'hybridCheck0').states.toggle, 'On');
+          assert.equal(nodes.find(node => node.automationId === 'hybridCheck3').states.toggle, 'Off');
+          assert.equal(nodes.find(node => node.automationId === 'hybridCheck6').isEnabled, false);
+        }
+        driver.send({ id: 'status', action: 'status' }); const gateway = (await driver.wait(value => value.id === 'status')).status;
+        driver.send({ id: 'close', action: 'close' }); assert.equal((await driver.wait(value => value.id === 'close')).closed, true);
+        await withTimeout(driver.closed, 8000, 'Evidence CLI exit'); exited(gateway.pid); exited(driver.child.pid!);
+        const auditAfter = await fs.readFile(auditPath, 'utf8'); assert.ok(auditAfter.startsWith(auditBefore));
+        const starts = auditAfter.slice(auditBefore.length).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+          .filter(entry => entry.phase === 'start' && entry.target === f.target.pid);
+        assert.equal(starts.length, mode === 'on' ? 4 : mode === 'off' ? 2 : 3);
+        for (const entry of starts) { assert.equal(entry.op, 'inspect'); exited(entry.helper); }
+        records.cleanup = { helpersExited: true, gatewayExited: true, cliExited: true, helperStarts: starts.length };
+      } finally {
+        await killProcessTree(driver.child); await withTimeout(driver.closed, 8000, 'Evidence cleanup'); await stopFixture(f.child, f.closed);
+        records.fixtureExited = true;
+        await fs.writeFile(path.join(output, mode + '.json'), JSON.stringify(records, null, 2));
+      }
+    }
+  });
+
 it('JSON navigation isolates duplicate parent and child IDs and keeps scope failures action-free',
   { skip: process.platform !== 'win32', timeout: 60000 }, async () => {
     const f = await fixture(undefined, ['--action-fixture', '--scope-navigation']), driver = cli();

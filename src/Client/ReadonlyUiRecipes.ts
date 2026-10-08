@@ -1,7 +1,19 @@
 import type { UiReader } from './ReadonlyUiWorkflow.js';
-import type { UiNode } from '../Core/UiContracts.js';
+import { validateUiQuery, validateUiScope, type UiNode, type UiQuery, type UiScopeSelector } from '../Core/UiContracts.js';
+
+export interface SiblingRangeParameters {
+  scopePath?: UiScopeSelector[];
+  containerQuery: UiQuery;
+  /** Explicitly observed consecutive group headings. Both bounds are excluded. */
+  startAfter: UiScopeSelector;
+  endBefore: UiScopeSelector;
+  maxDepth?: number;
+  maxNodes?: number;
+}
 
 export interface CheckboxAuditParameters {
+  /** One common ancestor path for both the summary and detail region. */
+  scopePath?: UiScopeSelector[];
   /** Omit to read the region unconditionally. On reads details; Off skips them. */
   summaryAutomationId?: string;
   regionAutomationId: string;
@@ -34,12 +46,22 @@ function budget(value: unknown, fallback: number, maximum: number, name: string)
 
 /** Compile only installed recipes, never expressions or model-generated code. Validate before connecting. */
 export function createReadonlyUiRecipe(recipe: unknown, parameters: unknown) {
-  if (recipe !== 'checkbox-audit') throw new RecipeInputError('UNSUPPORTED_RECIPE', 'recipe', 'Unsupported readonly recipe; use checkbox-audit.');
+  if (recipe !== 'checkbox-audit' && recipe !== 'sibling-range')
+    throw new RecipeInputError('UNSUPPORTED_RECIPE', 'recipe', 'Unsupported readonly recipe; use checkbox-audit or sibling-range.');
+  const compiled = recipe === 'sibling-range' ? createSiblingRange(parameters) : createCheckboxAudit(parameters);
+  return async (reader: UiReader) => compiled(reader);
+}
+
+function createCheckboxAudit(parameters: unknown) {
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters) ||
-    Object.keys(parameters).some(key => !['summaryAutomationId', 'regionAutomationId', 'checkboxAutomationIds', 'maxDepth', 'maxNodes'].includes(key)))
+    Object.keys(parameters).some(key => !['scopePath', 'summaryAutomationId', 'regionAutomationId', 'checkboxAutomationIds', 'maxDepth', 'maxNodes'].includes(key)))
     throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'parameters',
-      'Supply an object with only summaryAutomationId, regionAutomationId, checkboxAutomationIds, maxDepth and maxNodes.');
+      'Supply an object with only scopePath, summaryAutomationId, regionAutomationId, checkboxAutomationIds, maxDepth and maxNodes.');
   const input = parameters as CheckboxAuditParameters;
+  try { validateUiScope(input.scopePath); }
+  catch { throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'scopePath',
+    'scopePath requires 1–50 exact parent selectors using only automationId, name and controlType.'); }
+  const scopePath = input.scopePath === undefined ? undefined : structuredClone(input.scopePath);
   const region = identifier(input.regionAutomationId, 'regionAutomationId');
   const summary = input.summaryAutomationId === undefined ? undefined : identifier(input.summaryAutomationId, 'summaryAutomationId');
   if (!Array.isArray(input.checkboxAutomationIds) || input.checkboxAutomationIds.length < 1 || input.checkboxAutomationIds.length > 64)
@@ -51,13 +73,15 @@ export function createReadonlyUiRecipe(recipe: unknown, parameters: unknown) {
 
   return async (reader: UiReader) => {
     if (summary !== undefined) {
-      const value = await reader.inspect({ query: { automationId: summary }, readStates: true, maxDepth: 2, maxNodes: 8 });
+      const value = await reader.inspect({ scopePath, query: { automationId: summary }, readStates: true, maxDepth: 2, maxNodes: 8,
+        allowAuxiliaryPropertyGaps: true });
       if (value.tree?.automationId !== summary) throw new Error('Summary observation does not match its AutomationId.');
       const state = value.tree.states?.toggle;
       if (state === 'Off') return { detailsRequired: false };
       if (state !== 'On') throw new Error('Summary toggle state is unknown; details were not read.');
     }
-    const value = await reader.inspect({ query: { automationId: region }, readStates: true, maxDepth, maxNodes });
+    const value = await reader.inspect({ scopePath, query: { automationId: region }, readStates: true, maxDepth, maxNodes,
+      allowAuxiliaryPropertyGaps: true });
     if (value.tree?.automationId !== region) throw new Error('Region observation does not match its AutomationId.');
     const selected = new Map(ids.map(id => [id, [] as UiNode[]]));
     const visit = (node: UiNode) => {
@@ -77,5 +101,67 @@ export function createReadonlyUiRecipe(recipe: unknown, parameters: unknown) {
       unchecked: rows.filter(node => node.states!.toggle === 'Off').map(node => node.automationId!).sort(),
       disabled: rows.filter(node => node.isEnabled === false).map(node => node.automationId!).sort() };
     return summary === undefined ? details : { detailsRequired: true, details };
+  };
+}
+
+function createSiblingRange(parameters: unknown) {
+  if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters) ||
+    Object.keys(parameters).some(key => !['scopePath', 'containerQuery', 'startAfter', 'endBefore', 'maxDepth', 'maxNodes'].includes(key)))
+    throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'parameters',
+      'Supply only scopePath, containerQuery, startAfter, endBefore, maxDepth and maxNodes.');
+  const input = parameters as SiblingRangeParameters;
+  for (const field of ['scopePath', 'containerQuery', 'startAfter', 'endBefore'] as const) {
+    try {
+      if (field === 'scopePath') validateUiScope(input.scopePath);
+      else if (field === 'containerQuery') {
+        if (!input.containerQuery) throw new Error('Required');
+        validateUiQuery(input.containerQuery, false);
+      } else validateUiScope([input[field]]);
+    } catch { throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', field, 'Supply valid exact selectors observed in the target container.'); }
+  }
+  const { scopePath, containerQuery, startAfter, endBefore } = structuredClone(input);
+  const fields = ['automationId', 'name', 'controlType'] as const;
+  if (fields.every(key => startAfter[key] === endBefore[key]))
+    throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'endBefore', 'Start and end boundaries must be distinct.');
+  const maxDepth = budget(input.maxDepth, 4, 50, 'maxDepth');
+  const maxNodes = budget(input.maxNodes, 300, 5000, 'maxNodes');
+  const available = (node: UiNode, key: string) => !node.propertyIssues?.some(issue => issue.split(':')[0].toLowerCase() === key.toLowerCase());
+  const matches = (node: UiNode, selector: UiScopeSelector) => fields.every(key => selector[key] === undefined ||
+    (available(node, key) && node[key] === selector[key]));
+  const describe = (node: UiNode) => ({ id: node.id, parentId: node.parentId, name: node.name,
+    automationId: node.automationId, controlType: node.controlType, propertyIssues: node.propertyIssues });
+
+  return async (reader: UiReader) => {
+    // The recipe needs names and sibling order, not state or IDs that some providers never expose.
+    const value = await reader.inspect({ scopePath, query: containerQuery, readStates: false, maxDepth, maxNodes, allowPropertyGaps: true });
+    if (!value.tree || !matches(value.tree, containerQuery)) throw new Error('Container observation does not match its selector.');
+    const starts: Array<{ node: UiNode; parent: UiNode }> = [], ends: typeof starts = [];
+    const visit = (parent: UiNode) => {
+      for (const node of parent.children) {
+        if (matches(node, startAfter)) starts.push({ node, parent });
+        if (matches(node, endBefore)) ends.push({ node, parent });
+        visit(node);
+      }
+    };
+    visit(value.tree);
+    if (starts.length !== 1 || ends.length !== 1) throw new Error('Range boundaries must each match exactly one observed node; missing or ambiguous boundaries do not mean an empty group.');
+    const start = starts[0], end = ends[0];
+    if (start.parent !== end.parent) throw new Error('Range boundaries must be siblings under the same native parent.');
+    const siblings = start.parent.children;
+    // A sibling with missing selector fields could hide a second boundary; do not silently choose the known one.
+    for (const selector of [startAfter, endBefore]) {
+      if (siblings.some(node => !matches(node, selector) && fields.every(key => selector[key] === undefined ||
+        !available(node, key) || node[key] === undefined || node[key] === selector[key])))
+        throw new Error('A sibling has insufficient identity evidence to resolve the range boundaries.');
+    }
+    const first = siblings.indexOf(start.node), last = siblings.indexOf(end.node);
+    if (last <= first) throw new Error('End boundary must follow start boundary in the observed sibling order.');
+    const items = siblings.slice(first + 1, last);
+    if (items.some(node => typeof node.name !== 'string' || !node.name.trim() || !available(node, 'name')))
+      throw new Error('A range item has no readable name; inspect the retained partial evidence.');
+    return { kind: 'logical-group' as const, basis: 'sibling-order' as const,
+      coverage: 'observed-range-only' as const, businessGroupComplete: 'unknown' as const,
+      requestId: value.requestId, container: describe(value.tree), parent: describe(start.parent),
+      startAfter: describe(start.node), endBefore: describe(end.node), observedCount: items.length, items: items.map(describe) };
   };
 }

@@ -18,8 +18,15 @@ export interface CheckboxAuditParameters {
   summaryAutomationId?: string;
   regionAutomationId: string;
   checkboxAutomationIds: string[];
+  checkboxSelectors?: never;
   maxDepth?: number;
   maxNodes?: number;
+}
+
+export interface NamedCheckboxAuditParameters extends Omit<CheckboxAuditParameters, 'checkboxAutomationIds' | 'checkboxSelectors'> {
+  checkboxAutomationIds?: never;
+  /** Exact name and CheckBox type; mutually exclusive with checkboxAutomationIds. */
+  checkboxSelectors: Array<{ name: string; controlType: 'CheckBox' }>;
 }
 
 /** Known preflight rejection only. Messages and fields never contain rejected input values. */
@@ -54,19 +61,34 @@ export function createReadonlyUiRecipe(recipe: unknown, parameters: unknown) {
 
 function createCheckboxAudit(parameters: unknown) {
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters) ||
-    Object.keys(parameters).some(key => !['scopePath', 'summaryAutomationId', 'regionAutomationId', 'checkboxAutomationIds', 'maxDepth', 'maxNodes'].includes(key)))
+    Object.keys(parameters).some(key => !['scopePath', 'summaryAutomationId', 'regionAutomationId', 'checkboxAutomationIds', 'checkboxSelectors', 'maxDepth', 'maxNodes'].includes(key)))
     throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'parameters',
-      'Supply an object with only scopePath, summaryAutomationId, regionAutomationId, checkboxAutomationIds, maxDepth and maxNodes.');
-  const input = parameters as CheckboxAuditParameters;
+      'Supply only scopePath, summaryAutomationId, regionAutomationId, checkboxAutomationIds or checkboxSelectors, maxDepth and maxNodes.');
+  const input = parameters as CheckboxAuditParameters | NamedCheckboxAuditParameters;
   try { validateUiScope(input.scopePath); }
   catch { throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'scopePath',
     'scopePath requires 1–50 exact parent selectors using only automationId, name and controlType.'); }
   const scopePath = input.scopePath === undefined ? undefined : structuredClone(input.scopePath);
   const region = identifier(input.regionAutomationId, 'regionAutomationId');
   const summary = input.summaryAutomationId === undefined ? undefined : identifier(input.summaryAutomationId, 'summaryAutomationId');
-  if (!Array.isArray(input.checkboxAutomationIds) || input.checkboxAutomationIds.length < 1 || input.checkboxAutomationIds.length > 64)
+  const named = input.checkboxSelectors !== undefined;
+  let selectors: NamedCheckboxAuditParameters['checkboxSelectors'] = [];
+  if (named) {
+    if (input.checkboxAutomationIds !== undefined || !Array.isArray(input.checkboxSelectors) ||
+      input.checkboxSelectors.length < 1 || input.checkboxSelectors.length > 64)
+      throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'checkboxSelectors', 'Supply 1–64 exact name/CheckBox selectors instead of checkboxAutomationIds.');
+    selectors = input.checkboxSelectors.map(selector => {
+      if (!selector || typeof selector !== 'object' || Array.isArray(selector) ||
+        Object.keys(selector).some(key => !['name', 'controlType'].includes(key)) || selector.controlType !== 'CheckBox' ||
+        typeof selector.name !== 'string' || !selector.name.trim() || selector.name.length > 256 || /[\x00-\x1f]/.test(selector.name))
+        throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'checkboxSelectors', 'Each selector requires a nonempty name of at most 256 characters without control characters and controlType CheckBox.');
+      return { name: selector.name, controlType: 'CheckBox' };
+    });
+    if (new Set(selectors.map(selector => selector.name)).size !== selectors.length)
+      throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'checkboxSelectors', 'Checkbox selectors must be distinct.');
+  } else if (!Array.isArray(input.checkboxAutomationIds) || input.checkboxAutomationIds.length < 1 || input.checkboxAutomationIds.length > 64)
     throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'checkboxAutomationIds', 'Supply 1–64 explicitly selected checkbox AutomationIds.');
-  const ids = input.checkboxAutomationIds.map((value, index) => identifier(value, `checkboxAutomationIds[${index}]`));
+  const ids = named ? [] : input.checkboxAutomationIds!.map((value, index) => identifier(value, `checkboxAutomationIds[${index}]`));
   if (new Set(ids).size !== ids.length) throw new RecipeInputError('INVALID_RECIPE_PARAMETERS', 'checkboxAutomationIds', 'Checkbox AutomationIds must be distinct.');
   const maxDepth = budget(input.maxDepth, 4, 50, 'maxDepth');
   const maxNodes = budget(input.maxNodes, 300, 5000, 'maxNodes');
@@ -81,8 +103,35 @@ function createCheckboxAudit(parameters: unknown) {
       if (state !== 'On') throw new Error('Summary toggle state is unknown; details were not read.');
     }
     const value = await reader.inspect({ scopePath, query: { automationId: region }, readStates: true, maxDepth, maxNodes,
-      allowAuxiliaryPropertyGaps: true });
+      ...(named ? { allowPropertyGaps: true } : { allowAuxiliaryPropertyGaps: true }) });
     if (value.tree?.automationId !== region) throw new Error('Region observation does not match its AutomationId.');
+    if (named) {
+      const available = (node: UiNode, field: string) => !node.propertyIssues?.some(issue => issue.split(':')[0].toLowerCase() === field.toLowerCase());
+      if (!available(value.tree, 'automationId')) throw new Error('Region identity is unreadable.');
+      const nodes: UiNode[] = [];
+      const visit = (node: UiNode) => {
+        // Unclassified gaps remain blocking even when known, irrelevant properties can be omitted.
+        if (node.propertyIssues?.some(issue => !['name', 'automationid', 'controltype', 'isenabled', 'classname', 'bounds', 'isoffscreen']
+          .includes(issue.split(':')[0].toLowerCase()))) throw new Error('Unclassified property gap in checkbox observation.');
+        for (const child of node.children) { nodes.push(child); visit(child); }
+      };
+      visit(value.tree);
+      const rows = selectors.map(selector => {
+        // A node is excluded only by a readable mismatch; an unknown identity may hide a duplicate.
+        const possible = nodes.filter(node => (['name', 'controlType'] as const).every(field =>
+          !available(node, field) || node[field] === undefined || node[field] === selector[field]));
+        if (possible.length !== 1) throw new Error('Each checkbox selector must identify one complete, unambiguous control.');
+        const node = possible[0];
+        if (node.name !== selector.name || node.controlType !== 'CheckBox' || !available(node, 'name') ||
+          !available(node, 'controlType') || !available(node, 'isEnabled') || typeof node.isEnabled !== 'boolean' ||
+          !['On', 'Off'].includes(node.states?.toggle ?? '')) throw new Error('Selected checkbox identity or state is incomplete.');
+        return { node, selector };
+      });
+      const details = { checkedCount: rows.filter(row => row.node.states!.toggle === 'On').length,
+        unchecked: rows.filter(row => row.node.states!.toggle === 'Off').map(row => row.selector),
+        disabled: rows.filter(row => row.node.isEnabled === false).map(row => row.selector) };
+      return summary === undefined ? details : { detailsRequired: true, details };
+    }
     const selected = new Map(ids.map(id => [id, [] as UiNode[]]));
     const visit = (node: UiNode) => {
       if (node.automationId) selected.get(node.automationId)?.push(node);

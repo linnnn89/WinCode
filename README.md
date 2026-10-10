@@ -17,6 +17,10 @@
 
 The persistent JSON Skill session also supports explicit readonly workflows, checkbox summaries and one-parent expansion with observed ancestor paths. See [client workflows and validation boundaries / 客户端工作流与验证边界](docs/hybrid-readonly-orchestration.md). 这些流程通过显式调用启用；支持按实际父路径定位、一次展开与子控件状态读回，不自动递归导航或调用模型 API。
 
+Checkbox audits accept either AutomationIds or exact name + CheckBox selectors. Real-application coverage and performance remain subject to validation; merging these capabilities does not change client defaults. 复选框统计可使用 ID 或精确名称与类型；真实应用覆盖与性能仍须验收，合并不改变客户端默认配置。
+
+For repository maintenance, start with [current work and acceptance criteria / 当前任务与验收条件](docs/next-iteration.md), [architecture / 架构与数据流](WinCode-架构与数据流说明.md), or [contributing and verification / 开发与验证](CONTRIBUTING.md). Keep private screenshots and raw diagnostic results in ignored local directories; publish only sanitized findings. 本机截图和原始诊断材料保留在忽略目录，公开内容仅包含去标识后的结论。
+
 ## English
 
 WinCode is a local server implementing the Model Context Protocol (MCP) for AI coding agents. It combines Windows UI Automation (UIA), code navigation and .NET project analysis, so an agent can inspect a running application and investigate its source code through the same connection.

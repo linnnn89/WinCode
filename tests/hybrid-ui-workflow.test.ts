@@ -593,6 +593,82 @@ test('checkbox audit still rejects required property gaps, incomplete coverage a
   }
 });
 
+function namedCheckboxRegion(): UiInspectResult {
+  return { ...observation(), tree: { id: 1, parentId: null, automationId: 'region', name: 'Settings',
+    propertyIssues: ['controlType:unsupported'], children: [
+      { id: 2, parentId: 1, name: 'Clock', controlType: 'Text', propertyIssues: ['automationId:unsupported'], children: [] },
+      { id: 3, parentId: 1, name: 'Clock', controlType: 'CheckBox', isEnabled: true,
+        states: { toggle: 'Off', selection: 'unsupported', expandCollapse: 'unsupported' }, propertyIssues: ['automationId:unsupported', 'className:unsupported'], children: [] },
+      { id: 4, parentId: 1, name: 'Scale', controlType: 'CheckBox', isEnabled: false,
+        states: { toggle: 'On', selection: 'unsupported', expandCollapse: 'unsupported' }, propertyIssues: ['automationId:unsupported'], children: [] },
+      { id: 5, parentId: 1, name: 'Unrelated', controlType: 'Button', propertyIssues: ['isEnabled:unsupported'], children: [] },
+    ] } };
+}
+const namedCheckboxParameters = { regionAutomationId: 'region', checkboxSelectors: [
+  { name: 'Clock', controlType: 'CheckBox' }, { name: 'Scale', controlType: 'CheckBox' },
+] };
+
+test('named checkbox audit reads ID-less controls, preserves evidence and keeps conditional and legacy readers bounded', async () => {
+  for (const mode of ['unconditional', 'on', 'off']) {
+    const calls: string[] = [];
+    const checked = await runReadonlyUiWorkflow(async (_tool, args) => {
+      const id = (args.query as any).automationId; calls.push(id);
+      if (id === 'summary') return result({ ...observation(), tree: { ...observation().tree!, automationId: 'summary',
+        states: { toggle: mode === 'off' ? 'Off' : 'On', selection: 'unsupported', expandCollapse: 'unsupported' } } });
+      return result(namedCheckboxRegion());
+    }, target, createReadonlyUiRecipe('checkbox-audit', { ...namedCheckboxParameters,
+      ...(mode === 'unconditional' ? {} : { summaryAutomationId: 'summary' }) }));
+    const details = { checkedCount: 1, unchecked: [{ name: 'Clock', controlType: 'CheckBox' }],
+      disabled: [{ name: 'Scale', controlType: 'CheckBox' }] };
+    assert.equal(checked.report.success, true, JSON.stringify(checked.report));
+    assert.deepEqual(checked.report.findings, mode === 'off' ? { detailsRequired: false } :
+      mode === 'on' ? { detailsRequired: true, details } : details);
+    assert.deepEqual(calls, mode === 'off' ? ['summary'] : mode === 'on' ? ['summary', 'region'] : ['region']);
+    if (mode !== 'off') assert.deepEqual((checked.report.steps.at(-1)!.evidence!.nodes as any[])[2].propertyIssues,
+      ['automationId:unsupported', 'className:unsupported']);
+  }
+  const strict = await runReadonlyUiWorkflow(async () => result(namedCheckboxRegion()), target, r => r.inspect({}));
+  assert.equal(strict.report.errorCode, 'INCOMPLETE_OBSERVATION');
+});
+
+test('named checkbox audit refuses hidden ambiguity, required state gaps and incomplete scope evidence', async () => {
+  for (const scenario of ['duplicate', 'missing', 'unknown-name', 'unknown-type', 'name-error', 'enabled-error',
+    'unknown-toggle', 'unknown-issue', 'region-id-error', 'unexplained-count', 'truncated', 'search', 'scope']) {
+    const value = namedCheckboxRegion(), rows = value.tree!.children;
+    if (scenario === 'duplicate') rows.push(structuredClone(rows[1]));
+    if (scenario === 'missing') rows.splice(1, 1);
+    if (scenario === 'unknown-name') rows.push({ id: 9, parentId: 1, controlType: 'CheckBox', propertyIssues: ['name:unsupported'], children: [] });
+    if (scenario === 'unknown-type') rows.push({ id: 9, parentId: 1, name: 'Clock', propertyIssues: ['controlType:unsupported'], children: [] });
+    if (scenario === 'name-error') rows[1].propertyIssues!.push('name:error');
+    if (scenario === 'enabled-error') rows[1].propertyIssues!.push('isEnabled:error');
+    if (scenario === 'unknown-toggle') rows[1].states!.toggle = 'unknown';
+    if (scenario === 'unknown-issue') rows[3].propertyIssues!.push('futureField:error');
+    if (scenario === 'region-id-error') value.tree!.propertyIssues!.push('automationId:error');
+    if (scenario === 'unexplained-count') value.propertyIssueCount = 100;
+    if (scenario === 'truncated') { value.treeComplete = false; value.truncated = true; }
+    if (scenario === 'search') value.queryResult!.searchComplete = false;
+    const checked = await runReadonlyUiWorkflow(async () => result(value), target, createReadonlyUiRecipe('checkbox-audit', {
+      ...namedCheckboxParameters, ...(scenario === 'scope' ? { scopePath: [{ name: 'Settings' }] } : {}),
+    }));
+    assert.equal(checked.report.success, false, scenario);
+    assert.equal(checked.report.findings, undefined, scenario);
+    assert.equal(checked.report.steps.length, 1, scenario);
+    assert.ok(checked.report.steps[0].evidence, scenario);
+  }
+});
+
+test('named checkbox selectors reject mixed, duplicate and nonexact inputs before reading', () => {
+  for (const extra of [ { checkboxAutomationIds: ['a'] }, { checkboxSelectors: [] },
+    { checkboxSelectors: [{ name: 'Clock', controlType: 'Button' }] },
+    { checkboxSelectors: [{ name: 'Clock' }] },
+    { checkboxSelectors: [{ name: 'Clock', controlType: 'CheckBox', automationId: 'a' }] },
+    { checkboxSelectors: [namedCheckboxParameters.checkboxSelectors[0], namedCheckboxParameters.checkboxSelectors[0]] },
+    { checkboxSelectors: [{ name: 'private\n', controlType: 'CheckBox' }] } ]) {
+    assert.throws(() => createReadonlyUiRecipe('checkbox-audit', { ...namedCheckboxParameters, ...extra }),
+      (e: any) => e.code === 'INVALID_RECIPE_PARAMETERS' && e.workStarted === false);
+  }
+});
+
 test('readonly workflow serializes concurrent requests, evaluates actual observations and retains native image evidence', async () => {
   let active = 0;
   const calls: string[] = [];

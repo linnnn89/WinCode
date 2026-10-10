@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withTimeout } from '../Core/ResourceManager.js';
 import { runReadonlyUiWorkflow, type UiReader, type UiTarget, type UiWorkflowOptions } from './ReadonlyUiWorkflow.js';
-import { createReadonlyUiRecipe, type CheckboxAuditParameters, type SiblingRangeParameters } from './ReadonlyUiRecipes.js';
+import { createReadonlyUiRecipe, type CheckboxAuditParameters, type NamedCheckboxAuditParameters, type SiblingRangeParameters } from './ReadonlyUiRecipes.js';
 import { runExpandUiWorkflow, type ExpandUiParameters } from './ExpandUiWorkflow.js';
 
 export interface SkillSessionOptions {
@@ -89,7 +89,7 @@ export class WinCodeSession {
   }
 
   /** Installed client recipe; compile/validate parameters before the first tool read. */
-  readonlyUiRecipe(target: UiTarget, recipe: 'checkbox-audit' | 'sibling-range', parameters: CheckboxAuditParameters | SiblingRangeParameters, options: UiWorkflowOptions = {}) {
+  readonlyUiRecipe(target: UiTarget, recipe: 'checkbox-audit' | 'sibling-range', parameters: CheckboxAuditParameters | NamedCheckboxAuditParameters | SiblingRangeParameters, options: UiWorkflowOptions = {}) {
     return this.readonlyUiWorkflow(target, createReadonlyUiRecipe(recipe, parameters), options);
   }
 

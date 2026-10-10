@@ -2,6 +2,7 @@
 
 ## 0.17.0 (unreleased)
 
+- Add an explicit name + CheckBox selector mode to checkbox-audit for controls without AutomationIds. Validate only task-relevant known properties while retaining raw gaps and refusing uncertain identity, ambiguity, unknown state and incomplete coverage. Preserve the existing ID-based parameter, result and validation contracts; named results return exact selectors in request order. No UI actions or default configuration changes.
 - Reorganize the four managed Skill documents by task. Keep the entry short, place executable UI recipe examples inside the installed Skill, and remove duplicated instructions and historical iteration notes.
 
 - Add the readonly sibling-range client recipe for flat lists whose headings and items are siblings. Read one explicit container, validate unique ordered boundaries and readable row names, and retain native identities and property gaps. Results describe only the observed logical range; missing/ambiguous boundaries and incomplete reads stop without inventing an empty or complete business group. No scrolling or item actions are performed.

@@ -24,7 +24,9 @@
 {"id":"audit1","action":"readonly-ui","recipe":"checkbox-audit","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"scopePath":[{"automationId":"voiceSettings"}],"summaryAutomationId":"summary","regionAutomationId":"checks","checkboxAutomationIds":["optionA","optionB"],"maxDepth":4,"maxNodes":40},"timeoutMs":15000}
 ```
 
-- checkboxAutomationIds：1–64 个互不重复的 ID。每个目标必须在指定区域内唯一，为 CheckBox，isEnabled 已知，toggle 为 On 或 Off。
+- checkboxAutomationIds：1–64 个互不重复的 ID。每个目标必须在指定区域内唯一，为 CheckBox，isEnabled 已知，toggle 为 On 或 Off。原有 ID 模式的参数、结果形状和属性检查保持不变。
+- 没有 AutomationId 的控件可改用 checkboxSelectors，例如 `[{"name":"24 小时制","controlType":"CheckBox"}]`；与 checkboxAutomationIds 二选一。接受 1–64 个互不重复的精确名称，controlType 必须为 CheckBox，不接受其他选择字段。区域仍用 regionAutomationId，摘要仍用可选 summaryAutomationId。
+- 名称模式的 unchecked、disabled 返回对应选择器对象，顺序与请求一致；checkedCount 仍统计所有 On，包括禁用目标。原始节点身份、状态和属性缺口保留在 steps.evidence。
 - summaryAutomationId 可省略。提供时先读摘要：On 才读详情，Off 返回 detailsRequired:false；未知或缺失停止。
 - scopePath 可省略；提供时包含 1–50 个仅使用 automationId/name/controlType 的精确父选择器，摘要和详情共用该祖先范围。每次读取重新解析，不复用摘要的定位对象。不提供路径时沿用原查询范围和调用数。
 - maxDepth 默认 4，允许 1–50；maxNodes 默认 300，允许 1–5000。详情区域一次读取后在客户端统计，禁用且 On 的控件仍计入 checkedCount。
@@ -34,7 +36,9 @@
 
 带路径的读取要求 inspectionVersion 5，并确认 scopeResult 已解析全部父级；旧版本返回 VERSION_MISMATCH，缺少范围证据停止为 INCOMPLETE_OBSERVATION。原生 SCOPE_NOT_FOUND／SCOPE_AMBIGUOUS／SCOPE_SEARCH_INCOMPLETE 原样保留，步骤证据包含 scopeResult，不回退整窗。路径不会自动展开隐藏区域，也不裁剪窗口截图；摘要和详情没有合适共同祖先时使用显式单次读取。
 
-checkbox-audit 允许 className、bounds、isOffscreen 的辅助属性缺口，仍在步骤证据中保留原始 propertyIssues 和数量；不因这些缺口丢弃已观察到的状态。身份、启用状态、toggle、搜索／遍历完整性、歧义和未分类缺口仍按原规则判断。可信 TypeScript 调用方可在 reader.inspect 中显式设置 allowAuxiliaryPropertyGaps:true 使用同一规则；此选项默认关闭，只在客户端解释，不发送给 MCP，不属于 JSON 配方参数。reader.review 的严格行为不变。
+ID 模式允许 className、bounds、isOffscreen 的辅助属性缺口，仍在步骤证据中保留原始 propertyIssues 和数量；身份、启用状态、toggle、搜索／遍历完整性、歧义和未分类缺口仍按原规则判断。可信 TypeScript 调用方可在 reader.inspect 中显式设置 allowAuxiliaryPropertyGaps:true 使用同一规则；此选项默认关闭，只在客户端解释，不发送给 MCP，不属于 JSON 配方参数。reader.review 的严格行为不变。
+
+名称模式在区域后代中检查精确名称与 CheckBox 类型；同名 Text 不计入。仅当某个可读字段明确不匹配时才排除节点，身份不全且可能匹配的节点仍阻断唯一性。所选控件必须有可读名称、类型、isEnabled 和确定的 On/Off，区域 ID 也必须可读。已知且无关的属性缺口保留但不阻断；未分类缺口和无法解释的缺口总数仍阻断。该规则只由名称配方通过客户端 allowPropertyGaps 执行，不改变默认 reader、ID 模式或原生工具的行为。
 
 ## 同级标题之间的条目
 

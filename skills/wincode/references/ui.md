@@ -61,10 +61,18 @@ UI 请求原始 JSON 总计上限 64 KiB，hwnd 最长 32 字符。query 搜索�
 {"id":"audit1","action":"readonly-ui","recipe":"checkbox-audit","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"scopePath":[{"automationId":"settings"}],"regionAutomationId":"checks","checkboxAutomationIds":["optionA","optionB"]},"timeoutMs":15000}
 ```
 
-- 必填 regionAutomationId 和 1–64 个不重复的 checkboxAutomationIds。目标须在区域内唯一，类型为 CheckBox，isEnabled 已知，toggle 为 On/Off。
+- 必填 regionAutomationId，另选 checkboxAutomationIds 或 checkboxSelectors，不能同时提供。ID 模式接受 1–64 个不重复的 ID；目标须在区域内唯一，类型为 CheckBox，isEnabled 已知，toggle 为 On/Off。
 - 可选 summaryAutomationId：On 才读详情，Off 返回 detailsRequired:false，未知停止。省略则直接统计。
 - 可选 scopePath 同时限定摘要和详情，每次重新解析。maxDepth 默认 4、范围 1–50；maxNodes 默认 300、范围 1–5000。
 - 返回 checkedCount、unchecked、disabled；带摘要时详情位于 details。禁用且 On 仍计入数量。className/bounds/isOffscreen 缺口保留为证据，不阻断已知状态；身份、必要状态和读取完整性仍需成立。
+
+没有 AutomationId 时，用明确的名称与类型：
+
+```json
+{"id":"audit-names","action":"readonly-ui","recipe":"checkbox-audit","target":{"pid":1234,"hwnd":"0x123456"},"parameters":{"regionAutomationId":"checks","checkboxSelectors":[{"name":"24 小时制","controlType":"CheckBox"},{"name":"以大屏幕模式启动 Steam","controlType":"CheckBox"}]},"timeoutMs":15000}
+```
+
+名称模式接受 1–64 个互不重复的精确选择器，只允许 name 和固定的 controlType:"CheckBox"；ID、名称、PID/HWND 均需来自实际观察。unchecked、disabled 返回选择器对象，保留请求顺序；旧 ID 模式仍返回排序后的 ID 字符串。所选控件的名称、类型、isEnabled、On/Off 与区域 ID 必须可读。同名 Text 可排除，但身份未知且可能匹配的节点会阻断唯一性。非必要的已知属性缺口保留为证据；未分类缺口、搜索／父范围／遍历不完整仍停止。不把未知状态当 Off，也不更改设置。
 
 ### sibling-range
 

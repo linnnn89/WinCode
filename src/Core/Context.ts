@@ -1,4 +1,5 @@
 import { type OperationContext, checkOperation, rethrowOperationError } from './OperationContext.js';
+import { measureOperation } from './OperationMetrics.js';
 /**
  * Task context for agents: ranked file evidence (path/symbol/line/snippet) inside a token budget.
  * Does not invent architecture advice when evidence is missing. includeFullText packs only the related set.
@@ -194,7 +195,8 @@ export class ContextManager {
     config: WinCodeConfig,
     workspace: WorkspaceManager,
     repomix: ContextPacker,
-    queries: ContextCodeQuery
+    queries: ContextCodeQuery,
+    private readonly options: { batchSymbols?: boolean } = {}
   ) {
     this.config = config;
     this.workspace = workspace;
@@ -212,9 +214,9 @@ export class ContextManager {
     const budgetTokens = Math.max(512, opts.maxTokens ?? 8000);
     const maxChars = budgetTokens * 4;
 
-    const identity: ProjectIdentity = await this.workspace.identifyProject(operation);
+    const identity: ProjectIdentity = await measureOperation(operation?.metrics, 'context.project', () => this.workspace.identifyProject(operation));
     const keywords = scope || ranges.size ? [] : this.extractKeywords(task);
-    const collected = await this.collectSymbolEvidence(opts, scope, keywords, operation);
+    const collected = await measureOperation(operation?.metrics, 'context.symbols', () => this.collectSymbolEvidence(opts, scope, keywords, operation));
     const { limitations, fileIssues, keySymbols, sourceContents } = collected;
     let { queryComplete, truncated } = collected;
 
@@ -262,8 +264,8 @@ export class ContextManager {
       if (opts.symbol && !selectedSymbols.has(rel)) continue;
       if (ranges.size && !ranges.has(rel)) continue;
       if (usedChars >= maxChars || evidence.length >= 20) { truncated = true; break; }
-      const snippet = await this.readSnippet(rel, [...selectedSymbols.values()], includeFullText,
-        ranges.has(rel) ? maxChars - usedChars : Math.min(4000, maxChars - usedChars), fileIssues, ranges.get(rel), sourceContents.get(rel), operation);
+      const snippet = await measureOperation(operation?.metrics, 'context.snippets', () => this.readSnippet(rel, [...selectedSymbols.values()], includeFullText,
+        ranges.has(rel) ? maxChars - usedChars : Math.min(4000, maxChars - usedChars), fileIssues, ranges.get(rel), sourceContents.get(rel), operation));
       if (!snippet) continue;
       const symbol = snippet.symbol;
       evidence.push({
@@ -296,7 +298,7 @@ export class ContextManager {
         candidateFiles: evidence.map(item => item.file),
         maxFiles: 20,
       };
-      const snapshot = await this.repomix.packWorkspace(packOptions, operation);
+      const snapshot = await measureOperation(operation?.metrics, 'context.pack', () => this.repomix.packWorkspace(packOptions, operation));
       snapshotSource = snapshot.source;
       fromCache = snapshot.fromCache;
       packedContent = snapshot.content;
@@ -331,10 +333,12 @@ export class ContextManager {
     const uniqueLimitations = Array.from(new Set(limitations));
     const guidance = this.generateGuidance(task, identity, evidence, evidenceInsufficient);
 
+    const endFormat = operation?.metrics?.start('context.format');
     const { executiveSummary, formattedContent } = this.formatContext({
       task, identity, budgetTokens, includeFullText, evidence, omittedFiles, evidenceInsufficient,
       guidance, keySymbols, packedContent, uniqueLimitations,
     });
+    endFormat?.();
 
     checkOperation(operation);
     const relatedFiles = Array.from(related.entries()).map(([p, reason]) => ({
@@ -403,6 +407,8 @@ export class ContextManager {
             fileIssues.push({ path: file, reason: 'unsupported-symbol-language' }); continue;
           }
           const source = await fs.readFile(full, { encoding: 'utf8', signal: operation?.signal });
+          operation?.metrics?.count('context.fileReadCalls');
+          operation?.metrics?.count('context.decodedTextBytes', Buffer.byteLength(source));
           sourceContents.set(file, source);
           const matches = this.queries.findSymbolsInContent(source, file)
             .filter(symbol => symbol.name === opts.symbol);
@@ -417,9 +423,12 @@ export class ContextManager {
       queryComplete = false;
       limitations.push('Scoped symbol matching uses local declaration patterns, not semantic analysis; matches may be incomplete. Use lineRanges for exact known locations.');
     }
-    for (const kw of keywords.slice(0, 4)) {
+    const selectedKeywords = keywords.slice(0, 4);
+    const batch = this.options.batchSymbols !== false && selectedKeywords.length > 1 && this.queries.findSymbolsBatchDetailed
+      ? await this.queries.findSymbolsBatchDetailed(selectedKeywords, operation) : undefined;
+    for (const [index, kw] of selectedKeywords.entries()) {
       checkOperation(operation);
-      const detailed =
+      const detailed = batch ? batch[index] :
         typeof this.queries.findSymbolsDetailed === 'function'
           ? await this.queries.findSymbolsDetailed(kw, undefined, undefined, operation)
           : { symbols: await this.queries.findSymbols(kw, undefined, operation), source: 'local-text' as const };
@@ -591,6 +600,10 @@ export class ContextManager {
       if (!stat.isFile()) { issues.push({ path: rel, reason: 'not-file' }); return null; }
       if (stat.size >= 500_000) { issues.push({ path: rel, reason: 'file-too-large' }); return null; }
       const content = sourceContent ?? await fs.readFile(fullPath, { encoding: 'utf8', signal: operation?.signal });
+      if (sourceContent === undefined) {
+        operation?.metrics?.count('context.fileReadCalls');
+        operation?.metrics?.count('context.decodedTextBytes', Buffer.byteLength(content));
+      }
       const lines = content.split(/\r?\n/);
       if (range && range.endLine > lines.length) {
         issues.push({ path: rel, reason: 'line-range-out-of-bounds', fileLineCount: lines.length });

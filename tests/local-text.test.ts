@@ -8,6 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { LocalTextAdapter } from '../src/Adapters/LocalTextAdapter.js';
 import { getDefaultConfig } from '../src/Core/Config.js';
+import { CacheManager } from '../src/Core/Cache.js';
+import { OperationMetrics } from '../src/Core/OperationMetrics.js';
 
 async function fixture(run: (adapter: LocalTextAdapter, root: string, cached: Map<string, unknown>) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-text-bounds-'));
@@ -20,6 +22,71 @@ async function fixture(run: (adapter: LocalTextAdapter, root: string, cached: Ma
   try { await run(adapter, root, cached); }
   finally { await adapter.dispose(); await fs.rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 }
+
+it('batch shares one bounded read and preserves ordered query results across edits and deletion', async () => fixture(async (_adapter, root) => {
+  const adapter = new LocalTextAdapter(getDefaultConfig(root), new CacheManager(path.join(root, '.cache')));
+  await fs.writeFile(path.join(root, 'A.ts'), 'export function Alpha() {}\nexport function AlphaBravo() {}');
+  await fs.writeFile(path.join(root, 'B.ts'), 'export function Bravo() {}');
+  const queries = ['Alpha', 'bravo', 'Missing', 'Alpha'];
+  const expected = [['Alpha', 'AlphaBravo'], ['AlphaBravo', 'Bravo'], [], ['Alpha', 'AlphaBravo']];
+  const metrics = new OperationMetrics();
+  const batch = await adapter.findSymbolsBatchDetailed(queries, { metrics });
+  assert.deepEqual(batch.map(result => result.symbols.map(symbol => symbol.name)), expected);
+  assert.equal(metrics.counters['scan.invocations'], 1);
+  assert.equal(metrics.counters['scan.fileOpenAttempts'], 2);
+  for (let i = 0; i < queries.length; i++) assert.deepEqual(batch[i], await adapter.findSymbolsDetailed(queries[i]));
+  const config = getDefaultConfig(root), workspace = new WorkspaceManager(config);
+  const packer = { packWorkspace: async (): Promise<never> => { throw new Error('Unexpected full-text packing'); } };
+  const normalMetrics = new OperationMetrics(), experimentMetrics = new OperationMetrics();
+  const normal = await new ContextManager(config, workspace, packer, adapter).prepareContext({ task: 'Alpha Bravo' }, { metrics: normalMetrics });
+  const experiment = await new ContextManager(config, workspace, packer, adapter, { batchSymbols: false })
+    .prepareContext({ task: 'Alpha Bravo' }, { metrics: experimentMetrics });
+  assert.deepEqual(experiment, normal);
+  assert.equal(normalMetrics.counters['scan.invocations'], 1, 'Production defaults share one scan.');
+  assert.equal(experimentMetrics.counters['scan.invocations'], 2, 'The benchmark can retain the sequential baseline.');
+  await fs.writeFile(path.join(root, 'A.ts'), 'export function AlphaChanged() {}');
+  await fs.unlink(path.join(root, 'B.ts'));
+  const changed = await adapter.findSymbolsBatchDetailed(['Alpha', 'Bravo']);
+  assert.deepEqual(changed.map(result => result.symbols.map(symbol => symbol.name)), [['AlphaChanged'], []]);
+  assert.ok(changed.every(result => result.queryComplete && !result.truncated));
+}));
+
+it('batch retains per-query result limits and bounded scan diagnostics using sequential fallback', async () => fixture(async (adapter, root) => {
+  await fs.writeFile(path.join(root, 'Types.cs'), Array.from({ length: 510 }, (_, i) => `class Type${i} {}`).join('\n'));
+  const metrics = new OperationMetrics();
+  const batch = await adapter.findSymbolsBatchDetailed(['Type', 'Type509'], { metrics });
+  assert.equal(metrics.counters['symbols.batchFallbacks'], 1);
+  assert.equal(batch[0].symbols.length, 500);
+  assert.equal(batch[0].queryComplete, false);
+  assert.deepEqual(batch[1].symbols.map(symbol => symbol.name), ['Type509']);
+  assert.equal(batch[1].queryComplete, true);
+  for (let i = 0; i < batch.length; i++) assert.deepEqual(batch[i], await adapter.findSymbolsDetailed(['Type', 'Type509'][i]));
+  await fs.writeFile(path.join(root, 'Oversize.ts'), ' '.repeat(256 * 1024 + 1));
+  const bounded = await adapter.findSymbolsBatchDetailed(['Missing', 'Absent']);
+  for (let i = 0; i < bounded.length; i++) {
+    assert.deepEqual(bounded[i], await adapter.findSymbolsDetailed(['Missing', 'Absent'][i]));
+    assert.equal(bounded[i].queryComplete, false);
+    assert.equal(bounded[i].truncated, true);
+    assert.ok(bounded[i].fileIssues?.some(issue => issue.reason === 'file-byte-limit'));
+  }
+}));
+
+it('batch keeps encoding gaps visible and propagates cancellation without reading', async () => fixture(async (adapter, root) => {
+  await fs.writeFile(path.join(root, 'Good.ts'), 'export function Alpha() {}');
+  await fs.writeFile(path.join(root, 'Bad.ts'), Buffer.from([0xff, 0xfe, 0x00]));
+  const batch = await adapter.findSymbolsBatchDetailed(['Alpha', 'Missing']);
+  for (let i = 0; i < batch.length; i++) {
+    assert.deepEqual(batch[i], await adapter.findSymbolsDetailed(['Alpha', 'Missing'][i]));
+    assert.equal(batch[i].queryComplete, false);
+    assert.equal(batch[i].truncated, false);
+    assert.ok(batch[i].fileIssues?.some(issue => issue.path === 'Bad.ts' && issue.reason === 'encoding'));
+  }
+  const metrics = new OperationMetrics();
+  await assert.rejects(adapter.findSymbolsBatchDetailed(['Alpha', 'Missing'], { signal: AbortSignal.abort(), metrics }), /cancel/i);
+  assert.deepEqual(metrics.counters, {});
+  await assert.rejects(adapter.findSymbolsBatchDetailed(['Alpha', 'Missing'], { deadline: 0, metrics }), /timed out/i);
+  assert.deepEqual(metrics.counters, {});
+}));
 
 it('enforces the reference limit across sibling directories and does not cache partial results', async () => fixture(async (adapter, root, cached) => {
   for (const dir of ['a', 'b', 'c']) {

@@ -381,6 +381,8 @@ export class RepomixAdapter implements IAdapter {
           if (stat.isFile() && stat.size < 500_000) {
             const relPath = path.relative(root, fullPath).replace(/\\/g, '/');
             const content = await fs.readFile(fullPath, { encoding: 'utf8', signal: operation?.signal });
+            operation?.metrics?.count('pack.fileReadCalls');
+            operation?.metrics?.count('pack.decodedTextBytes', Buffer.byteLength(content));
             collectedFiles.push({ relPath, content });
           }
         } catch (error) {

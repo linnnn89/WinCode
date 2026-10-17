@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
+import { measureOperation } from './OperationMetrics.js';
 
 /** 扫描完成仅指文本扫描范围，不代表语义引用完整。 */
 export interface LocalScanResult<T> {
@@ -13,6 +14,7 @@ export interface LocalScanResult<T> {
 export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensions: string[], maxResults: number,
   extract: (content: string, relPath: string, ext: string, sizeBytes: number) => Iterable<T>, relativePath?: string | string[], operation?: OperationContext
 ): Promise<LocalScanResult<T>> {
+  operation?.metrics?.count('scan.invocations');
   const items: T[] = [];
   const reasons = new Set<string>();
   const fileIssues: LocalScanResult<T>['fileIssues'] = [];
@@ -62,7 +64,8 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
       if (visited.has(key)) return;
       visited.add(key);
       if (!canContinue()) return;
-      const handle = await fs.open(actualPath, 'r');
+      operation?.metrics?.count('scan.fileOpenAttempts');
+      const handle = await measureOperation(operation?.metrics, 'scan.fileOpen', () => fs.open(actualPath, 'r'));
       try {
         const stat = await handle.stat();
         if (!stat.isFile()) { issue('read-error'); return; }
@@ -74,7 +77,9 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
         let used = 0;
         let eof = false;
         while (used < buffer.length && canContinue()) {
-          const chunk = await handle.read(buffer, used, buffer.length - used, null);
+          operation?.metrics?.count('scan.readCalls');
+          const chunk = await measureOperation(operation?.metrics, 'scan.read', () => handle.read(buffer, used, buffer.length - used, null));
+          operation?.metrics?.count('scan.bytesRead', chunk.bytesRead);
           bytesRead += chunk.bytesRead;
           used += chunk.bytesRead;
           if (chunk.bytesRead === 0) { eof = true; break; }
@@ -88,6 +93,7 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
           if (content.includes('\0')) { issue('encoding'); return; }
         } catch { issue('encoding'); return; }
         filesRead++;
+        operation?.metrics?.count('scan.filesDecoded');
         for (const item of extract(content, path.relative(root, fullPath), ext, used)) {
           if (!canContinue()) break;
           items.push(item);
@@ -105,8 +111,10 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
       const actualPath = await fs.realpath(dir);
       if (!isInside(actualPath, realRoot)) { mark('invalid-scope', false, false, path.relative(root, dir)); return; }
       // Stream directory entries so an enormous directory does not allocate an unbounded array.
+      operation?.metrics?.count('scan.directoryOpenAttempts');
       const handle = await fs.opendir(dir);
       for await (const entry of handle) {
+        operation?.metrics?.count('scan.entriesVisited');
         if (!canContinue()) break;
         if (++entriesVisited > 5000) { mark('entry-limit', true, true); break; }
         const fullPath = path.join(dir, entry.name);

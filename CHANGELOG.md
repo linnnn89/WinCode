@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.17.0 (unreleased)
+## 0.17.1 (2026-10-17)
+
+- Share one request-local source scan by default for up to four local-text keywords in `prepare_context`, preserving query order, diagnostics and scoped/ranged bypasses. Bounded scans or any query reaching 500 matches fall back to sequential queries under the existing deadline and can cost more. Add opt-in internal phase/work metrics and a model-free paired `benchmark:context` command with an explicit sequential baseline. No new MCP arguments, dependencies, persistent source cache or UI behavior changes.
+- Update the managed Skill to explain multi-name context requests, existing scan limits, fallback cost and incomplete-result handling.
+
+## 0.17.0
 
 - Add an explicit name + CheckBox selector mode to checkbox-audit for controls without AutomationIds. Validate only task-relevant known properties while retaining raw gaps and refusing uncertain identity, ambiguity, unknown state and incomplete coverage. Preserve the existing ID-based parameter, result and validation contracts; named results return exact selectors in request order. No UI actions or default configuration changes.
 - Reorganize the four managed Skill documents by task. Keep the entry short, place executable UI recipe examples inside the installed Skill, and remove duplicated instructions and historical iteration notes.

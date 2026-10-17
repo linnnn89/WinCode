@@ -1,7 +1,8 @@
 import { AbortError, TimeoutError, type QueueObserver } from './ResourceManager.js';
+import type { OperationMetrics } from './OperationMetrics.js';
 
 /** Internal request lifetime; never part of the public JSON tool arguments. */
-export interface OperationContext { signal?: AbortSignal; deadline?: number; queue?: QueueObserver }
+export interface OperationContext { signal?: AbortSignal; deadline?: number; queue?: QueueObserver; metrics?: OperationMetrics }
 
 export function checkOperation(operation?: OperationContext): void {
   if (operation?.signal?.aborted) {

@@ -66,6 +66,10 @@ wincode_prepare_context 参数：
 {"task":"核对保存失败时的资源释放","lineRanges":[{"file":"src/Service.cs","startLine":50,"endLine":80}],"maxTokens":2000}
 ```
 
+未知文件但知道多个相关声明名时，可在同一次 task 中列出名称，例如 `{"task":"ChatViewModel ConversationWindowService 核对窗口关闭流程","maxTokens":8000}`。0.17.1 的 local-text 默认将最多 4 个提取关键词合并为一次工作区扫描；把关键声明名放在描述前面，无需也不要添加 `batchSymbols` 等未公布的 MCP 参数。单关键词、`scopeFiles`、`lineRanges` 和不支持批量查询的提供方保持原有路径，不要为凑批量而扩大任务范围。
+
+任一关键词达到 500 条声明匹配，或扫描因文件、总字节、枚举项、时间预算截断时，工具在剩余请求期限内回退逐关键词查询，以保留各查询的结果与缺口；这种情况可能更慢。保持单文件 256KiB、总读取 8MiB、最多 5000 枚举项的每次扫描限制。`Async` 等宽泛词容易碰到结果上限，优先使用具体声明名。合并扫描不提高语义完整性；继续检查 `queryComplete`、`limitations` 及相关范围信息，`lexical-uncertainty` 仍表示有文件无法可靠解析。计时与工作计数供本地基准使用，不是新的工具参数或响应字段。
+
 先读 summary 的 scope/status/nextAction，再核对正文与 coverage。requested-lines、packed-files、displayed-snippets 是不同范围；complete 只描述该范围。lineRanges 检查 allRequestedCovered、completeLines、missingRanges；endLineComplete:false 时补读整条尾行。越界可用返回的有效交集 nextRequest；maximum-budget-without-progress 时改用文件读取，不重复原请求。
 
 symbol 只读取声明附近窗口，symbolCoverage:unknown；必要时用 nextRequest 继续。scopeFiles/symbol 的 coverage 可能为 null，不能据 queryComplete 或非空正文认定整个方法已覆盖。candidateFiles 只是优先候选，排他范围必须使用 scopeFiles；focusAreas 仅有限发现目录直属文件。

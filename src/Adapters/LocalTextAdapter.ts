@@ -4,7 +4,8 @@ import type { WinCodeConfig } from '../Core/Config.js';
 import type { AdapterHealth } from '../Core/AdapterStatus.js';
 import type { CacheManager } from '../Core/Cache.js';
 import { checkOperation, type OperationContext } from '../Core/OperationContext.js';
-import { scanLocalFiles } from '../Core/LocalTextScanner.js';
+import { scanLocalFiles, type LocalScanResult } from '../Core/LocalTextScanner.js';
+import { measureOperation } from '../Core/OperationMetrics.js';
 import { parseTextDeclarations } from '../Core/TextDeclarations.js';
 import { CodeQueryError, LOCAL_TEXT_LIMITATIONS, computeTypeMatchStats,
   type CodeSymbol, type SymbolReference, type FindSymbolsResult, type FindReferencesResult } from '../Core/CodeQueries.js';
@@ -43,14 +44,40 @@ export class LocalTextAdapter {
   async findSymbolsDetailed(query: string, kind?: string, relativePath?: string, operation?: OperationContext): Promise<FindSymbolsResult> {
     checkOperation(operation);
     // Re-enumerate the bounded scan so additions, deletions and missed watch events cannot hide behind a workspace hint.
-    const scan = await scanLocalFiles(this.config.workspaceRoot, this.config.timeouts.fileScanMs,
+    const scan = await measureOperation(operation?.metrics, 'symbols.scan', () => scanLocalFiles(this.config.workspaceRoot, this.config.timeouts.fileScanMs,
       ['.cs', '.ts', '.tsx', '.js', '.jsx', '.py'], 500,
-      (content, file, extension) => this.cache.memoizeContent(
-        `text_declarations_v1_${this.config.workspaceRoot}_${file}`,
-        crypto.createHash('sha256').update(content).digest('hex'),
-        () => parseTextDeclarations(content, file, extension, () => checkOperation(operation))).filter(symbol =>
+      (content, file, extension) => this.declarations(content, file, extension, operation).filter(symbol =>
         symbol.name.toLowerCase().includes(query.toLowerCase()) && (!kind || symbol.kind.toLowerCase() === kind.toLowerCase())),
-      relativePath, operation);
+      relativePath, operation));
+    checkOperation(operation);
+    return this.symbolResult(query, kind, scan);
+  }
+
+  /** Share enumeration and file reads only within this request; never reuse a disk snapshot across calls. */
+  async findSymbolsBatchDetailed(queries: string[], operation?: OperationContext): Promise<FindSymbolsResult[]> {
+    checkOperation(operation);
+    if (!queries.length || queries.length > 4) throw new Error('Symbol batches require 1-4 queries.');
+    if (queries.length === 1) return [await this.findSymbolsDetailed(queries[0], undefined, undefined, operation)];
+    operation?.metrics?.count('symbols.batchCalls');
+    const needles = queries.map(query => query.toLowerCase());
+    const scan = await measureOperation(operation?.metrics, 'symbols.scan', () => scanLocalFiles(this.config.workspaceRoot,
+      this.config.timeouts.fileScanMs, ['.cs', '.ts', '.tsx', '.js', '.jsx', '.py'], 500 * queries.length,
+      (content, file, extension) => this.declarations(content, file, extension, operation)
+        .filter(symbol => needles.some(needle => symbol.name.toLowerCase().includes(needle))), undefined, operation));
+    const groups = needles.map(needle => scan.items.filter(symbol => symbol.name.toLowerCase().includes(needle)));
+    // A bounded scan can stop at different files for different queries. Retain the original per-query
+    // truncation, issue order and result-limit contracts instead of inventing complete batch results.
+    if (scan.truncated || groups.some(items => items.length >= 500)) {
+      operation?.metrics?.count('symbols.batchFallbacks');
+      const results: FindSymbolsResult[] = [];
+      for (const query of queries) results.push(await this.findSymbolsDetailed(query, undefined, undefined, operation));
+      return results;
+    }
+    checkOperation(operation);
+    return queries.map((query, index) => this.symbolResult(query, undefined, { ...scan, items: groups[index] }));
+  }
+
+  private symbolResult(query: string, kind: string | undefined, scan: LocalScanResult<CodeSymbol>): FindSymbolsResult {
     const stats = computeTypeMatchStats(scan.items, query);
     const result: FindSymbolsResult = {
       query, kindFilter: kind, totalFound: scan.items.length, symbols: scan.items, source: 'local-text',
@@ -60,8 +87,21 @@ export class LocalTextAdapter {
       fileIssues: scan.fileIssues, fileIssuesOmitted: scan.fileIssuesOmitted,
       uniqueTypeMatch: scan.complete && !scan.truncated && stats.uniqueTypeMatch, typeMatchCount: stats.typeMatchCount,
     };
-    checkOperation(operation);
     return result;
+  }
+
+  private declarations(content: string, file: string, extension: string, operation?: OperationContext): CodeSymbol[] {
+    const end = operation?.metrics?.start('symbols.hashCacheParse');
+    try {
+      operation?.metrics?.count('symbols.contentHashes');
+      return this.cache.memoizeContent(`text_declarations_v1_${this.config.workspaceRoot}_${file}`,
+        crypto.createHash('sha256').update(content).digest('hex'), () => {
+          operation?.metrics?.count('symbols.parseCalls');
+          const endParse = operation?.metrics?.start('symbols.parse');
+          try { return parseTextDeclarations(content, file, extension, () => checkOperation(operation)); }
+          finally { endParse?.(); }
+        });
+    } finally { end?.(); }
   }
 
   async findReferences(symbolName: string, relativePath?: string, operation?: OperationContext): Promise<SymbolReference[]> {

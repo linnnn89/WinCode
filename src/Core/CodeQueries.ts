@@ -139,4 +139,6 @@ export interface CodeReferenceQuery extends CodeSymbolQuery {
 
 export interface ContextCodeQuery extends CodeSymbolQuery {
   findSymbolsInContent(content: string, relativePath: string): CodeSymbol[];
+  /** Optional request-local batch; providers without it keep sequential queries. */
+  findSymbolsBatchDetailed?(queries: string[], operation?: OperationContext): Promise<FindSymbolsResult[]>;
 }

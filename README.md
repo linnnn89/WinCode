@@ -174,7 +174,7 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 
 ### Development and documentation
 
-Current source version: **0.17.0**. See [CHANGELOG](CHANGELOG.md) for version history and migration notes. Windows 11 x64 is the reference platform; ports to other operating systems require adaptation and separate validation.
+Current source version: **0.17.1**. See [CHANGELOG](CHANGELOG.md) for version history and migration notes. Windows 11 x64 is the reference platform; ports to other operating systems require adaptation and separate validation.
 
 ```powershell
 npm run check            # Builds, core regression, stdio integration and delivery verification
@@ -182,7 +182,10 @@ npm run check:desktop    # WPF and UI-to-source tests; requires an interactive W
 npm run delivery:verify  # Verify Gateway, native components and managed Skill artifacts
 npm run test:inventory   # Verify automated-test suite registration
 npm run benchmark:agent -- 1  # Run one iteration of the optional scripted benchmark
+npm run benchmark:context -- compare 8  # Model-free, paired sequential/batch context experiment
 ```
+
+`benchmark:context` accepts `baseline|compare`, 1–100 repetitions, and an optional existing WinCode checkout path. Without a path it creates an isolated fixture under ignored `test-tmp/context-work/`; reports remain there. It exercises real MCP handlers over in-memory transport, records request-local inclusive phase times and application-level scan/read/parse counters, checks paired response equality and source evidence, and verifies input hashes. `first` means a fresh application cache, not cold OS disk cache. Initialization, prewarm and cleanup are excluded; no model, UIA, or network is used. Production local-text context requests batch up to four extracted keywords by default; the benchmark explicitly selects sequential queries as its baseline. Truncated/capped batches fall back to sequential queries and may cost more; no P95 or general Agent speedup is inferred.
 
 [CI](https://github.com/linnnn89/WinCode/actions/workflows/ci.yml) runs on Windows with Node.js 22 and 24 and the pinned .NET SDK. The Node.js 22 job includes additional native and integration checks; desktop tests run separately. Benchmark reports measure scripted scenarios, including calls, response size and execution time. See the linked records for test conditions and results.
 
@@ -346,7 +349,7 @@ npm run delivery:verify
 
 ### 开发与文档
 
-当前源码版本为 **0.17.0**。版本历史和迁移说明见 [CHANGELOG](CHANGELOG.md)。项目以 Windows 11 x64 为基准平台，移植至其他操作系统需要适配并单独验证。
+当前源码版本为 **0.17.1**。版本历史和迁移说明见 [CHANGELOG](CHANGELOG.md)。项目以 Windows 11 x64 为基准平台，移植至其他操作系统需要适配并单独验证。
 
 ```powershell
 npm run check            # 构建、核心回归、stdio 集成和交付校验
@@ -354,7 +357,10 @@ npm run check:desktop    # WPF 与 UI 源码关联测试，需要交互式 Windo
 npm run delivery:verify  # 校验 Gateway、原生组件和交付清单中的 Skill 文件
 npm run test:inventory   # 核对自动化测试的套件注册情况
 npm run benchmark:agent -- 1  # 执行一轮可选的脚本化基准测试
+npm run benchmark:context -- compare 8  # 不调用模型，对照逐关键词和批量上下文查询
 ```
+
+`benchmark:context` 接受 `baseline|compare`、1–100 次重复及可选的现有 WinCode 工作区路径。省略路径时，在已忽略的 `test-tmp/context-work/` 创建隔离样本并保留 JSON 报告。通过内存内 MCP transport 调用真实 handler，记录请求级包含子阶段的耗时与应用层扫描、读取、解析计数，核对配对响应、源码证据和输入哈希。`first` 仅表示应用缓存未预热，不代表冷磁盘缓存；计时排除初始化、预热和清理，不调用模型、UIA 或网络。生产 local-text 上下文请求默认合并最多四个提取关键词的扫描；基准显式选择逐关键词路径作为对照。截断或达到结果上限时回退逐查询，可能更慢；报告不推断 P95 或通用 Agent 提速。
 
 [CI](https://github.com/linnnn89/WinCode/actions/workflows/ci.yml) 在 Windows 环境中使用 Node.js 22、24 和固定版本的 .NET SDK 运行。在 Node.js 22 的任务中，还会额外执行原生组件与集成检查；桌面测试单独运行。基准报告记录脚本化场景中的调用次数、响应大小和执行时间，具体测试条件及结果见以下文档。
 

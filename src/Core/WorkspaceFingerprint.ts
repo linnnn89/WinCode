@@ -2,11 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { runGit } from './GitClient.js';
+import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 
 /** 文本缓存的有界变更提示及短时复用；它不是 Roslyn 编译输入快照，也不证明全仓内容相同。 */
 export class WorkspaceFingerprint {
   private fpMemo = new Map<string, { value: string; expiresAt: number; cheap: string }>();
-  private fpInflight = new Map<string, Promise<string>>();
+  private fpInflight = new Map<string, { shared?: Promise<string> }>();
   private watchGeneration = new Map<string, number>();
   constructor(private fingerprintMemoMs: number) {}
 
@@ -21,10 +22,12 @@ export class WorkspaceFingerprint {
    */
   async computeWorkspaceFingerprint(
     workspaceRoot: string,
-    options?: { fresh?: boolean }
+    options?: { fresh?: boolean },
+    operation?: OperationContext
   ): Promise<string> {
     const resolvedRoot = path.resolve(workspaceRoot);
-    const cheap = await this.cheapChangeProbe(resolvedRoot);
+    const cheap = await this.cheapChangeProbe(resolvedRoot, operation);
+    checkOperation(operation);
     if (options?.fresh) {
       this.invalidateFingerprint(resolvedRoot);
     } else {
@@ -32,27 +35,23 @@ export class WorkspaceFingerprint {
       if (memo && memo.expiresAt > Date.now() && memo.cheap === cheap) {
         return memo.value;
       }
-      const inflight = this.fpInflight.get(resolvedRoot);
-      if (inflight) return inflight;
+      const shared = this.fpInflight.get(resolvedRoot)?.shared;
+      if (shared && !operation) return shared;
     }
 
-    const pending = this.computeWorkspaceFingerprintUncached(resolvedRoot)
-      .then((value) => {
-        this.fpMemo.set(resolvedRoot, {
-          value,
-          expiresAt: Date.now() + this.fingerprintMemoMs,
-          cheap,
-        });
-        this.fpInflight.delete(resolvedRoot);
-        return value;
-      })
-      .catch((err) => {
-        this.fpInflight.delete(resolvedRoot);
-        throw err;
-      });
-
-    this.fpInflight.set(resolvedRoot, pending);
-    return pending;
+    const pending = this.computeWorkspaceFingerprintUncached(resolvedRoot, operation);
+    // A cancelled caller owns its computation. Invalidation or a newer observer revokes the right to publish a memo.
+    const observation = { shared: operation ? undefined : pending };
+    this.fpInflight.set(resolvedRoot, observation);
+    try {
+      const value = await pending;
+      checkOperation(operation);
+      if (this.fpInflight.get(resolvedRoot) === observation)
+        this.fpMemo.set(resolvedRoot, { value, cheap, expiresAt: Date.now() + this.fingerprintMemoMs });
+      return value;
+    } finally {
+      if (this.fpInflight.get(resolvedRoot) === observation) this.fpInflight.delete(resolvedRoot);
+    }
   }
 
   /**
@@ -75,7 +74,7 @@ export class WorkspaceFingerprint {
     this.fpInflight.delete(resolved);
   }
 
-  private async cheapChangeProbe(resolvedRoot: string): Promise<string> {
+  private async cheapChangeProbe(resolvedRoot: string, operation?: OperationContext): Promise<string> {
     const gen = this.watchGeneration.get(resolvedRoot) ?? 0;
     const candidates = [
       path.join(resolvedRoot, '.git', 'HEAD'),
@@ -84,6 +83,7 @@ export class WorkspaceFingerprint {
     ];
     const parts = [`watch:${gen}`];
     for (const file of candidates) {
+      checkOperation(operation);
       try {
         const s = await fs.stat(file);
         parts.push(`${path.basename(file)}:${s.mtimeMs}:${s.size}`);
@@ -94,21 +94,22 @@ export class WorkspaceFingerprint {
     return parts.join('|');
   }
 
-  private async computeWorkspaceFingerprintUncached(resolvedRoot: string): Promise<string> {
+  private async computeWorkspaceFingerprintUncached(resolvedRoot: string, operation?: OperationContext): Promise<string> {
     try {
       const gitPath = path.join(resolvedRoot, '.git');
       const hasGit = await fs.stat(gitPath).catch(() => null);
+      checkOperation(operation);
 
       if (hasGit) {
         try {
-          const [headRes, statusRes] = await Promise.all([
-            runGit(resolvedRoot, ['rev-parse', 'HEAD'], 3000).catch(
-              () => ({ stdout: '' })
-            ),
-            runGit(resolvedRoot, ['status', '--porcelain=v1', '-z'], 5000),
+          const [headRes, statusRes] = await Promise.allSettled([
+            runGit(resolvedRoot, ['rev-parse', 'HEAD'], 3000, operation),
+            runGit(resolvedRoot, ['status', '--porcelain=v1', '-z'], 5000, operation),
           ]);
-          const headCommit = headRes.stdout.trim();
-          const gitStatusRaw = statusRes.stdout;
+          checkOperation(operation);
+          if (statusRes.status === 'rejected') throw statusRes.reason;
+          const headCommit = headRes.status === 'fulfilled' ? headRes.value.stdout.trim() : '';
+          const gitStatusRaw = statusRes.value.stdout;
 
           let branchRef = '';
           if (!headCommit) {
@@ -137,6 +138,7 @@ export class WorkspaceFingerprint {
           }
 
           const itemsToStat = parsedItems.slice(0, 100);
+          checkOperation(operation);
 
           const fileStats = await Promise.all(
             itemsToStat.map(async ({ statusType, relPath, origPath }) => {
@@ -153,10 +155,12 @@ export class WorkspaceFingerprint {
 
           const payload = [headCommit || branchRef || 'no-head', parsedItems.length.toString(), ...fileStats].join('|');
           return crypto.createHash('sha1').update(payload).digest('hex');
-        } catch {
+        } catch (error) {
+          rethrowOperationError(error, operation);
           try {
             const gitHeadPath = path.join(resolvedRoot, '.git', 'HEAD');
             const gitHead = await fs.readFile(gitHeadPath, 'utf-8').catch(() => null);
+            checkOperation(operation);
             if (gitHead) {
               let commitRef = gitHead.trim();
               const match = commitRef.match(/ref:\s*refs\/heads\/([^\r\n]+)/);
@@ -168,6 +172,7 @@ export class WorkspaceFingerprint {
                 }
               }
               let indexStat = '';
+              checkOperation(operation);
               try {
                 const s = await fs.stat(path.join(resolvedRoot, '.git', 'index'));
                 indexStat = `${s.mtimeMs}:${s.size}`;
@@ -175,30 +180,34 @@ export class WorkspaceFingerprint {
                 // ignore
               }
 
-              const dirFp = await this.computeDirectoryFingerprintFallback(resolvedRoot);
+              const dirFp = await this.computeDirectoryFingerprintFallback(resolvedRoot, operation);
               return crypto.createHash('sha1').update(`${commitRef}|${indexStat}|${dirFp}`).digest('hex');
             }
-          } catch {
-            // fall through
+          } catch (error) {
+            rethrowOperationError(error, operation);
           }
         }
       }
 
-      return await this.computeDirectoryFingerprintFallback(resolvedRoot);
-    } catch {
+      return await this.computeDirectoryFingerprintFallback(resolvedRoot, operation);
+    } catch (error) {
+      rethrowOperationError(error, operation);
       return `ts_${Date.now()}`;
     }
   }
 
-  private async computeDirectoryFingerprintFallback(dirPath: string, maxFiles = 100, maxDepth = 3): Promise<string> {
+  private async computeDirectoryFingerprintFallback(dirPath: string, operation?: OperationContext): Promise<string> {
+    const maxFiles = 100, maxDepth = 3;
     const ignoredDirs = new Set(['node_modules', 'bin', 'obj', 'dist', '.git', '.vs', 'trash', '.deps', '.packages']);
     const stats: string[] = [];
 
     const walk = async (currentDir: string, depth: number) => {
+      checkOperation(operation);
       if (depth > maxDepth || stats.length >= maxFiles) return;
       try {
         const entries = await fs.readdir(currentDir, { withFileTypes: true });
         for (const entry of entries) {
+          checkOperation(operation);
           if (stats.length >= maxFiles) break;
           if (entry.isDirectory()) {
             if (!ignoredDirs.has(entry.name) && !entry.name.startsWith('.')) {
@@ -213,8 +222,8 @@ export class WorkspaceFingerprint {
             }
           }
         }
-      } catch {
-        // skip
+      } catch (error) {
+        rethrowOperationError(error, operation);
       }
     };
 

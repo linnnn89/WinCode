@@ -6,7 +6,7 @@ export { type TrashMoveResult, invalidTrashResult, type ProjectIdentity, type Wo
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runGit } from './GitClient.js';
-import { assertLinkFreePath } from './FileSystemBoundary.js';
+import { assertLinkFreePath, assertWorkspaceDirectory } from './FileSystemBoundary.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { WinCodeConfig } from './Config.js';
 import { randomUUID } from 'node:crypto';
@@ -17,8 +17,8 @@ export class WorkspaceManager {
 
   constructor(config: WinCodeConfig) {
     this.config = config;
-    this.binding = Object.freeze({ mode: 'fixed', root: path.resolve(config.workspaceRoot), source: config.workspaceRootSource ?? 'configuration' });
-    // Adapters share this configuration. Prevent internal callers from bypassing the fixed binding.
+    this.binding = Object.freeze({ mode: config.workspaceMode ?? 'fixed', root: path.resolve(config.workspaceRoot), source: config.workspaceRootSource ?? 'configuration' });
+    // Each router and its adapters keep the same root, including on a dynamic connection.
     Object.defineProperty(config, 'workspaceRoot', { value: this.binding.root, enumerable: true, writable: false, configurable: false });
     if (this.config.workspaceRoot && !this.config.trashDir) {
       this.config.trashDir = path.join(this.config.workspaceRoot, 'trash');
@@ -81,13 +81,8 @@ export class WorkspaceManager {
     return this.root;
   }
 
-  async validateRoot(): Promise<void> {
-    await assertLinkFreePath(this.root);
-    const stat = await fs.stat(this.root).catch(error => {
-      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
-      throw error;
-    });
-    if (!stat?.isDirectory()) throw new Error(`Invalid workspace path: "${this.root}". Directory does not exist.`);
+  async validateRoot(operation?: OperationContext): Promise<void> {
+    await assertWorkspaceDirectory(this.root, operation);
   }
 
   /**
@@ -100,21 +95,23 @@ export class WorkspaceManager {
   /**
    * Retrieves Git status safely for the current workspace
    */
-  async getGitStatus(): Promise<WorkspaceGitStatus> {
+  async getGitStatus(operation?: OperationContext): Promise<WorkspaceGitStatus> {
     const gitTimeout = this.config.timeouts?.gitMs ?? 5000;
     try {
-      if ((await runGit(this.root, ['rev-parse', '--is-inside-work-tree'], gitTimeout)).stdout.trim() !== 'true') return { isGit: false };
+      if ((await runGit(this.root, ['rev-parse', '--is-inside-work-tree'], gitTimeout, operation)).stdout.trim() !== 'true') return { isGit: false };
     } catch (error) {
+      rethrowOperationError(error, operation);
       const failure = error as NodeJS.ErrnoException & { stderr?: string };
       if (failure.stderr?.startsWith('fatal: not a git repository')) return { isGit: false };
       return { isGit: null, status: 'unknown', errorCode: failure.code === 'GIT_UNAVAILABLE' ? 'GIT_UNAVAILABLE' : 'GIT_QUERY_FAILED' };
     }
     const [branch, head, status, remote] = await Promise.allSettled([
-      runGit(this.root, ['rev-parse', '--abbrev-ref', 'HEAD'], gitTimeout),
-      runGit(this.root, ['rev-parse', '--short', 'HEAD'], gitTimeout),
-      runGit(this.root, ['status', '--porcelain'], gitTimeout),
-      runGit(this.root, ['remote', 'get-url', 'origin'], gitTimeout),
+      runGit(this.root, ['rev-parse', '--abbrev-ref', 'HEAD'], gitTimeout, operation),
+      runGit(this.root, ['rev-parse', '--short', 'HEAD'], gitTimeout, operation),
+      runGit(this.root, ['status', '--porcelain'], gitTimeout, operation),
+      runGit(this.root, ['remote', 'get-url', 'origin'], gitTimeout, operation),
     ]);
+    checkOperation(operation);
     const clean = status.status === 'fulfilled' ? status.value.stdout.trim().length === 0 : undefined;
     return { isGit: true,
       ...(branch.status === 'fulfilled' ? { branch: branch.value.stdout.trim() } : {}),
@@ -139,11 +136,8 @@ export class WorkspaceManager {
   }
 
   /** Bounded discovery intentionally does not build a tree or stat individual output binaries. */
-  private async discoverProject(): Promise<{
-    identity: ProjectIdentity; complete: boolean; entryPoints: string[];
-    discovery: NonNullable<WorkspaceMetadata['projectDiscovery']>;
-  }> {
-    return discoverProject(this.root);
+  private discoverProject(operation?: OperationContext) {
+    return discoverProject(this.root, operation);
   }
 
   /** Directory browsing is stateless and bounds enumeration as well as final serialization. */
@@ -154,13 +148,16 @@ export class WorkspaceManager {
   /**
    * Describes the bound workspace; opening another root is never a mutation path.
    */
-  async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}): Promise<WorkspaceOpenResult> {
+  async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, operation?: OperationContext): Promise<WorkspaceOpenResult> {
+    checkOperation(operation);
     this.assertWorkspace(targetPath);
     const maxOutputChars = boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
     if (options.includeTree !== undefined && typeof options.includeTree !== 'boolean') throw new Error('includeTree must be a boolean.');
-    await this.validateRoot();
-    const { identity, complete, discovery, entryPoints } = await this.discoverProject();
-    const git = await this.getGitStatus();
+    await this.validateRoot(operation);
+    const { identity, complete, discovery, entryPoints } = await this.discoverProject(operation);
+    checkOperation(operation);
+    const git = await this.getGitStatus(operation);
+    checkOperation(operation);
     const metadata: WorkspaceMetadata = {
       totalFiles: null, totalDirectories: null, totalSizeBytes: null,
       scanScope: 'project-discovery-only', maxScanDepth: discovery.maxDepth,
@@ -185,7 +182,7 @@ export class WorkspaceManager {
       result.outputOmissions.push('omission-details-limit'); result.truncated = true;
     }
     if (options.includeTree) {
-      const listing = await this.listDirectory({ maxDepth: 2, maxEntries: 100, maxOutputChars });
+      const listing = await this.listDirectory({ maxDepth: 2, maxEntries: 100, maxOutputChars }, operation);
       const fileTree: WorkspaceTreeItem = {
         name: path.basename(this.root), path: this.root, relativePath: '.', type: 'directory', children: [],
       };
@@ -229,6 +226,7 @@ export class WorkspaceManager {
       trim(result.entryPoints, 'entryPoints');
     }
     if (!fits()) throw new Error('maxOutputChars cannot contain the workspace identity and required summary.');
+    checkOperation(operation);
     return result;
   }
 

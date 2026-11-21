@@ -48,7 +48,8 @@ export interface RoslynConfig {
 
 export interface WinCodeConfig {
   readonly workspaceRoot: string;
-  workspaceRootSource?: 'argument' | 'cwd' | 'configuration';
+  workspaceMode?: 'fixed' | 'dynamic';
+  workspaceRootSource?: 'argument' | 'cwd' | 'configuration' | 'request';
   cacheDir: string;
   trashDir: string;
   maxTokensPerContext: number;

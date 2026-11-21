@@ -97,7 +97,7 @@ export class ImpactAnalyzer {
       if (!this.queries.findReferencesDetailed) {
         throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'This provider cannot validate an exact semantic location.');
       }
-      selectedReferences = await this.queries.findReferencesDetailed(rawTarget, location.file, operation, location);
+      selectedReferences = await this.queries.findReferencesDetailed(rawTarget, location.file, operation, location, undefined, true);
       if (selectedReferences.source !== 'roslyn') {
         throw new CodeQueryError('UNSUPPORTED_SYMBOL_LOCATION', 'Exact locations require the direct Roslyn provider.');
       }
@@ -125,8 +125,13 @@ export class ImpactAnalyzer {
       limitations: [],
     };
 
-    if (typeof this.queries.findSymbolsDetailed === 'function') {
-      const symRes: FindSymbolsResult = await this.queries.findSymbolsDetailed(symbolName, undefined, location?.file, operation);
+    if (selectedReferences?.declaration) {
+      symbols = [selectedReferences.declaration];
+      assessment.source = selectedReferences.source;
+      assessment.queryComplete = selectedReferences.queryComplete;
+    } else if (typeof this.queries.findSymbolsDetailed === 'function') {
+      const match = location || explicitFileHint ? undefined : 'exact';
+      const symRes: FindSymbolsResult = await this.queries.findSymbolsDetailed(symbolName, undefined, location?.file, operation, match);
       symbols = symRes.symbols || [];
       assessment.source = symRes.source || 'local-text';
       assessment.queryComplete = symRes.queryComplete !== false;
@@ -148,11 +153,15 @@ export class ImpactAnalyzer {
       symbols = symbols.filter(symbol => symbol.location?.snapshotId === location.snapshotId &&
         this.fileIdentity(symbol.location.project) === this.fileIdentity(location.project) &&
         this.fileIdentity(symbol.location.file) === this.fileIdentity(location.file) && symbol.location.position === location.position);
+      if (!symbols.length && assessment.truncated)
+        throw new CodeQueryError('HOST_VERSION_MISMATCH', 'This provider cannot verify the selected declaration within its candidate limit. Update the Code Host.');
       if (symbols.length !== 1) {
         throw new CodeQueryError('SNAPSHOT_STALE', 'Selected declaration is no longer in this search snapshot; search and select again.');
       }
       assessment.unique = true;
       assessment.typeMatchCount = 1;
+      // Once the exact declaration is verified, only truncation of its references affects coverage.
+      assessment.truncated = false;
     } else if (explicitFileHint) {
       const hintBase = path.posix.basename(explicitFileHint.replace(/\\/g, '/'));
       const hasDir = explicitFileHint.includes('/') || explicitFileHint.includes('\\');
@@ -192,12 +201,19 @@ export class ImpactAnalyzer {
         assessment.unique = false;
         assessment.typeMatchCount = 0;
       }
+    } else if (assessment.source === 'roslyn') {
+      // Older hosts can return substring matches. A truncated list cannot prove uniqueness.
+      symbols = symbols.filter(symbol => symbol.name === symbolName);
+      assessment.unique = symbols.length === 1 && !assessment.truncated;
     } else if (!assessment.unique) {
       const exact = symbols.filter(matchesTarget);
       if (assessment.typeMatchCount === 0 && exact.length === 1) {
         assessment.unique = true;
       }
     }
+
+    if (assessment.source === 'roslyn' && !assessment.unique)
+      return this.unresolvedReport(rawTarget, symbolName, assessment, symbols);
 
     let matchedSymbol: CodeSymbol | undefined;
     if (symbols.length > 0) {
@@ -373,14 +389,18 @@ export class ImpactAnalyzer {
   ): ImpactReport {
     const riskLevel: 'UNKNOWN' = 'UNKNOWN';
     const confidence: 'UNCERTAIN' = 'UNCERTAIN';
-    const analysisCompleteness: 'unindexed' = 'unindexed';
+    const needsSelection = assessment.source === 'roslyn' && (symbols.length > 0 || assessment.truncated);
+    const analysisCompleteness = needsSelection ? 'incomplete' : 'unindexed';
     const limitations = [
-      '未在工作区索引中找到符号声明，无法验证下游影响，切勿直接假设可安全重构或删除。',
+      needsSelection ? '目标未能唯一解析，尚未查询引用。请选定声明后传入其 symbolLocation。'
+        : '未在工作区索引中找到符号声明，无法验证下游影响，切勿直接假设可安全重构或删除。',
+      ...(needsSelection && assessment.truncated ? ['声明候选列表已截断。'] : []),
       ...(assessment.source === 'local-text' ? LOCAL_TEXT_LIMITATIONS : []),
       ...assessment.limitations,
     ];
-    const riskReason = `Symbol "${symbolName}" was not found in workspace index. Downstream impact and references cannot be reliably verified. Do NOT assume it is safe to refactor or delete.`;
-    const recommendations = [
+    const riskReason = needsSelection ? `The available declarations do not uniquely identify "${symbolName}". References have not been queried.`
+      : `Symbol "${symbolName}" was not found in workspace index. Downstream impact and references cannot be reliably verified. Do NOT assume it is safe to refactor or delete.`;
+    const recommendations = needsSelection ? ['Select the intended declaration and repeat the analysis with its symbolLocation.'] : [
       `Verify symbol spelling ("${symbolName}") or ensure the defining file is indexed.`,
       `Check if the symbol is dynamically loaded, reflected, or defined in an external dependency.`,
       `Perform manual call site verification before modifying or deleting code.`,

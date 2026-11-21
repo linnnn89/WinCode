@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isWorkspacePathInside } from './WorkspaceContracts.js';
+import { checkOperation, type OperationContext } from './OperationContext.js';
 
 const execFileAsync = promisify(execFile);
 const supportedVersions = new Set<string>(); // At most the fixed launch-time candidate list below.
@@ -14,9 +15,11 @@ const candidates = [
     .map(dir => path.join(dir, process.platform === 'win32' ? 'git.exe' : 'git')),
 ];
 
-export async function resolveGitExecutable(root: string): Promise<string> {
+export async function resolveGitExecutable(root: string, operation?: OperationContext): Promise<string> {
+  checkOperation(operation);
   const realRoot = await fs.realpath(root);
   for (const candidate of candidates) {
+    checkOperation(operation);
     if (isWorkspacePathInside(root, candidate, true)) continue;
     try {
       const real = await fs.realpath(candidate);
@@ -27,11 +30,15 @@ export async function resolveGitExecutable(root: string): Promise<string> {
   throw Object.assign(new Error('No trusted Git executable is available outside the workspace.'), { code: 'GIT_UNAVAILABLE' });
 }
 
-export async function runGit(root: string, args: string[], timeout: number): Promise<{ stdout: string }> {
-  const executable = await resolveGitExecutable(root);
+export async function runGit(root: string, args: string[], timeout: number, operation?: OperationContext): Promise<{ stdout: string }> {
+  const executable = await resolveGitExecutable(root, operation);
+  const remaining = () => {
+    checkOperation(operation);
+    return Math.max(1, Math.min(timeout, (operation?.deadline ?? Infinity) - Date.now()));
+  };
   if (!supportedVersions.has(executable)) {
     const version = await execFileAsync(executable, ['--version'], {
-      cwd: path.dirname(executable), windowsHide: true, shell: false, timeout, maxBuffer: 4096, encoding: 'utf8',
+      cwd: path.dirname(executable), windowsHide: true, shell: false, timeout: remaining(), signal: operation?.signal, maxBuffer: 4096, encoding: 'utf8',
     });
     const match = /^git version (\d+)\.(\d+)/.exec(version.stdout);
     // Older Git can interpret the boolean "false" as an executable fsmonitor hook path.
@@ -41,8 +48,10 @@ export async function runGit(root: string, args: string[], timeout: number): Pro
   }
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     !/^(?:GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+))$/i.test(key)));
-  return execFileAsync(executable, ['--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', ...args], {
-    cwd: root, windowsHide: true, shell: false, timeout, maxBuffer: 1024 * 1024, encoding: 'utf8',
+  const result = await execFileAsync(executable, ['--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', ...args], {
+    cwd: root, windowsHide: true, shell: false, timeout: remaining(), signal: operation?.signal, maxBuffer: 1024 * 1024, encoding: 'utf8',
     env: { ...env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0' },
   });
+  checkOperation(operation);
+  return result;
 }

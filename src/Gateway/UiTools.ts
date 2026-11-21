@@ -127,7 +127,7 @@ const inspectDefinition = defineTool<UiInspectArgs>({
     ],
   },
 }, {
-  invalidArguments, validate: validateInspect,
+  desktopOnly: true, invalidArguments, validate: validateInspect,
   requestBudget: 'ui',
   execute: async (args, { router, signal }) => {
     const { responseFormat, ...input } = args;
@@ -147,7 +147,7 @@ const clickDefinition = defineTool<UiActionArgs>({
   },
 }, {
   invalidArguments,
-  validate: args => validateActionRequest(args, 'click'),
+  desktopOnly: true, validate: args => validateActionRequest(args, 'click'),
   requestBudget: 'ui',
   // 点击可能已经发生：请求在收尾阶段过期也不能把副作用报告成未执行。
   preserveOutcomeOnInterruption: true,
@@ -177,7 +177,7 @@ const typeDefinition = defineTool<UiTypeArgs>({
   },
 }, {
   invalidArguments,
-  validate: args => validateActionRequest(args, args.mode === 'setValue' ? 'setValue' : 'type'),
+  desktopOnly: true, validate: args => validateActionRequest(args, args.mode === 'setValue' ? 'setValue' : 'type'),
   requestBudget: 'ui',
   preserveOutcomeOnInterruption: true,
   execute: async (args, { router, signal }) => {
@@ -201,7 +201,7 @@ export const UI_TOOLS = [
     } },
   }, {
     invalidArguments,
-    validate: args => validateWindowQuery(args),
+    desktopOnly: true, validate: args => validateWindowQuery(args),
     requestBudget: 'ui',
     execute: async (args, { router, signal }) => {
       const result = await router.listUiWindows(args, signal);
@@ -222,7 +222,7 @@ export const UI_TOOLS = [
       properties: { ...actionTargetProperties, scopePath: scopePathProperty, expanded: { type: 'boolean' } }, required: ['expanded'],
       anyOf: [{ required: ['pid'] }, { required: ['hwnd'] }] },
   }, {
-    invalidArguments, validate: args => validateActionRequest(args, 'setExpanded'), requestBudget: 'ui',
+    desktopOnly: true, invalidArguments, validate: args => validateActionRequest(args, 'setExpanded'), requestBudget: 'ui',
     preserveOutcomeOnInterruption: true,
     execute: async (args, { router, signal }) => {
       const result = await router.performUiAction({ ...args, hwnd: args.hwnd?.trim(), action: 'setExpanded' }, signal);

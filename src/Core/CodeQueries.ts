@@ -87,6 +87,8 @@ export interface FindSymbolsResult {
 }
 
 export interface FindReferencesResult {
+  /** Internal evidence requested by exact impact analysis, from the same snapshot as the references. */
+  declaration?: CodeSymbol;
   fileIssues?: { path: string; reason: string }[];
   fileIssuesOmitted?: number;
   semanticContext?: SemanticContext;
@@ -129,12 +131,13 @@ export function computeTypeMatchStats(
 /** Legacy array methods remain required; detailed results are optional for older consumers. */
 export interface CodeSymbolQuery {
   findSymbols(query: string, kindFilter?: string, operation?: OperationContext): Promise<CodeSymbol[]>;
-  findSymbolsDetailed?(query: string, kindFilter?: string, relativePath?: string, operation?: OperationContext): Promise<FindSymbolsResult>;
+  /** Semantic providers can filter exact names before the candidate cap. Older providers may return a broader search. */
+  findSymbolsDetailed?(query: string, kindFilter?: string, relativePath?: string, operation?: OperationContext, match?: 'exact'): Promise<FindSymbolsResult>;
 }
 
 export interface CodeReferenceQuery extends CodeSymbolQuery {
   findReferences(symbolName: string, relativePath?: string, operation?: OperationContext): Promise<SymbolReference[]>;
-  findReferencesDetailed?(symbolName: string, relativePath?: string, operation?: OperationContext, location?: SymbolLocation, limit?: number): Promise<FindReferencesResult>;
+  findReferencesDetailed?(symbolName: string, relativePath?: string, operation?: OperationContext, location?: SymbolLocation, limit?: number, requireDeclaration?: boolean): Promise<FindReferencesResult>;
 }
 
 export interface ContextCodeQuery extends CodeSymbolQuery {

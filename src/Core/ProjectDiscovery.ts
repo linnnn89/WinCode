@@ -12,10 +12,11 @@ export async function identifyProject(root: string, operation?: OperationContext
 }
 
 /** 有界项目发现；保留原有深度、文件数和读取预算。 */
-export async function discoverProject(root: string, operation: OperationContext = { deadline: Date.now() + 20_000 }): Promise<{
+export async function discoverProject(root: string, parent?: OperationContext): Promise<{
   identity: ProjectIdentity; complete: boolean; entryPoints: string[];
   discovery: NonNullable<WorkspaceMetadata['projectDiscovery']>;
 }> {
+  const operation = { ...parent, deadline: Math.min(parent?.deadline ?? Infinity, Date.now() + 20_000) };
   checkOperation(operation);
   const discovery: NonNullable<WorkspaceMetadata['projectDiscovery']> = {
     visitedEntries: 0, descriptorBytesRead: 0, maxEntries: 2000, maxDepth: 3,
@@ -57,9 +58,12 @@ export async function discoverProject(root: string, operation: OperationContext 
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
       const real = await fs.realpath(full);
+      checkOperation(operation);
       if (!isWorkspacePathInside(realRoot, real)) { omit(rel, 'external-link'); return null; }
       handle = await fs.open(real, 'r');
+      checkOperation(operation);
       const stat = await handle.stat();
+      checkOperation(operation);
       if (!stat.isFile()) { omit(rel, 'not-a-file'); return null; }
       descriptorReads++;
       const capacity = Math.min(65536, discovery.maxDescriptorBytes - discovery.descriptorBytesRead);
@@ -76,6 +80,7 @@ export async function discoverProject(root: string, operation: OperationContext 
   };
   // Fixed probes preserve common root identities even if a wide root exhausts enumeration.
   for (const name of ['package.json', 'requirements.txt', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Directory.Build.props']) {
+    checkOperation(operation);
     const stat = await fs.lstat(path.join(root, name)).catch(() => null);
     if (stat?.isFile()) manifests.add(name);
   }

@@ -1,9 +1,9 @@
 import path from 'node:path';
 
 export interface WorkspaceBinding {
-  readonly mode: 'fixed';
+  readonly mode: 'fixed' | 'dynamic';
   readonly root: string;
-  readonly source: 'argument' | 'cwd' | 'configuration';
+  readonly source: 'argument' | 'cwd' | 'configuration' | 'request';
 }
 
 export class WorkspaceMismatchError extends Error {

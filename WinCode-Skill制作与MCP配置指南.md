@@ -61,8 +61,7 @@ Skill 首次使用启动 `dist/Client/SkillSessionCli.js --workspace <当前项�
 | 名称 | `wincode` |
 | 命令 | `node`，或该机器 Node 可执行文件的绝对路径 |
 | 参数 1 | `I:/WinCode/dist/index.js` |
-| 参数 2 | `--workspace` |
-| 参数 3 | 需要分析的工作区绝对路径，例如 `I:/New-tarven` |
+| 参数 2 | `--dynamic-workspace` |
 
 参数应为独立数组项，不要拼成一条 shell 字符串。若客户端接受 `mcpServers` 配置，可使用：
 
@@ -71,13 +70,13 @@ Skill 首次使用启动 `dist/Client/SkillSessionCli.js --workspace <当前项�
   "mcpServers": {
     "wincode": {
       "command": "node",
-      "args": ["I:/WinCode/dist/index.js", "--workspace", "I:/New-tarven"]
+      "args": ["I:/WinCode/dist/index.js", "--dynamic-workspace"]
     }
   }
 }
 ```
 
-不同客户端配置格式可能不同；本例不能直接替代 Codex 自身配置文件格式。每条 stdio 连接启动时固定项目，推荐绝对路径 --workspace；缺省固定 cwd。核对 health.workspaceBinding，workspace_open 仅确认或恢复同根，其他根返回 WORKSPACE_MISMATCH 后应选择正确连接。不同项目的局部配置可复用服务名；同一共享配置中的实例需不同名称。健康同根确认保留热态，不是清理屏障；已知故障按 diagnostics 恢复。
+Codex 的 TOML 配置在 `[mcp_servers.wincode]` 中填写同样的 `command` 和 `args`。动态连接从每次调用的 `workspacePath` 获取项目绝对目录，`workspace_open` 用 `path`。连接一次即可交替或并发访问多个项目。固定模式将启动参数写成 `["I:/WinCode/dist/index.js", "--workspace", "I:/New-tarven"]`，其他项目请求会返回 `WORKSPACE_MISMATCH`。
 
 可选托盘按 README 启动，并仅给需要管理的实例添加独立参数 --tray。默认不连接托盘、不设置自启动；自动释放关闭，设置内只允许用户手动释放，忙碌时拒绝且不延后执行。本文仅更新配置说明，不代表已修改任何已安装客户端。
 
@@ -85,7 +84,7 @@ Skill 首次使用启动 `dist/Client/SkillSessionCli.js --workspace <当前项�
 
 1. 让客户端重新建立 WinCode 连接，再调用 `wincode_hello_world`；核对实例身份、版本、buildId 和工具 schema，而不仅看软件版本字符串。
 2. 用 `npm run delivery:verify` 检查磁盘交付物；将磁盘身份与实际连接对应起来。独立启动的新 stdio 会话通过不等于当前宿主已重连。
-3. 对目标工作区执行一次规范请求，确认返回的是该工作区及声明范围。需要主动健康探测时调用 `wincode_diagnose_project({})`。
+3. 对目标工作区执行一次规范请求，核对目录和结果正文。动态连接可用 `wincode_hello_world({"workspacePath":"I:/WinCode"})` 核对根目录，主动探测时给 `wincode_diagnose_project` 传同一个根。
 
 0.12.1 起 hello 不主动启动探测进程；unknown/null 表示未探测，不代表不可用。已知健康结果也可能陈旧。旧版本 hello 的行为不能套用新版说明。
 

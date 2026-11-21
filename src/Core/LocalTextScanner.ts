@@ -24,6 +24,7 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
   const deadline = Date.now() + timeoutMs;
   const fileLimit = 256 * 1024;
   const totalLimit = 8 * 1024 * 1024;
+  let readBuffer: Buffer | undefined;
   let bytesRead = 0;
   let entriesVisited = 0;
   let stopped = false;
@@ -73,12 +74,13 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
         const remaining = totalLimit - bytesRead;
         if (remaining <= 0) { issue('total-byte-limit', true, true); return; }
         // One extra byte detects a file growing after stat, without an unbounded readFile.
-        const buffer = Buffer.alloc(Math.min(fileLimit + 1, remaining));
+        const buffer = readBuffer ??= Buffer.alloc(fileLimit + 1);
+        const capacity = Math.min(buffer.length, remaining);
         let used = 0;
         let eof = false;
-        while (used < buffer.length && canContinue()) {
+        while (used < capacity && canContinue()) {
           operation?.metrics?.count('scan.readCalls');
-          const chunk = await measureOperation(operation?.metrics, 'scan.read', () => handle.read(buffer, used, buffer.length - used, null));
+          const chunk = await measureOperation(operation?.metrics, 'scan.read', () => handle.read(buffer, used, capacity - used, null));
           operation?.metrics?.count('scan.bytesRead', chunk.bytesRead);
           bytesRead += chunk.bytesRead;
           used += chunk.bytesRead;

@@ -69,14 +69,30 @@ function scanMetadata(scan: LocalScanResult<unknown>) {
 
 /** Budget the serialized transport form, retaining total counts when any details are omitted. */
 function boundedResponse(data: NavigationResponse, maxCharacters: number): NavigationResponse {
-  const items = data.matches ?? data.symbols!;
-  while (JSON.stringify(data).length > maxCharacters) {
+  const field = data.matches ? 'matches' : 'symbols';
+  const fits = () => JSON.stringify(data).length <= maxCharacters;
+  while (!fits()) {
     data.truncated = true;
     data.queryComplete = false;
     data.nextAction = 'narrow_scope_or_increase_output_budget';
     if (data.fileIssues.length > 1) { data.fileIssues.pop(); data.fileIssuesOmitted++; }
     else if ((data.scopePaths?.length ?? 0) > 1) { data.scopePaths!.pop(); data.scopePathsOmitted = (data.scopePathsOmitted ?? 0) + 1; }
-    else if (items.length) { items.pop(); data.returnedItems = items.length; }
+    else if (data[field]!.length) {
+      const items = data[field]!;
+      items.pop();
+      data.returnedItems = items.length;
+      if (fits()) return data;
+      // Only the item prefix and its count change in this stage. Keep the existing metadata omission order.
+      const keep = (count: number) => { data[field] = items.slice(0, count); data.returnedItems = count; };
+      let low = 0, high = Math.max(0, items.length - 1);
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        keep(middle);
+        if (fits()) low = middle;
+        else high = middle - 1;
+      }
+      keep(low);
+    }
     else if (data.fileIssues.length) { data.fileIssues.pop(); data.fileIssuesOmitted++; }
     else if (data.scopePaths?.length) { data.scopePaths.pop(); data.scopePathsOmitted = (data.scopePathsOmitted ?? 0) + 1; }
     else if (data.nextRequest) delete data.nextRequest;

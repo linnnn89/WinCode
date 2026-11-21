@@ -6,6 +6,8 @@ import path from 'node:path';
 import cp from 'node:child_process';
 import { once } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
+import { channel } from 'node:diagnostics_channel';
+import { runGit } from '../src/Core/GitClient.js';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { getDefaultConfig } from '../src/Core/Config.js';
 import { ToolRouter } from '../src/Core/ToolRouter.js';
@@ -171,6 +173,29 @@ it('resource disposal verifies an owned real PID has exited', { timeout: 10000 }
     await closed;
     assert.equal(resources.getCloseReport().results[0].outcome, 'closed');
   } finally { await killProcessTree(child); }
+});
+
+it('cancelling an active Git operation closes its real child before the command timeout', { timeout: 10000 }, async () => {
+  const controller = new AbortController(), processes = channel('child_process');
+  let closed: Promise<void> | undefined, pid: number | undefined;
+  const observe = (event: unknown) => {
+    const child = (event as { process: cp.ChildProcess }).process;
+    child.once('spawn', () => {
+      if (!child.spawnargs.includes('hash-object')) return;
+      pid = child.pid;
+      closed = new Promise<void>(resolve => child.once('close', () => resolve()));
+      controller.abort();
+    });
+  };
+  processes.subscribe(observe);
+  try {
+    // The read-only command waits for stdin, so cancellation follows a real spawn without a timing race.
+    await assert.rejects(runGit(process.cwd(), ['hash-object', '--stdin'], 7000, { signal: controller.signal }),
+      (error: Error) => error.name === 'AbortError');
+    assert.ok(pid && closed);
+    await withTimeout(closed, 3000, 'cancelled-git-exit');
+    assert.throws(() => process.kill(pid!, 0), { code: 'ESRCH' });
+  } finally { processes.unsubscribe(observe); }
 });
 
 it('MCP cancellation stops local scanning, releases the opened file and permits a next request', { timeout: 10000 }, async t => fixture(async (router, _server, client) => {

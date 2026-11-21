@@ -238,6 +238,7 @@ it('workspace_open cancellation during root validation stops additional filesyst
 it('workspace_open cancellation between descriptor operations stops reads and closes acquired handles', async t => fixture(async ({ root, router, call }) => {
   const descriptor = path.join(root, 'Review.csproj');
   await fs.writeFile(descriptor, '<Project><!--' + 'x'.repeat(70 * 1024) + '--></Project>');
+  const physicalDescriptor = await fs.realpath(descriptor);
   const openWorkspace = router.workspace.openWorkspace.bind(router.workspace);
   const realpath = fs.realpath.bind(fs), open = fs.open.bind(fs);
   const stages = ['realpath', 'open', 'stat', 'read'] as const;
@@ -261,7 +262,7 @@ it('workspace_open cancellation between descriptor operations stops reads and cl
   t.mock.method(fs, 'realpath', (...args: Parameters<typeof fs.realpath>) =>
     String(args[0]) === descriptor ? observe('realpath', () => realpath(...args)) : realpath(...args));
   t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
-    if (String(args[0]) !== descriptor) return open(...args);
+    if (String(args[0]) !== physicalDescriptor) return open(...args);
     const handle = await observe('open', () => open(...args));
     opened++;
     const stat = handle.stat.bind(handle), read = handle.read.bind(handle), close = handle.close.bind(handle);

@@ -260,15 +260,17 @@ it('one dynamic stdio connection reads the correct same-named file across sequen
     assert.ok(hello.toolContract.tool.inputSchema.required.includes('workspacePath'));
     await Promise.all([read(a), read(b)]);
     for (const root of [a, b, a]) {
-      assert.equal((await call('workspace_open', { path: root })).workspace, root);
+      assert.equal((await call('workspace_open', { path: root })).workspace, await fs.realpath(root));
       await read(root);
     }
     await Promise.all(Array.from({ length: 16 }, (_, i) => read(i % 2 ? b : a)));
     const [left, right] = await Promise.all([a, b].map(workspacePath => call('wincode_hello_world', { workspacePath })));
     for (const [health, root] of [[left, a], [right, b]] as const) {
+      const physicalRoot = await fs.realpath(root);
       assert.equal(health.runtime.instanceId, hello.runtime.instanceId);
-      assert.equal(health.workspace, root);
-      assert.equal(health.health.workspaceWatch.root, root);
+      assert.equal(health.workspace, physicalRoot);
+      assert.equal(health.health.workspaceWatch.root, physicalRoot);
+      assert.equal((await call('wincode_hello_world', { workspacePath: physicalRoot })).health.session.id, health.health.session.id);
       assert.ok(health.health.admission.business.peakActive >= 2);
     }
     assert.notEqual(left.health.cache.namespace, right.health.cache.namespace);
@@ -300,9 +302,10 @@ it('failed workspace selections leave live projects usable and a concurrent tras
     ]);
     assert.equal(body(readA).matches[0].file, 'Api.cs');
     const moved = body(moveB);
+    const physicalB = await fs.realpath(b);
     assert.equal(moved.outcome, 'completed');
-    assert.equal(moved.originalPath, path.join(b, 'Api.cs'));
-    assert.equal(path.dirname(moved.trashPath), path.join(b, 'trash'));
+    assert.equal(moved.originalPath, path.join(physicalB, 'Api.cs'));
+    assert.equal(path.dirname(moved.trashPath), path.join(physicalB, 'trash'));
     assert.match(await fs.readFile(moved.trashPath, 'utf8'), /ONLY_B/);
     assert.match(await fs.readFile(path.join(a, 'Api.cs'), 'utf8'), /ONLY_A/);
     await assert.rejects(fs.stat(path.join(b, 'Api.cs')), { code: 'ENOENT' });
@@ -319,7 +322,8 @@ it('failed workspace selections leave live projects usable and a concurrent tras
   })));
 
 it('an idle project with slow or failed cleanup does not block other projects on one connection', { timeout: 15000 }, async t =>
-  fixture(async (a, b) => {
+  fixture(async (projectA, projectB) => {
+    const [a, b] = await Promise.all([fs.realpath(projectA), fs.realpath(projectB)]);
     const config = getDefaultConfig(); config.workspaceMode = 'dynamic';
     config.adapters.flaui.enabled = false; config.adapters.repomix.useCli = false;
     const primary = new ToolRouter(config), server = new WinCodeMcpServer(primary);

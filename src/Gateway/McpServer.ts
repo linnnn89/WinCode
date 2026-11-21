@@ -94,6 +94,8 @@ export class WinCodeMcpServer {
         if (this.dynamic && root) {
           selected = await this.dynamic.acquire(root, lease, lane === 'status');
           context.router = selected.router;
+          // Selection validated the supplied path. Confirm the router's own spelling (e.g. a Windows 8.3 alias).
+          if (definition.workspaceControl) args.path = selected.router.workspace.root;
           if (selected.ready) await this.router.admission.waitFor(selected.ready, lease);
         }
         if (lane !== 'status' && !definition.workspaceControl) {

@@ -202,7 +202,7 @@ internal sealed class WorkspaceSession : IDisposable
                 };
                 invalidated = false;
                 return new { id, type = "ready", success = true, protocolVersion = 2, snapshot,
-                    hostIdentity = HostBuildIdentity.Current,
+                    hostIdentity = HostBuildIdentity.Current, referenceDeclaration = true,
                     projects = candidate.ProjectIds.Count, configuration, framework, loadMs = clock.ElapsedMilliseconds,
                     inputPolicy = new { version = 2, additionalInputs = additionalInputs.Select(file => Path.GetRelativePath(root, file)).ToArray() },
                     loadDiagnostics, compilationErrors, diagnosticSummary, excludedAnalyzers, scope = "loaded-solution-snapshot",
@@ -255,6 +255,7 @@ internal sealed class WorkspaceSession : IDisposable
         var requestedSnapshot = request.GetProperty("snapshot").GetString()!;
         await EnsureCurrentAsync(requestedSnapshot, token);
         var query = request.GetProperty("query").GetString();
+        var exactName = request.TryGetProperty("exactName", out var exact) && exact.GetBoolean();
         if (string.IsNullOrWhiteSpace(query) || query.Length > 256) throw new HostFailure("INVALID_ARGUMENT", "Query must contain 1–256 characters.");
         var kind = request.TryGetProperty("kind", out var filter) ? filter.GetString() : null;
         var scopeFile = request.TryGetProperty("file", out var file) ? WorkspaceInputs.Inside(root, file.GetString()!) : null;
@@ -271,25 +272,22 @@ internal sealed class WorkspaceSession : IDisposable
                 foreach (var node in syntax!.DescendantNodes().OfType<MemberDeclarationSyntax>())
                 {
                     token.ThrowIfCancellationRequested();
-                    if (node is not (BaseTypeDeclarationSyntax or DelegateDeclarationSyntax or MethodDeclarationSyntax or ConstructorDeclarationSyntax or PropertyDeclarationSyntax)) continue;
+                    if (!SupportedDeclaration(node)) continue;
                     var originalDeclaration = model!.GetDeclaredSymbol(node, token);
-                    var declared = originalDeclaration;
-                    if (declared is IMethodSymbol method) declared = method.PartialDefinitionPart ?? method;
-                    if (declared == null || !declared.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || !seen.Add(declared)) continue;
+                    if (originalDeclaration == null) continue;
+                    var declared = CanonicalDeclaration(originalDeclaration);
+                    var matches = exactName ? declared.Name.Equals(query, StringComparison.Ordinal)
+                        : declared.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
+                    if (!matches || !seen.Add(declared)) continue;
                     var declaredKind = DeclarationKind(declared);
                     if (declaredKind == null || (!string.IsNullOrEmpty(kind) && kind != declaredKind && !(kind == "type" && declared is INamedTypeSymbol))) continue;
                     // 限定 partial 所在文件时使用该声明的源位置；不能偷偷改成另一个文件里的首个声明。
                     var location = scopeFile == null ? declared.Locations.FirstOrDefault(l => l.IsInSource) :
-                        originalDeclaration!.Locations.FirstOrDefault(l => l.IsInSource && string.Equals(l.SourceTree?.FilePath, scopeFile, StringComparison.OrdinalIgnoreCase));
+                        originalDeclaration.Locations.FirstOrDefault(l => l.IsInSource && string.Equals(l.SourceTree?.FilePath, scopeFile, StringComparison.OrdinalIgnoreCase));
                     if (location == null) continue;
-                    var position = location.GetLineSpan().StartLinePosition;
                     totalFound++;
                     if (symbols.Count == 200) continue;
-                    symbols.Add(new { name = declared.Name, kind = declaredKind,
-                        file = Path.GetRelativePath(root, location.SourceTree!.FilePath), line = position.Line + 1, column = position.Character + 1,
-                        signature = declared.ToDisplayString(), containerName = declared.ContainingType?.ToDisplayString(),
-                        location = new { snapshotId = snapshot, project = Path.GetRelativePath(root, project.FilePath!),
-                            file = Path.GetRelativePath(root, location.SourceTree.FilePath), position = location.SourceSpan.Start } });
+                    symbols.Add(DescribeDeclaration(project, declared, declaredKind, location));
                 }
             }
         }
@@ -297,6 +295,24 @@ internal sealed class WorkspaceSession : IDisposable
         return new { id = request.GetProperty("id").GetString(), success = true, snapshot, symbols, totalFound,
             truncated = totalFound > symbols.Count, queryComplete = false, loadDiagnostics, compilationErrors, diagnosticSummary, excludedAnalyzers,
             scope = "loaded-solution-snapshot", diskFreshnessVerified = false, freshness = Freshness(inputs!) };
+    }
+
+    private static bool SupportedDeclaration(SyntaxNode? node) => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax
+        or MethodDeclarationSyntax or ConstructorDeclarationSyntax or PropertyDeclarationSyntax;
+
+    private static ISymbol CanonicalDeclaration(ISymbol symbol) => symbol switch {
+        IMethodSymbol method => method.PartialDefinitionPart ?? method,
+        IPropertySymbol property => property.PartialDefinitionPart ?? property,
+        _ => symbol
+    };
+
+    private object DescribeDeclaration(Project project, ISymbol symbol, string kind, Location source)
+    {
+        var file = Path.GetRelativePath(root, source.SourceTree!.FilePath);
+        var line = source.GetLineSpan().StartLinePosition;
+        return new { name = symbol.Name, kind, file, line = line.Line + 1, column = line.Character + 1,
+            signature = symbol.ToDisplayString(), containerName = symbol.ContainingType?.ToDisplayString(),
+            location = new { snapshotId = snapshot, project = Path.GetRelativePath(root, project.FilePath!), file, position = source.SourceSpan.Start } };
     }
 
     /// <summary>映射当前公共声明类别；没有支持的成员不伪装成方法或类型。</summary>
@@ -325,8 +341,24 @@ internal sealed class WorkspaceSession : IDisposable
         if (limit < 1 || limit > 1000) throw new HostFailure("INVALID_ARGUMENT", "Invalid limit.");
         var text = await document.GetTextAsync(token);
         if (position < 0 || position >= text.Length) throw new HostFailure("INVALID_ARGUMENT", "Invalid UTF-16 position.");
-        var symbol = await SymbolFinder.FindSymbolAtPositionAsync(document, position, token)
-            ?? throw new HostFailure("SYMBOL_NOT_FOUND", "No symbol at position.");
+        ISymbol symbol;
+        object? declaration = null;
+        if (request.TryGetProperty("requireDeclaration", out var require) && require.GetBoolean())
+        {
+            var syntax = (await document.GetSyntaxRootAsync(token))!;
+            var identifier = syntax.FindToken(position);
+            var node = identifier.Parent;
+            var model = await document.GetSemanticModelAsync(token);
+            var declared = SupportedDeclaration(node) ? model!.GetDeclaredSymbol(node!, token) : null;
+            // A use site can bind to the same symbol. Only the exact identifier in this document identifies the selected declaration.
+            var source = declared?.Locations.FirstOrDefault(l => l.SourceTree == syntax.SyntaxTree && l.SourceSpan.Start == position);
+            if (source == null || identifier.SpanStart != position || declared == null || DeclarationKind(declared) is not string kind)
+                throw new HostFailure("SYMBOL_MISMATCH", "Expected the start of a supported declaration identifier in the selected document.");
+            symbol = CanonicalDeclaration(declared);
+            declaration = DescribeDeclaration(project, symbol, kind, source);
+        }
+        else symbol = await SymbolFinder.FindSymbolAtPositionAsync(document, position, token)
+                ?? throw new HostFailure("SYMBOL_NOT_FOUND", "No symbol at position.");
         if (request.TryGetProperty("symbolName", out var expected) && symbol.Name != expected.GetString())
             throw new HostFailure("SYMBOL_MISMATCH", "Location does not identify the requested symbol; search again.");
         var found = await SymbolFinder.FindReferencesAsync(symbol, solution, token);
@@ -344,7 +376,7 @@ internal sealed class WorkspaceSession : IDisposable
                 line = lineSpan.Start.Line + 1, column = lineSpan.Start.Character + 1, preview = preview[..Math.Min(300, preview.Length)] });
         }
         await EnsureCurrentAsync(requestedSnapshot, token);
-        return new { id = request.GetProperty("id").GetString(), success = true, snapshot, symbol = symbol.ToDisplayString(), references,
+        return new { id = request.GetProperty("id").GetString(), success = true, snapshot, symbol = symbol.ToDisplayString(), declaration, references,
             totalReferences = locations.Length, truncated = locations.Length > limit,
             queryComplete = false, loadDiagnostics, compilationErrors, diagnosticSummary, excludedAnalyzers,
             scope = "loaded-solution-snapshot", diskFreshnessVerified = false, freshness = Freshness(inputs!),

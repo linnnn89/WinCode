@@ -4,7 +4,7 @@ import { WORKSPACE_TOOLS } from './WorkspaceTools.js';
 import { CODE_TOOLS } from './CodeTools.js';
 import { UI_TOOLS } from './UiTools.js';
 import { toolsContractHash } from './ContractHash.js';
-import type { ToolDefinition, ToolExecutionContext } from './ToolDefinition.js';
+import type { ToolDefinition, ToolValidationContext } from './ToolDefinition.js';
 
 const definitions: ToolDefinition[] = [...WORKSPACE_TOOLS, ...CODE_TOOLS, ...UI_TOOLS];
 
@@ -35,11 +35,24 @@ export class ToolRegistry {
   private readonly published: Tool[];
   readonly schemaHash: string;
 
-  constructor() {
+  constructor(dynamic = false) {
     const validator = new AjvJsonSchemaValidator(new Ajv({ strict: false, allErrors: false,
       coerceTypes: false, useDefaults: false, removeAdditional: false }));
     const snapshot = definitions.map(definition => ({ ...definition, tool: structuredClone(definition.tool),
       aliases: structuredClone(definition.aliases) }));
+    if (dynamic) for (const { tool, workspaceControl, desktopOnly, requestLane } of snapshot) {
+      if (desktopOnly) continue;
+      const schema = tool.inputSchema;
+      const selector = { type: 'string', minLength: 1, maxLength: 4096,
+        description: 'Absolute directory of the current task or the project named by the user. Send it on each project request, including after workspace_open.' };
+      if (workspaceControl) {
+        tool.description = 'Open or confirm the project at path for this request. Other calls independently select their project with workspacePath. Returns a bounded project summary.';
+        schema.properties = { ...schema.properties, path: selector };
+      } else {
+        schema.properties = { ...schema.properties, workspacePath: selector };
+        if (requestLane !== 'status') schema.required = [...(schema.required ?? []), 'workspacePath'];
+      }
+    }
     this.published = structuredClone(publishedTools(snapshot));
     this.schemaHash = toolsContractHash(this.published);
     for (const definition of snapshot) {
@@ -57,13 +70,15 @@ export class ToolRegistry {
 
   resolve(name: string): ToolDefinition | undefined { return this.entries.get(name)?.definition; }
 
-  prepare(name: string, args: unknown, context: ToolExecutionContext): Record<string, unknown> {
+  prepare(name: string, args: unknown, context: ToolValidationContext): Record<string, unknown> {
     const entry = this.entries.get(name);
     if (!entry) throw new Error(`Unknown tool: ${name}`);
     const checked = entry.validate(args);
     if (!checked.valid) throw new Error(`Invalid arguments for ${name}: ${checked.errorMessage.slice(0, 2048)}`);
     // Extra fields remain accepted on the wire but cannot alter internal/native requests.
     const known = declaredArguments(args, entry.definition.tool.inputSchema as InputSchema) as Record<string, unknown>;
+    // The Gateway consumes this selector. Native helpers and tool-specific validators receive only their own fields.
+    delete known.workspacePath;
     entry.definition.validate?.(known, context);
     return known;
   }

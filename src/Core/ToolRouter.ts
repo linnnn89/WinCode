@@ -83,7 +83,9 @@ export interface RuntimeHealth {
 }
 
 export class ToolRouter {
-  readonly admission = new RequestAdmission();
+  readonly admission: RequestAdmission;
+  readonly uiLock: Mutex;
+  private readonly ownsAdmission: boolean;
   readonly config: WinCodeConfig;
   readonly cache: CacheManager;
   readonly workspace: WorkspaceManager;
@@ -144,8 +146,11 @@ export class ToolRouter {
     finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); this.codeOperations.delete(controller); }
   }
 
-  constructor(config: WinCodeConfig) {
+  constructor(config: WinCodeConfig, connection?: Pick<ToolRouter, 'admission' | 'uiLock'>) {
     this.config = config;
+    this.admission = connection?.admission ?? new RequestAdmission();
+    this.ownsAdmission = !connection;
+    this.uiLock = connection?.uiLock ?? new Mutex();
     this.resources = new ResourceManager();
     this.session = new SessionManager();
     this.cache = new CacheManager(
@@ -159,7 +164,7 @@ export class ToolRouter {
     this.text = new LocalTextAdapter(config, this.cache);
     if (config.adapters.roslyn?.enabled)
       this.roslyn = new RoslynAdapter(config, this.resources, (content, file) => this.text.findSymbolsInContent(content, file));
-    this.flaui = new FlaUiAdapter(config, this.resources);
+    this.flaui = new FlaUiAdapter(config, this.resources, this.uiLock);
     this.context = new ContextManager(config, this.workspace, this.repomix, this.code);
     this.architecture = new ArchitectureAnalyzer(this.workspace);
     this.impact = new ImpactAnalyzer(this.code, this.config);
@@ -196,7 +201,8 @@ export class ToolRouter {
   /** 托盘只读取内存中的已知事实；不能为了展示状态启动 Host 或枚举磁盘缓存。 */
   getMemoryControlStatus() {
     const roslyn = this.roslyn?.getKnownHealth();
-    return { version: WINCODE_VERSION, workspace: this.config.workspaceRoot,
+    const unbound = this.config.workspaceMode === 'dynamic' && this.config.workspaceRootSource === 'cwd';
+    return { version: WINCODE_VERSION, workspace: unbound ? '动态工作区（按请求选择）' : this.config.workspaceRoot,
       provider: this.roslyn ? 'roslyn' as const : 'local-text' as const,
       automaticRelease: false as const, state: this.shuttingDown ? 'shutting-down' : this.workspaceRecovery ? 'recovery-required' :
         this.releasing ? 'releasing' : this.admission.pendingCount || this.inFlight || this.codeOperations.size || this.pendingWorkspaceChanges ? 'busy' : 'idle',
@@ -384,8 +390,9 @@ export class ToolRouter {
    */
   async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, signal?: AbortSignal) {
     const resolved = this.workspace.assertWorkspace(targetPath);
-    const queue = this.admission.operation(signal)?.queue;
+    const admitted = this.admission.operation(signal);
     signal = signal ? AbortSignal.any([signal, this.shutdownSignal]) : this.shutdownSignal;
+    const operation = { ...admitted, signal };
     this.pendingWorkspaceChanges++;
     return this.workspaceLock.runExclusive(async () => {
       if (this.shuttingDown) {
@@ -394,8 +401,8 @@ export class ToolRouter {
       if (this.workspaceRecovery?.recoveryAction === 'restart_gateway')
         throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
 
-      await this.workspace.validateRoot();
-      checkOperation({ signal });
+      await this.workspace.validateRoot(operation);
+      checkOperation(operation);
 
       const previousRoot = this.config.workspaceRoot;
       // A healthy same-root confirmation is read-only. Do not put business/status requests behind a drain barrier.
@@ -403,11 +410,11 @@ export class ToolRouter {
       const sameWorkspace = !this.workspaceRecovery && this.watch.getStatus().active &&
         Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
       if (sameWorkspace && !knownRoslyn?.restartRequired && !knownRoslyn?.cleanupFailed) {
-        checkOperation({ signal });
-        const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
-        checkOperation({ signal });
-        const result = await this.workspace.openWorkspace(resolved, options);
-        checkOperation({ signal });
+        checkOperation(operation);
+        const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true }, operation);
+        checkOperation(operation);
+        const result = await this.workspace.openWorkspace(resolved, options, operation);
+        checkOperation(operation);
         this.session.touch();
         this.session.setFingerprint(fp);
         return result;
@@ -432,12 +439,12 @@ export class ToolRouter {
         }
 
         phase = 'fingerprint';
-        const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true });
-        checkOperation({ signal });
+        const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true }, operation);
+        checkOperation(operation);
         phase = 'workspace';
-        const result = await this.workspace.openWorkspace(resolved, options);
+        const result = await this.workspace.openWorkspace(resolved, options, operation);
         rootPrepared = true;
-        checkOperation({ signal });
+        checkOperation(operation);
 
         if (sameWorkspace) {
           phase = 'refresh';
@@ -467,25 +474,25 @@ export class ToolRouter {
         this.session.setFingerprint(fp);
         phase = 'watch';
         await this.bindWatch(this.config.workspaceRoot);
-        checkOperation({ signal });
+        checkOperation(operation);
 
         phase = 'repomix-dispose';
         await this.repomix.dispose();
-        checkOperation({ signal });
+        checkOperation(operation);
         if (this.roslyn) {
           phase = 'roslyn-reset';
           await this.roslyn.resetConnection();
         }
-        checkOperation({ signal });
+        checkOperation(operation);
         phase = 'repomix-initialize';
         await this.repomix.initialize();
-        checkOperation({ signal });
+        checkOperation(operation);
         phase = 'text-initialize';
         if (!this.roslyn) await this.text.initialize();
-        checkOperation({ signal });
+        checkOperation(operation);
         phase = 'composites';
         this.bindCompositeTools();
-        checkOperation({ signal });
+        checkOperation(operation);
         phase = 'watch-confirmation';
         this.assertWatchBound(this.config.workspaceRoot);
         // Publish readiness only after every participant has completed rebinding.
@@ -498,7 +505,7 @@ export class ToolRouter {
             phase, message: (error instanceof Error ? error.message : String(error)).slice(0, 1024),
             recoveryAction: error instanceof GatewayRestartRequiredError ? 'restart_gateway' : 'workspace_open',
           };
-          if (!signal?.aborted && !(error instanceof AbortError))
+          if (!signal?.aborted && !(error instanceof AbortError) && !(error instanceof TimeoutError))
             throw new WorkspaceRecoveryRequiredError({ ...this.workspaceRecovery });
         }
         throw error;
@@ -508,7 +515,7 @@ export class ToolRouter {
         this.resolveSwitching = null;
         resolve?.();
       }
-    }, signal, queue).finally(() => { this.pendingWorkspaceChanges--; });
+    }, signal, operation.queue).finally(() => { this.pendingWorkspaceChanges--; });
   }
 
   private bindCompositeTools(): void {
@@ -650,7 +657,8 @@ export class ToolRouter {
       await this.initialization?.catch(() => {});
       await this.switchingPromise?.catch(() => {});
       await this.releasing?.catch(() => {});
-      const drained = await this.waitForIdle(Math.max(1, Math.min(3_000, softDeadline - Date.now())), undefined, true);
+      // A dynamic child can be evicted while other workspaces hold connection-wide leases.
+      const drained = await this.waitForIdle(Math.max(1, Math.min(3_000, softDeadline - Date.now())), undefined, this.ownsAdmission);
       if (!drained) throw new Error('Requests did not settle before shutdown.');
     }, Math.min(3_000, (softDeadline - Date.now()) / 3));
     const drained = failures.length === 0;

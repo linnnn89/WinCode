@@ -36,12 +36,11 @@ export class FlaUiAdapter implements IAdapter {
   private resources?: ResourceManager;
   private activeProcess: ChildProcess | null = null;
   private cleanupActive: (() => Promise<boolean>) | null = null;
-  private mutex = new Mutex();
   private shuttingDown = false;
   private healthCache: { at: number; value: AdapterHealth } | null = null;
   lastError: AdapterLastError | null = null;
 
-  constructor(config: WinCodeConfig, resources?: ResourceManager) {
+  constructor(config: WinCodeConfig, resources?: ResourceManager, private readonly mutex = new Mutex()) {
     this.config = config;
     this.resources = resources;
   }

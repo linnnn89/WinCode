@@ -12,7 +12,7 @@ N4 实现：`DesignTimeBuild` 使用已有 SDK 的 ProjectCollection 做原项�
 
 WinCode 是一个运行在本机的 **MCP 工具网关**：接收编码 Agent 的结构化请求，组织代码或桌面证据，再把正文与证据边界一起返回。Agent 的模型推理在客户端侧；WinCode 自身没有模型推理服务或向量数据库。
 
-主体采用**分层单体 + 外部工具适配器 + 进程外桌面取证**。每个 Gateway 进程在启动时固定一个工作区；外部上游与 UI Helper 各有独立生命周期。
+主体采用**分层单体 + 外部工具适配器 + 进程外桌面取证**。每个 ToolRouter 固定一个工作区。原生 Gateway 可按请求选择不同的 ToolRouter，外部上游与 UI Helper 各有独立生命周期。
 
 ```mermaid
 flowchart TB
@@ -89,7 +89,7 @@ sequenceDiagram
     G->>G: 按该工具的响应规则封装、裁剪
     G-->>A: MCP 文本 / 可选图片
     G->>R: finally 释放在途计数
-  else workspace_open
+  else 固定模式 workspace_open
     G->>R: 先校验固定根；一致时才进入工作区互斥锁
     alt 请求其他根
       R-->>G: WORKSPACE_MISMATCH，不排空、不修改资源
@@ -219,7 +219,9 @@ flowchart TB
 
 架构概览不再另走无总量限制的旧树/项目读取：共用 ProjectDiscovery、WorkspaceBrowser 和 OperationContext。发现上限 2000 项、树 500 项；图上限 16 个项目/64 KiB 单文件/256 KiB 合计、入口枚举 2000 项，返回完整性与遗漏；整份报告上限 32768 UTF-16 字符。取消后的读取在实际返回并关闭句柄后结束归属，不靠外层超时提前释放。文本声明先规范化空白并拒绝超过 16384 字符的规范化单行，避免原有重叠可选空白匹配；不是完整语法分析器。
 
-### 5.2 固定工作区与同根恢复
+### 5.2 动态路由、固定工作区与同根恢复
+
+动态模式在验证参数时确定请求的绝对目录，按真实目录复用独立的 ToolRouter，从请求入队到完成都使用同一根。所有项目共用连接的 32 个业务名额、4 个状态名额和桌面 UI 互斥锁。每个项目持有自己的监听器、会话、缓存和回收站。四个按需工作区用满时只回收已完成初始化且空闲的项目。通过启动参数显式授权的 Roslyn 项目单独保留，其他目录只用本地文本，Repomix 从 WinCode 的安装环境查找。
 
 WORKSPACE_MISMATCH 的 connectionGuide 与 CLI `--print-connection` 由同一纯配置生成器提供绝对命令、参数和核对步骤；不读取其他客户端设置、不注册或启动进程、不切换工作区。目标路径存在性仍由真正的连接初始化验证。
 

@@ -170,7 +170,8 @@ export class RepomixAdapter implements IAdapter {
     // An invalid explicit override must not silently launch a different installation.
     if (custom !== undefined) return validEntry(custom);
     const searchPaths = new Set([
-      ...(createRequire(path.join(this.config.workspaceRoot, 'package.json')).resolve.paths('repomix') ?? []),
+      ...(this.config.workspaceRootSource === 'request' ? [] :
+        createRequire(path.join(this.config.workspaceRoot, 'package.json')).resolve.paths('repomix') ?? []),
       ...(createRequire(import.meta.url).resolve.paths('repomix') ?? []),
     ]);
     for (const base of searchPaths) {

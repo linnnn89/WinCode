@@ -3,9 +3,8 @@
     "wincode": {
       "command": "node",
       "args": [
-        "D:\\CODEX PROJECT\\WinCode MCP\\dist\\index.js",
-        "--workspace",
-        "D:\\CODEX PROJECT\\WinCode MCP"
+        "I:/WinCode/dist/index.js",
+        "--dynamic-workspace"
       ]
     }
   }

@@ -62,9 +62,9 @@ cancel 的 targetId 指向当前请求；确认收到取消不表示工作已回
 
 工具和参数不符时调用 `wincode_hello_world({toolName:"具体工具名"})`，比较 tools/list、schemaHash、runtime.instanceId/build.buildId 和 workspace。hello 只读已有状态，不启动探测；unknown、available:null 或 not-observed 都表示未知，不能当作不可用或零值。
 
-需要主动检查环境时用 `wincode_diagnose_project({})`；它检查SDK及Repomix/UIA，对Roslyn只读已有状态。不要给 hello/diagnose 传 forceReconnect、toolNames、version 等未声明字段。
+需要主动检查环境时用 `wincode_diagnose_project`，动态连接传当前任务的 `workspacePath`。该工具检查 SDK 及 Repomix/UIA，对 Roslyn 读取已有状态。
 
-原生 stdio 启动命令为 node，独立参数为 `<安装目录>/dist/index.js`、`--workspace`、`<绝对工作区>`。不要把整条终端安装命令填入启动命令。配置保存、磁盘构建和 Skill 同步都不会热更新运行实例；按客户端正常方式重连。
+原生 stdio 启动命令为 `node`。动态模式的两个独立参数为 `<安装目录>/dist/index.js` 和 `--dynamic-workspace`。固定模式使用入口路径、`--workspace` 和项目绝对路径。更新配置或构建后重新连接。无路径心跳在动态模式返回 `workspace: null`，指定 `workspacePath` 的心跳只读该目录的已知状态。首次业务请求才初始化按请求选择的项目。
 
 生产使用完整 Release 发布目录。UIA 查询／状态、语义动作、展开、父路径分别需要 inspectionVersion 2、3、4、5。VERSION_MISMATCH 时核对实际 Host 身份及发布文件，不删除范围或状态参数绕过版本检查。
 
@@ -86,6 +86,7 @@ cancel 的 targetId 指向当前请求；确认收到取消不表示工作已回
 | 错误／状态 | 处理 |
 |---|---|
 | WORKSPACE_MISMATCH | 按 activeWorkspace/requestedWorkspace 选择连接，原根未切换 |
+| WORKSPACE_BUSY | 动态连接的可用名额正在使用或初始化，等待请求结束后再打开新项目。清理失败的项目继续占用一个名额，指定该项目或全部名额清理失败时按 `restart_gateway` 重连 |
 | WORKSPACE_RECOVERY_REQUIRED | 查看 recoveryAction；workspace_open 只恢复同根，restart_gateway 则先核查自有资源清理，再重建对应连接 |
 | SERVER_BUSY | workStarted:false 表示尚未开始。等在途工作结束后按需重试，不循环请求或重启Host |
 | REQUEST_TIMEOUT / CANCELLED | 包含启动、排队、执行或收尾；核对实际结果及恢复状态 |

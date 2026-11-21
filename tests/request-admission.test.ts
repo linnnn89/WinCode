@@ -15,8 +15,10 @@ async function until(predicate: () => boolean, message: string) {
   const deadline = Date.now() + 2500;
   while (!predicate()) { if (Date.now() > deadline) assert.fail(message); await new Promise(r => setTimeout(r, 5)); }
 }
-async function fixture(run: (f: { root: string; router: ToolRouter; server: WinCodeMcpServer; client: Client; call: (name: string, args?: any, signal?: AbortSignal) => Promise<any> }) => Promise<void>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-admission-'));
+async function fixture(run: (f: { root: string; router: ToolRouter; server: WinCodeMcpServer; client: Client; call: (name: string, args?: any, signal?: AbortSignal) => Promise<any> }) => Promise<void>, ...subdirectories: string[]) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-admission-'));
+  const root = path.join(temporary, ...subdirectories);
+  if (subdirectories.length) await fs.mkdir(root, { recursive: true });
   const config = getDefaultConfig(root); config.adapters.flaui.enabled = false; config.adapters.repomix.useCli = false;
   const router = new ToolRouter(config), server = new WinCodeMcpServer(router);
   const client = new Client({ name: 'bounded-admission-fixture', version: '1' });
@@ -27,8 +29,8 @@ async function fixture(run: (f: { root: string; router: ToolRouter; server: WinC
     await run({ root, router, server, client, call: (name, args = {}, signal) => client.callTool({ name, arguments: args }, { signal, timeout: 8000 }) });
   } finally {
     await client.close(); await server.stop();
-    assert.equal(path.dirname(root), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith('wincode-admission-'));
-    await fs.rm(root, { recursive: true, force: true });
+    assert.equal(path.dirname(temporary), path.resolve(os.tmpdir())); assert.ok(path.basename(temporary).startsWith('wincode-admission-'));
+    await fs.rm(temporary, { recursive: true, force: true });
   }
 }
 
@@ -144,6 +146,143 @@ it('repeated queued cancellation frees real nodes and permits replacement while 
     assert.equal(router.admission.snapshot().business.cancelled, 93);
   } finally { hold.resolve(); await owner; }
   assert.equal(router.admission.pendingCount, 0);
+}));
+
+it('workspace_open cancellation stops fingerprint, discovery and optional tree work at their current I/O', async t => fixture(async ({ root, call, router }) => {
+  await fs.mkdir(path.join(root, 'src'));
+  await fs.writeFile(path.join(root, 'src', 'Api.ts'), 'export class Api {}');
+  const originalSession = { ...router.session.current! };
+  const open = router.openWorkspace.bind(router), list = router.workspace.listDirectory.bind(router.workspace);
+  const readDir = fs.readdir.bind(fs), openDir = fs.opendir.bind(fs), stat = fs.stat.bind(fs);
+  const gitStatus = router.workspace.getGitStatus.bind(router.workspace);
+  let received: AbortSignal | undefined, tree = false, entered = deferred(), resume = deferred();
+  let stage = '', lateStats = 0, lateDirectoryReads = 0, lateGit = 0, held = false;
+  const pause = async () => { held = true; entered.resolve(); await resume.promise; };
+  t.mock.method(router, 'openWorkspace', (target: string, options: any, signal?: AbortSignal) => {
+    received = signal; return open(target, options, signal);
+  });
+  t.mock.method(router.workspace, 'listDirectory', (...args: Parameters<typeof list>) => { tree = true; return list(...args); });
+  t.mock.method(router.workspace, 'getGitStatus', (...args: Parameters<typeof gitStatus>) => {
+    if (received?.aborted) lateGit++; return gitStatus(...args);
+  });
+  t.mock.method(fs, 'readdir', async (...args: Parameters<typeof fs.readdir>) => {
+    const entries = await readDir(...args);
+    if (stage === 'fingerprint' && !held && String(args[0]) === root) await pause();
+    return entries;
+  });
+  t.mock.method(fs, 'stat', (...args: Parameters<typeof fs.stat>) => {
+    if (received?.aborted && held) lateStats++; return stat(...args);
+  });
+  t.mock.method(fs, 'opendir', async (...args: Parameters<typeof fs.opendir>) => {
+    const directory = await openDir(...args);
+    if ((stage === 'discovery' && !tree) || (stage === 'tree' && tree)) {
+      const read = directory.read.bind(directory);
+      directory.read = (async () => {
+        if (received?.aborted && held) lateDirectoryReads++;
+        const entry = await read();
+        if (!held) await pause();
+        return entry;
+      }) as typeof directory.read;
+    }
+    return directory;
+  });
+  for (stage of ['fingerprint', 'discovery', 'tree']) {
+    entered = deferred(); resume = deferred(); held = false; tree = false;
+    const controller = new AbortController();
+    const pending = call('workspace_open', { path: root, includeTree: true }, controller.signal).catch(error => error);
+    try {
+      await entered.promise; controller.abort();
+      await until(() => received?.aborted === true, 'Cancellation should reach the MCP handler');
+    } finally { resume.resolve(); await pending; }
+    await until(() => router.admission.pendingCount === 0, 'Cancelled open must release admission');
+    assert.deepEqual([lateStats, lateDirectoryReads, lateGit], [0, 0, 0], stage);
+    assert.deepEqual(router.session.current, originalSession);
+  }
+  stage = ''; held = false;
+  assert.equal(body(await call('workspace_open', { path: root })).workspace, root);
+}));
+
+it('workspace_open cancellation during root validation stops additional filesystem probes', async t => fixture(async ({ root, router, call }) => {
+  const ancestor = path.resolve(root, '../../../..'), controller = new AbortController();
+  const openWorkspace = router.workspace.openWorkspace.bind(router.workspace);
+  const lstat = fs.lstat.bind(fs), stat = fs.stat.bind(fs);
+  const late: string[] = [];
+  let signal: AbortSignal | undefined;
+  t.mock.method(router.workspace, 'openWorkspace', (...args: Parameters<typeof openWorkspace>) => {
+    signal = args[2]?.signal;
+    return openWorkspace(...args);
+  });
+  t.mock.method(fs, 'lstat', async (...args: Parameters<typeof fs.lstat>) => {
+    if (signal?.aborted) late.push('lstat ' + path.basename(String(args[0])));
+    const result = await lstat(...args);
+    if (signal && !controller.signal.aborted && String(args[0]) === ancestor) {
+      controller.abort();
+      await until(() => signal?.aborted === true, 'Root validation must receive the MCP cancellation');
+    }
+    return result;
+  });
+  t.mock.method(fs, 'stat', (...args: Parameters<typeof fs.stat>) => {
+    if (signal?.aborted) late.push('stat ' + path.basename(String(args[0])));
+    return stat(...args);
+  });
+  const session = { ...router.session.current! };
+  await assert.rejects(call('workspace_open', { path: root }, controller.signal));
+  await until(() => router.admission.pendingCount === 0, 'The cancelled root check must settle');
+  assert.equal(signal?.aborted, true);
+  assert.deepEqual(late, []); assert.deepEqual(router.session.current, session);
+  signal = undefined;
+  assert.equal(body(await call('workspace_open', { path: root })).workspace, root);
+  t.diagnostic(JSON.stringify({ remainingPathComponents: 4, filesystemProbesAfterCancellation: late.length }));
+}, 'one', 'two', 'three', 'four'));
+
+it('workspace_open cancellation between descriptor operations stops reads and closes acquired handles', async t => fixture(async ({ root, router, call }) => {
+  const descriptor = path.join(root, 'Review.csproj');
+  await fs.writeFile(descriptor, '<Project><!--' + 'x'.repeat(70 * 1024) + '--></Project>');
+  const openWorkspace = router.workspace.openWorkspace.bind(router.workspace);
+  const realpath = fs.realpath.bind(fs), open = fs.open.bind(fs);
+  const stages = ['realpath', 'open', 'stat', 'read'] as const;
+  type Stage = typeof stages[number];
+  let stopAt: Stage | undefined, signal: AbortSignal | undefined, controller = new AbortController();
+  let opened = 0, closed = 0;
+  const late: string[] = [];
+  async function observe<T>(stage: Stage, run: () => Promise<T>): Promise<T> {
+    if (signal?.aborted) late.push(stage);
+    const value = await run();
+    if (signal && stage === stopAt) {
+      controller.abort();
+      await until(() => signal?.aborted === true, 'Descriptor read must receive the MCP cancellation');
+    }
+    return value;
+  }
+  t.mock.method(router.workspace, 'openWorkspace', (...args: Parameters<typeof openWorkspace>) => {
+    signal = args[2]?.signal;
+    return openWorkspace(...args);
+  });
+  t.mock.method(fs, 'realpath', (...args: Parameters<typeof fs.realpath>) =>
+    String(args[0]) === descriptor ? observe('realpath', () => realpath(...args)) : realpath(...args));
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+    if (String(args[0]) !== descriptor) return open(...args);
+    const handle = await observe('open', () => open(...args));
+    opened++;
+    const stat = handle.stat.bind(handle), read = handle.read.bind(handle), close = handle.close.bind(handle);
+    t.mock.method(handle, 'stat', () => observe('stat', stat));
+    t.mock.method(handle, 'read', (buffer: Buffer, offset: number, length: number, position: number) =>
+      observe('read', () => read(buffer, offset, length, position)));
+    t.mock.method(handle, 'close', async () => { await close(); closed++; });
+    return handle;
+  });
+  const session = { ...router.session.current! };
+  for (const stage of stages) {
+    stopAt = stage; signal = undefined; controller = new AbortController();
+    await assert.rejects(call('workspace_open', { path: root }, controller.signal));
+    await until(() => router.admission.pendingCount === 0, 'The cancelled descriptor request must settle');
+    assert.equal(controller.signal.aborted, true, stage);
+    assert.deepEqual(late, [], stage); assert.equal(closed, opened, stage);
+    assert.deepEqual(router.session.current, session);
+  }
+  t.diagnostic(JSON.stringify({ cancelAfter: stages, descriptorOperationsAfterCancellation: late.length, opened, closed }));
+  stopAt = undefined; signal = undefined;
+  assert.equal(body(await call('workspace_open', { path: root })).workspace, root);
 }));
 
 it('a cancelled running call holds its capacity until asynchronous cleanup actually finishes', async () => fixture(async ({ call, router }) => {

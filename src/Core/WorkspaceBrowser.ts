@@ -58,7 +58,8 @@ export async function getDirectoryTree(root: string, maxDepth = 3, operation?: O
 }
 
 /** 验证路径后有界浏览目录，保留遗漏与截断证据。 */
-export async function listDirectory(root: string, options: WorkspaceDirectoryOptions = {}, operation: OperationContext = { deadline: Date.now() + 20_000 }): Promise<WorkspaceDirectoryResult> {
+export async function listDirectory(root: string, options: WorkspaceDirectoryOptions = {}, parent?: OperationContext): Promise<WorkspaceDirectoryResult> {
+  const operation = { ...parent, deadline: Math.min(parent?.deadline ?? Infinity, Date.now() + 20_000) };
   checkOperation(operation);
   const { full, maxDepth, maxEntries, maxOutputChars } = validateWorkspaceDirectoryOptions(options, root);
   const realRoot = await fs.realpath(root);

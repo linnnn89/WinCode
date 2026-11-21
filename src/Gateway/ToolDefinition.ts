@@ -1,30 +1,38 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/server';
 import type { ToolRouter } from '../Core/ToolRouter.js';
+import type { WinCodeConfig } from '../Core/Config.js';
+
+export interface ToolValidationContext {
+  paths: Pick<WinCodeConfig, 'workspaceRoot' | 'trashDir'>;
+  tools: Tool[];
+}
 
 export interface ToolExecutionContext {
   router: ToolRouter;
   signal?: AbortSignal;
   tools: Tool[];
   schemaHash: string;
+  unbound?: boolean;
 }
 
 export interface ToolDefinition {
   tool: Tool;
   aliases?: Array<{ name: string; listed: boolean; description?: string }>;
   workspaceControl?: boolean;
+  desktopOnly?: boolean;
   allowDuringWorkspaceRecovery?: boolean;
   requestLane?: 'status';
   requestBudget?: 'ui' | 'diagnostics' | 'workspace';
   /** A completed mutation reports its actual outcome even if its request expired during finalization. */
   preserveOutcomeOnInterruption?: boolean;
   invalidArguments?: (message: string) => CallToolResult;
-  validate?: (args: Record<string, unknown>, context: ToolExecutionContext) => void;
+  validate?: (args: Record<string, unknown>, context: ToolValidationContext) => void;
   execute: (args: Record<string, unknown>, context: ToolExecutionContext) => Promise<CallToolResult>;
 }
 
 /** Types are asserted only after the registry validates the declared JSON schema. */
 export function defineTool<T extends object>(tool: Tool, behavior: Omit<ToolDefinition, 'tool' | 'validate' | 'execute'> & {
-  validate?: (args: T, context: ToolExecutionContext) => void;
+  validate?: (args: T, context: ToolValidationContext) => void;
   execute: (args: T, context: ToolExecutionContext) => Promise<CallToolResult>;
 }): ToolDefinition {
   return { ...behavior, tool,

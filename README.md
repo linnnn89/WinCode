@@ -85,32 +85,34 @@ Running `npm run check` builds the Gateway and native components, runs core regr
 
 For Codex with persistent terminal support, the [Skill on-demand mode](skills/wincode/references/diagnostics.md#skill-按需会话) starts WinCode only when needed and reuses one connection throughout the task. Install the Skill, disable the native WinCode MCP entry, and refresh the client connection before using this mode. The Skill starts `dist/Client/SkillSessionCli.js` in an interactive execution session; results remain available as full JSON and image files. It requires an extra file read per result. Other clients can use the native stdio configuration below.
 
-For clients that support `mcpServers`, add the following stdio configuration. Explicitly setting `--workspace` is recommended:
+For clients that support `mcpServers`, configure one dynamic stdio connection for all your tasks.
 
 ```json
 {
   "mcpServers": {
     "wincode": {
       "command": "node",
-      "args": ["C:/path/to/WinCode/dist/index.js", "--workspace", "C:/path/to/project"]
+      "args": ["C:/path/to/WinCode/dist/index.js", "--dynamic-workspace"]
     }
   }
 }
 ```
 
-Replace both paths with existing absolute paths. The WinCode installation directory and your project directory may be different. Ensure `node` is available in `PATH`, or use its absolute executable path.
+Replace the entry path with the absolute path to your built Gateway. Use `node` from `PATH` or its absolute executable path. `node dist/index.js --print-connection --dynamic-workspace` prints the settings for your installation.
 
-For a graphical configuration interface, use type `stdio`, command `node`, and three separate argument entries: the `dist/index.js` path, `--workspace`, and the project path. Do not add surrounding quotes to individual argument entries, even when a path contains spaces. No additional environment variables are required for the default configuration.
+In a graphical client, select `stdio` and enter the two arguments separately. For a fixed connection, use the entry path followed by `--workspace` and the project's absolute directory.
 
 **3. Verify the connection and try a query**
 
-After connecting, ask the agent to call `wincode_hello_world` and confirm that `health.workspaceBinding.root` matches your project. Then try:
+After connecting, call `wincode_hello_world` and check `health.workspaceBinding.mode`. In dynamic mode, a heartbeat without a path returns `workspace: null`. Supply `workspacePath` to inspect a particular project. Then try the following request.
 
 > Summarize this project's structure, list the contents of `src`, and locate the code responsible for saving data.
 
 The agent can use `workspace_open` to obtain the project summary, `wincode_list_directory` to browse a directory, and `wincode_search_text` to locate code. For UI inspection, start the target application in your interactive Windows desktop session and use the example above.
 
-Each connection is bound to one workspace for its lifetime. `workspace_open` confirms or recovers that workspace; it does not switch projects. A different root returns `WORKSPACE_MISMATCH`. Use a separately configured connection for another project. If `--workspace` is omitted, the connection binds to the server's launch directory.
+With `--dynamic-workspace`, the agent supplies the current task's absolute directory as `workspacePath` on every project call, including follow-up reads. For example, `wincode_search_text({"workspacePath":"C:/projects/App","query":"Save"})` searches App. `workspace_open` selects its project with `path`. Simultaneous requests have independent roots, caches and file watchers. Up to four requested projects stay open. A fifth replaces the least recently used idle project, or returns `WORKSPACE_BUSY` while all four are in use. Other open projects can serve requests during eviction. A project whose cleanup fails retains its slot and reports `WORKSPACE_RECOVERY_REQUIRED` with `restart_gateway`. Desktop-only tools still take a PID or window handle.
+
+Fixed mode is the default when the dynamic flag is absent. It binds to `--workspace` or the launch directory. Opening another project returns `WORKSPACE_MISMATCH`. To use Roslyn on a dynamic connection, add `--workspace <authorized-root> --roslyn-config <absolute-config>`. That project owns the Roslyn configuration. Other projects use local text.
 
 See the [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md) for client configuration and the optional agent Skill. After rebuilding, reconnect the client's MCP server to load the updated process and tool schemas.
 
@@ -134,7 +136,7 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 
 | Tool | Purpose |
 | --- | --- |
-| `workspace_open` | Confirm or recover the fixed workspace and return a compact project summary. |
+| `workspace_open` | Return a compact summary for the selected project. In fixed mode the path must match the startup workspace. |
 | `wincode_list_directory` | Browse a directory with depth, entry-count and output limits. |
 | `wincode_analyze_workspace` | Read solution structure and declared project references. |
 | `wincode_search_text` | Find literal text within selected files or directories. |
@@ -260,32 +262,34 @@ npm run delivery:verify
 
 支持持久终端的 Codex 可使用 [Skill 按需模式](skills/wincode/references/diagnostics.md#skill-按需会话)：首次需要时才启动 WinCode，任务内复用同一连接。先安装 Skill、禁用原生 WinCode MCP 条目，并刷新客户端连接。Skill 通过交互执行会话启动 `dist/Client/SkillSessionCli.js`，完整结果保存为 JSON 和图片文件，每次结果需要额外读取文件。其他客户端可使用下列原生 stdio 配置。
 
-对于支持 `mcpServers` 的客户端，添加以下 stdio 配置。建议显式设置 `--workspace`：
+支持 `mcpServers` 的客户端可以配置一个动态 stdio 入口，供不同项目的任务复用。
 
 ```json
 {
   "mcpServers": {
     "wincode": {
       "command": "node",
-      "args": ["C:/path/to/WinCode/dist/index.js", "--workspace", "C:/path/to/project"]
+      "args": ["C:/path/to/WinCode/dist/index.js", "--dynamic-workspace"]
     }
   }
 }
 ```
 
-将两个路径替换为实际存在的绝对路径。WinCode 安装目录与目标项目目录可以不同。确保 `node` 位于 `PATH` 中，或将命令改为其可执行文件的绝对路径。
+将入口换成本机编译出的 `dist/index.js` 绝对路径。命令可以使用 `PATH` 中的 `node` 或其绝对路径。在 WinCode 安装目录运行 `node dist/index.js --print-connection --dynamic-workspace` 可打印本机配置。
 
-使用图形化配置界面时，类型选择 `stdio`，命令填写 `node`，依次添加三个独立参数：`dist/index.js` 的路径、`--workspace`、目标项目路径。即使路径包含空格，也不要为独立参数额外添加引号。默认配置不需要额外环境变量。
+在图形化客户端选择 `stdio`，将入口路径与 `--dynamic-workspace` 分别填入参数栏。固定连接使用入口路径、`--workspace` 和项目绝对路径三个参数。
 
 **3. 验证连接并执行首次查询**
 
-连接后，让智能体调用 `wincode_hello_world`，确认 `health.workspaceBinding.root` 与目标项目一致，然后尝试：
+连接后，让智能体调用 `wincode_hello_world` 核对 `health.workspaceBinding.mode`。动态模式下，省略路径的心跳返回 `workspace: null`，携带 `workspacePath` 可查看指定项目。然后尝试下面的请求。
 
 > 概述项目结构，列出 `src` 目录中的内容，并查找负责保存数据的代码。
 
 智能体可以使用 `workspace_open` 获取项目摘要，使用 `wincode_list_directory` 浏览目录，再通过 `wincode_search_text` 定位代码。检查 UI 时，先在交互式 Windows 桌面会话中启动目标应用，再参考前面的使用示例。
 
-每条连接在其生命周期内固定对应一个工作区。`workspace_open` 用于确认或恢复该工作区，不能切换项目；请求其他根目录会返回 `WORKSPACE_MISMATCH`。访问其他项目时，应使用单独配置的连接。如果省略 `--workspace`，连接将固定到服务器的启动目录。
+动态模式下，智能体在每次项目工具调用及续读时，把当前任务或用户点名的项目绝对目录填入 `workspacePath`。例如 `wincode_search_text({"workspacePath":"I:/WinCode","query":"openWorkspace"})` 搜索 WinCode。`workspace_open` 使用已有的 `path` 参数。并发请求各自绑定目标目录、缓存和文件监听。网关最多保留四个按请求打开的项目，第五个会替换最久未使用的空闲项目。健康名额都在使用或初始化时返回 `WORKSPACE_BUSY`。回收期间其他已打开的项目可以继续处理请求。清理失败的项目继续占用一个名额，访问该项目时会返回 `WORKSPACE_RECOVERY_REQUIRED` 和 `restart_gateway`。纯桌面工具继续使用 PID 或窗口句柄。
+
+省略动态标志即为固定模式，工作区由 `--workspace` 或启动目录确定。请求打开其他项目会返回 `WORKSPACE_MISMATCH`。动态连接也可加 `--workspace <已授权项目> --roslyn-config <配置绝对路径>`，只有该项目使用 Roslyn，其他项目使用本地文本。
 
 客户端配置和可选的智能体 Skill 安装方式见 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。重新构建后，需要重新连接客户端中的 MCP 服务器，才能加载更新后的进程和工具参数定义。
 
@@ -309,7 +313,7 @@ npm run delivery:verify
 
 | 工具 | 用途 |
 | --- | --- |
-| `workspace_open` | 确认或恢复固定工作区，返回精简的项目摘要。 |
+| `workspace_open` | 返回选定项目的摘要，固定模式要求路径与启动工作区一致。 |
 | `wincode_list_directory` | 浏览指定目录，支持深度、条目数和输出限制。 |
 | `wincode_analyze_workspace` | 读取解决方案结构及声明的项目引用。 |
 | `wincode_search_text` | 在指定文件或目录中按普通字符串搜索。 |

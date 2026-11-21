@@ -44,7 +44,7 @@ export const WORKSPACE_TOOLS = [
       },
     },
   }, {
-    validate: (args, { router }) => { validateWorkspaceDirectoryOptions(args, router.config.workspaceRoot); },
+    validate: (args, { paths }) => { validateWorkspaceDirectoryOptions(args, paths.workspaceRoot); },
     execute: async (args, { router, signal }) => jsonResult(await router.listDirectory(args, signal)),
   }),
   defineTool<{ greeting?: string; toolName?: string }>({
@@ -69,18 +69,21 @@ export const WORKSPACE_TOOLS = [
       if (args.toolName !== undefined && !context.tools.some(tool => tool.name === args.toolName))
         throw new Error(`Tool is not registered in this instance: ${args.toolName}`);
     },
-    execute: async (args, { router, tools, schemaHash }) => {
+    execute: async (args, { router, tools, schemaHash, unbound }) => {
       const selectedTool = tools.find(tool => tool.name === args.toolName);
       const health = await router.getRuntimeHealth();
+      const workspace = unbound ? null : health.activeWorkspace;
       return jsonResult({
         status: health.status, message: args.greeting || 'Hello from WinCode MCP Gateway!',
         gateway: 'WinCode Agent Gateway', version: WINCODE_VERSION, runtime: RUNTIME_IDENTITY,
         toolContract: { schemaHash, toolCount: tools.length,
           ...(selectedTool ? { tool: { name: selectedTool.name, inputSchema: selectedTool.inputSchema,
             schemaHash: contractHash(selectedTool.inputSchema) } } : {}) },
-        platform: process.platform, workspace: router.config.workspaceRoot, timestamp: new Date().toISOString(), health,
-        codeProvider: health.codeProvider,
-        adapters: {
+        platform: process.platform, workspace, timestamp: new Date().toISOString(),
+        health: unbound ? { status: health.status, admission: health.admission, activeWorkspace: null,
+          workspaceBinding: { mode: 'dynamic', root: null, source: 'request' }, session: null } : health,
+        codeProvider: unbound ? null : health.codeProvider,
+        adapters: unbound ? {} : {
           ...(health.roslyn ? { roslyn: health.roslyn } : {}),
           text: { available: true, source: 'local-text', details: health.text.details },
           repomix: { available: health.repomix.available, source: health.repomix.source, details: health.repomix.details },
@@ -135,7 +138,7 @@ export const WORKSPACE_TOOLS = [
   }, {
     preserveOutcomeOnInterruption: true,
     invalidArguments: message => jsonResult(invalidTrashResult(message), true, true),
-    validate: (args, { router }) => validateTrashPath(args.filePath, router.config.workspaceRoot, router.config.trashDir),
+    validate: (args, { paths }) => validateTrashPath(args.filePath, paths.workspaceRoot, paths.trashDir),
     execute: async (args, { router, signal }) => {
       const result = await router.moveToTrash(args.filePath, args.reason, signal);
       return jsonResult(result, true, !result.success);

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { getDefaultConfig } from '../src/Core/Config.js';
@@ -99,6 +100,9 @@ it('both MCP open names reject a different root before draining, fingerprinting 
       assert.equal(error.recoveryAction, 'select_workspace_connection');
       assert.deepEqual(result.structuredContent, error);
     }
+    const wrongWrite = await call('wincode_safe_move_to_trash', { workspacePath: b, filePath: 'Api.cs' });
+    assert.equal(body(wrongWrite).errorCode, 'WORKSPACE_MISMATCH');
+    assert.match(await fs.readFile(path.join(a, 'Api.cs'), 'utf8'), /ONLY_A/);
     const after = await router.getRuntimeHealth();
     assert.equal(after.inFlightRequests, 1, 'the pre-existing request remains owned');
     assert.deepEqual(after.session, before.session);
@@ -229,3 +233,222 @@ it('an explicit workspace flag requires an absolute value and fails before creat
   }
   await assert.rejects(fs.stat(path.join(a, '.cache')), { code: 'ENOENT' });
 }));
+
+async function withDynamicClient(cwd: string, options: string[], run: (client: Client) => Promise<void>) {
+  const client = new Client({ name: 'dynamic-workspace-acceptance', version: '1' });
+  const transport = new StdioClientTransport({ command: process.execPath,
+    args: [path.resolve('dist/index.js'), '--dynamic-workspace', ...options], cwd, stderr: 'pipe' });
+  try { await client.connect(transport); await run(client); }
+  finally { await client.close(); }
+}
+
+it('one dynamic stdio connection reads the correct same-named file across sequential and overlapping workspace requests', { timeout: 45000 }, async t =>
+  fixture(async (a, b) => withDynamicClient(path.dirname(a), [], async client => {
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name, arguments: args });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      return body(result);
+    };
+    const read = async (root: string) => {
+      const result = await call('wincode_prepare_context', { workspacePath: root, task: 'Read the project marker',
+        lineRanges: [{ file: 'Api.cs', startLine: 1, endLine: 1 }] });
+      assert.equal(result.evidence[0].snippet.trim(), `public class Api { public string Marker = "${root === a ? 'ONLY_A' : 'ONLY_B'}"; }`);
+    };
+    const hello = await call('wincode_hello_world', { toolName: 'wincode_prepare_context' });
+    assert.equal(hello.health.workspaceBinding.mode, 'dynamic');
+    assert.equal(hello.workspace, null);
+    assert.ok(hello.toolContract.tool.inputSchema.required.includes('workspacePath'));
+    await Promise.all([read(a), read(b)]);
+    for (const root of [a, b, a]) {
+      assert.equal((await call('workspace_open', { path: root })).workspace, root);
+      await read(root);
+    }
+    await Promise.all(Array.from({ length: 16 }, (_, i) => read(i % 2 ? b : a)));
+    const [left, right] = await Promise.all([a, b].map(workspacePath => call('wincode_hello_world', { workspacePath })));
+    for (const [health, root] of [[left, a], [right, b]] as const) {
+      assert.equal(health.runtime.instanceId, hello.runtime.instanceId);
+      assert.equal(health.workspace, root);
+      assert.equal(health.health.workspaceWatch.root, root);
+      assert.ok(health.health.admission.business.peakActive >= 2);
+    }
+    assert.notEqual(left.health.cache.namespace, right.health.cache.namespace);
+    assert.notEqual(left.health.session.id, right.health.session.id);
+    await assert.rejects(fs.stat(path.join(path.dirname(a), '.cache')), { code: 'ENOENT' });
+    t.diagnostic(JSON.stringify({ instanceId: hello.runtime.instanceId, sequential: ['ONLY_A', 'ONLY_B', 'ONLY_A'],
+      parallelReads: 16, peakActive: left.health.admission.business.peakActive }));
+  })));
+
+it('failed workspace selections leave live projects usable and a concurrent trash move stays inside its selected project', { timeout: 45000 }, async () =>
+  fixture(async (a, b) => withDynamicClient(path.dirname(a), [], async client => {
+    const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args });
+    const missing = path.join(path.dirname(a), 'missing');
+    const link = path.join(path.dirname(a), 'alias');
+    await fs.symlink(b, link, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.notEqual((await call('workspace_open', { path: a })).isError, true);
+    const original = body(await call('wincode_hello_world', { workspacePath: a })).health.session.id;
+    for (const args of [{ path: missing }, { path: 'relative' }, { path: link }, { path: a, workspacePath: b }]) {
+      const rejected = await call('workspace_open', args);
+      assert.equal(rejected.isError, true);
+      assert.equal(body(rejected).errorCode, 'INVALID_ARGUMENT');
+    }
+    assert.equal((await call('wincode_safe_move_to_trash', { filePath: 'Api.cs' })).isError, true);
+    await assert.rejects(fs.stat(missing), { code: 'ENOENT' });
+    assert.equal(body(await call('wincode_hello_world', { workspacePath: a })).health.session.id, original);
+    const [readA, moveB] = await Promise.all([
+      call('wincode_search_text', { workspacePath: a, query: 'ONLY_A', scopePaths: ['Api.cs'] }),
+      call('wincode_safe_move_to_trash', { workspacePath: b, filePath: 'Api.cs' }),
+    ]);
+    assert.equal(body(readA).matches[0].file, 'Api.cs');
+    const moved = body(moveB);
+    assert.equal(moved.outcome, 'completed');
+    assert.equal(moved.originalPath, path.join(b, 'Api.cs'));
+    assert.equal(path.dirname(moved.trashPath), path.join(b, 'trash'));
+    assert.match(await fs.readFile(moved.trashPath, 'utf8'), /ONLY_B/);
+    assert.match(await fs.readFile(path.join(a, 'Api.cs'), 'utf8'), /ONLY_A/);
+    await assert.rejects(fs.stat(path.join(b, 'Api.cs')), { code: 'ENOENT' });
+    // Returning after idle eviction must still resolve Api.cs against A.
+    for (const name of ['C', 'D', 'E', 'F']) {
+      const root = path.join(path.dirname(a), name);
+      await fs.mkdir(root);
+      assert.notEqual((await call('workspace_open', { path: root })).isError, true);
+    }
+    assert.equal(body(await call('wincode_hello_world', { workspacePath: a })).health.session, null);
+    const reopened = body(await call('wincode_search_text', { workspacePath: a, query: 'ONLY_A', scopePaths: ['Api.cs'] }));
+    assert.equal(reopened.matches.length, 1);
+    assert.notEqual(body(await call('wincode_hello_world', { workspacePath: a })).health.session.id, original);
+  })));
+
+it('an idle project with slow or failed cleanup does not block other projects on one connection', { timeout: 15000 }, async t =>
+  fixture(async (a, b) => {
+    const config = getDefaultConfig(); config.workspaceMode = 'dynamic';
+    config.adapters.flaui.enabled = false; config.adapters.repomix.useCli = false;
+    const primary = new ToolRouter(config), server = new WinCodeMcpServer(primary);
+    const client = new Client({ name: 'dynamic-cleanup', version: '1' });
+    const roots = ['C', 'D', 'E', 'F'].map(name => path.join(path.dirname(a), name));
+    for (const root of roots) await fs.mkdir(root);
+    let entered!: () => void, release!: () => void;
+    const retiring = new Promise<void>(r => { entered = r; }), gate = new Promise<void>(r => { release = r; });
+    const initialize = ToolRouter.prototype.initialize;
+    let cleanupCalls = 0, openedE = 0, cleanupFinished = false;
+    t.mock.method(ToolRouter.prototype, 'initialize', async function (this: ToolRouter) {
+      await initialize.call(this);
+      if (this.config.workspaceRoot === roots[2]) openedE++;
+      if (this.config.workspaceRoot === a) this.resources.register('disposable', 'fixture', async () => {
+        cleanupCalls++; entered(); await gate; cleanupFinished = true; throw new Error('Controlled cleanup failure');
+      });
+    });
+    const list = async (workspacePath: string) => body(await client.callTool({ name: 'wincode_list_directory', arguments: { workspacePath } }));
+    try {
+      const [left, right] = InMemoryTransport.createLinkedPair();
+      await Promise.all([client.connect(left), (server as any).server.connect(right)]);
+      for (const root of [a, b, roots[0], roots[1]]) assert.equal((await list(root)).workspace, root);
+      const firstE = list(roots[2]); await retiring;
+      const secondE = list(roots[2]);
+      const hotB = body(await client.callTool({ name: 'wincode_search_text', arguments: { workspacePath: b, query: 'ONLY_B', scopePaths: ['Api.cs'] } }));
+      assert.equal(hotB.matches.length, 1); assert.equal(cleanupFinished, false);
+      assert.equal(openedE, 0, 'the retiring router still occupies its slot');
+      release();
+      for (const result of await Promise.all([firstE, secondE])) assert.equal(result.workspace, roots[2]);
+      assert.equal(openedE, 1);
+      assert.equal((await list(roots[3])).workspace, roots[3]); assert.equal((await list(b)).workspace, b);
+      const failed = await list(a);
+      assert.equal(failed.errorCode, 'WORKSPACE_RECOVERY_REQUIRED'); assert.equal(failed.recoveryAction, 'restart_gateway');
+      assert.equal(cleanupCalls, 1);
+    } finally {
+      release(); await client.close(); await assert.rejects(server.stop(), /Dynamic workspace cleanup failed|Gateway shutdown failed/);
+    }
+  }));
+
+it('dynamic Roslyn evaluation is confined to the explicitly configured project across real stdio calls', { timeout: 120000 }, async t =>
+  fixture(async (a, b) => {
+    const repo = path.resolve(import.meta.dirname, '..');
+    const { resolveDotnet, runDotnet } = await import(pathToFileURL(path.join(repo, 'scripts/lib/dotnet.mjs')).href);
+    const sdk = resolveDotnet(repo);
+    const project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>';
+    for (const root of [a, b]) await fs.writeFile(path.join(root, 'Api.csproj'), project);
+    const methods = Array.from({ length: 205 }, (_, i) => `public void ApiEarlyApiLateApiTwin${i}() {}`);
+    await fs.writeFile(path.join(a, 'Types.cs'), ['public class ApiEarly {}', 'namespace One { public class ApiTwin {} }',
+      'public class Container {', ...methods, 'public void MixedName() {}', 'public void Run(int n) {}', 'public void Run(string s) {}', '}',
+      'public class MixedName {}', 'namespace Two { public class ApiTwin {} }', 'public class ApiLate {}',
+      'public partial class Parts { public partial int SplitValue { get; } public partial int MyProp { get; } }',
+      'public partial class Parts { public partial int MyProp => 4; }'].join('\n'));
+    await fs.writeFile(path.join(a, 'Uses.cs'), ['public class Uses { public ApiEarly Early; public ApiLate Late;',
+      'public One.ApiTwin Left; public Two.ApiTwin Right; public int Read(Parts p) => p.SplitValue + p.MyProp; }'].join('\n'));
+    const secondPart = 'public partial class Parts { public partial int SplitValue => 7; }';
+    await fs.writeFile(path.join(a, 'Second.cs'), secondPart);
+    const emptySource = path.join(a, 'empty-source');
+    await fs.mkdir(emptySource);
+    await fs.copyFile(path.join(repo, 'global.json'), path.join(a, 'global.json'));
+    runDotnet(sdk, ['restore', 'Api.csproj', '--source', emptySource, '--nologo'], a, 30000);
+    const config = path.join(path.dirname(a), 'roslyn.json');
+    await fs.writeFile(config, JSON.stringify({ enabled: true, allowProjectEvaluation: true, project: 'Api.csproj',
+      configuration: 'Debug', targetFramework: 'net10.0', dotnetPath: sdk.dotnet,
+      hostPath: path.join(repo, 'tools/WinCode.Code.Host/bin/Release/net10.0/publish/WinCode.Code.Host.dll') }));
+    const unscoped = spawnSync(process.execPath, [path.join(repo, 'dist/index.js'), '--dynamic-workspace', '--roslyn-config', config],
+      { cwd: path.dirname(a), input: '', encoding: 'utf8', timeout: 5000, windowsHide: true });
+    assert.equal(unscoped.status, 1);
+    assert.match(unscoped.stderr, /requires --workspace/);
+    await withDynamicClient(path.dirname(a), ['--workspace', a, '--roslyn-config', config], async client => {
+      const query = (workspacePath: string) => client.callTool({ name: 'wincode_find_code_symbol',
+        arguments: { workspacePath, query: 'Api', kind: 'class' } }, { timeout: 110000 });
+      const [semantic, text] = await Promise.all([query(a), query(b)]);
+      assert.notEqual(semantic.isError, true, JSON.stringify(semantic.content));
+      assert.notEqual(text.isError, true, JSON.stringify(text.content));
+      const location = body(semantic).symbols.find((item: { name: string }) => item.name === 'Api')?.location;
+      assert.ok(location?.snapshotId);
+      assert.equal(body(text).source, 'local-text');
+      const cross = await client.callTool({ name: 'wincode_find_references',
+        arguments: { workspacePath: b, symbolName: 'Api', symbolLocation: location } });
+      assert.equal(body(cross).errorCode, 'UNSUPPORTED_SYMBOL_LOCATION');
+      assert.equal(body(await query(a)).symbols.find((item: { name: string }) => item.name === 'Api').location.snapshotId, location.snapshotId);
+      const tool = async (name: string, args: Record<string, unknown>) => body(await client.callTool({ name, arguments: { workspacePath: a, ...args } }));
+      const fuzzy = await tool('wincode_find_code_symbol', { query: 'ApiLate' });
+      assert.equal(fuzzy.totalFound, 206); assert.equal(fuzzy.symbols.length, 200); assert.equal(fuzzy.truncated, true);
+      const nameCounts: Record<string, number> = {};
+      for (const target of ['ApiEarly', 'ApiLate']) {
+        const exact = (await tool('wincode_find_code_symbol', { query: target, kind: 'class' })).symbols[0].location;
+        const refs = await tool('wincode_find_references', { symbolName: target, symbolLocation: exact });
+        assert.equal(refs.totalReferences, 1);
+        const impact = await tool('analyze_change_impact', { target, symbolLocation: exact });
+        assert.equal(impact.referencesCount, 1); assert.equal(impact.totalReferences, 1);
+        assert.equal(impact.riskLevel, 'UNKNOWN'); assert.deepEqual(impact.symbolLocation, exact);
+        const use = { ...exact, file: refs.references[0].file, position: refs.references[0].start };
+        assert.equal((await tool('wincode_find_references', { symbolName: target, symbolLocation: use })).totalReferences, 1);
+        assert.equal((await tool('analyze_change_impact', { target, symbolLocation: use })).errorCode, 'SYMBOL_MISMATCH');
+        const named = await tool('analyze_change_impact', { target });
+        assert.deepEqual(named.symbolLocation, exact, target);
+        assert.deepEqual([named.uniqueResolution, named.referencesCount, named.totalReferences, named.riskLevel], [true, 1, 1, 'UNKNOWN'], target);
+        nameCounts[target] = named.totalReferences;
+      }
+      const byName = await tool('wincode_find_references', { symbolName: 'ApiLate' });
+      assert.equal(byName.candidateCount, 1); assert.equal(byName.candidates[0].name, 'ApiLate');
+      const partial = { ...location, file: 'Second.cs', position: secondPart.indexOf('Parts') };
+      assert.deepEqual((await tool('analyze_change_impact', { target: 'Parts', symbolLocation: partial })).symbolLocation, partial);
+      for (const target of ['MyProp', 'SplitValue']) {
+        const property = await tool('wincode_find_code_symbol', { query: target, kind: 'property' });
+        assert.equal(property.totalFound, 1); assert.equal(property.symbols.length, 1);
+        const impact = await tool('analyze_change_impact', { target });
+        assert.deepEqual(impact.symbolLocation, property.symbols[0].location);
+        assert.deepEqual([impact.uniqueResolution, impact.referencesCount, impact.totalReferences], [true, 1, 1]);
+        nameCounts[target] = impact.totalReferences;
+      }
+      const implementation = { ...partial, position: secondPart.indexOf('SplitValue') };
+      const selectedProperty = await tool('analyze_change_impact', { target: 'SplitValue', symbolLocation: implementation });
+      assert.deepEqual(selectedProperty.symbolLocation, implementation); assert.equal(selectedProperty.totalReferences, 1);
+      for (const target of ['ApiTwin', 'MixedName', 'Run', 'ApiEarlyApiLate']) {
+        const result = await tool('analyze_change_impact', { target });
+        assert.equal(result.uniqueResolution, false, target); assert.equal(result.riskLevel, 'UNKNOWN');
+        assert.equal(result.symbolLocation, undefined); assert.equal(result.targetKind, undefined); assert.equal(result.totalReferences, null);
+        const candidates = result.matchedSymbols;
+        assert.equal(candidates.length, target === 'ApiEarlyApiLate' ? 0 : 2, target);
+        assert.ok(candidates.every((s: { name: string }) => s.name === target));
+        assert.equal(new Set(candidates.map((s: { location: unknown }) => JSON.stringify(s.location))).size, candidates.length);
+        if (target === 'ApiTwin') {
+          for (const candidate of candidates)
+            assert.equal((await tool('analyze_change_impact', { target, symbolLocation: candidate.location })).totalReferences, 1);
+        }
+      }
+      t.diagnostic(JSON.stringify({ similarMethods: methods.length, fuzzyCandidates: fuzzy.totalFound, nameCounts,
+        ambiguousNames: ['ApiTwin', 'MixedName', 'Run'], partialImplementation: selectedProperty.symbolLocation.file }));
+    });
+  }));

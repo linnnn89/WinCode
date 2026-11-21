@@ -19,6 +19,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   private readonly lock = new Mutex();
   private client?: RoslynHostClient;
   private snapshot?: string;
+  private referenceDeclaration = false;
   private reloadRequired = false;
   private restartRequired = false;
   private cleanupFailure?: GatewayRestartRequiredError;
@@ -137,6 +138,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
           path.relative(this.localPath(file), this.localPath(this.options.additionalInputs![index])) !== ''))
       throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Code Host input policy/configuration mismatch.');
     this.snapshot = reply.snapshot;
+    this.referenceDeclaration = reply.referenceDeclaration === true;
     this.reloadRequired = false;
   }
 
@@ -233,15 +235,12 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   }
 
   /** 验证当前 Host 返回的声明列表，禁止跨根或没有身份的候选进入公共响应。 */
-  private symbols(reply: HostReply): CodeSymbol[] {
-    if (!Array.isArray(reply.symbols) || reply.symbols.length > 200) throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid symbol list.');
-    return reply.symbols.map((value: CodeSymbol) => {
-      if (!value || typeof value.name !== 'string' || !kinds.has(value.kind) || !Number.isSafeInteger(value.line) || value.line < 1 || !value.location)
-        throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid symbol declaration.');
-      this.validateLocation(value.location);
-      if (path.relative(this.localPath(value.file), this.localPath(value.location.file))) throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Declaration path mismatch.');
-      return value;
-    });
+  private symbol(value: CodeSymbol): CodeSymbol {
+    if (!value || typeof value.name !== 'string' || !kinds.has(value.kind) || !Number.isSafeInteger(value.line) || value.line < 1 || !value.location)
+      throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid symbol declaration.');
+    this.validateLocation(value.location);
+    if (path.relative(this.localPath(value.file), this.localPath(value.location.file))) throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Declaration path mismatch.');
+    return value;
   }
 
   /** 持有串行占用直到协议失败的进程清理结束；清理失败优先传播给 Router 的 E1 恢复门。 */
@@ -260,15 +259,17 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   }
 
   /** 名称搜索不读语义缓存；过期时要求下一次显式搜索重载，不重放本次失败请求。 */
-  async findSymbolsDetailed(query: string, kind?: string, relativePath?: string, operation?: OperationContext): Promise<FindSymbolsResult> {
+  async findSymbolsDetailed(query: string, kind?: string, relativePath?: string, operation?: OperationContext, match?: 'exact'): Promise<FindSymbolsResult> {
     if (typeof query !== 'string' || !query.trim() || query.length > 256 || (kind !== undefined && (typeof kind !== 'string' || kind.length > 128)))
       throw new CodeQueryError('INVALID_ARGUMENT', 'Roslyn query must contain 1–256 characters; kind must be a string of at most 128 characters.');
     if (relativePath) this.localPath(relativePath);
     return this.perform(operation, async () => {
       const client = await this.ready(operation);
       const reply = this.accept(await client.request({ operation: 'symbols', snapshot: this.snapshot, query,
-        ...(kind ? { kind } : {}), ...(relativePath ? { file: relativePath } : {}) }, this.options.queryTimeoutMs ?? 30000, operation));
-      const symbols = this.symbols(reply);
+        ...(kind ? { kind } : {}), ...(relativePath ? { file: relativePath } : {}), ...(match === 'exact' ? { exactName: true } : {}) },
+        this.options.queryTimeoutMs ?? 30000, operation));
+      if (!Array.isArray(reply.symbols) || reply.symbols.length > 200) throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid symbol list.');
+      const symbols = reply.symbols.map(value => this.symbol(value));
       const limitations = this.limitations(reply);
       if (!Number.isSafeInteger(reply.totalFound) || (reply.totalFound as number) < symbols.length || typeof reply.truncated !== 'boolean')
         throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid declaration coverage.');
@@ -286,13 +287,13 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
   findSymbolsInContent(content: string, file: string): CodeSymbol[] { return this.textDeclarations(content, file); }
 
   /** 精确引用只能使用本次搜索得到的定位；简单名结果保留候选，绝不选择第一个重载。 */
-  async findReferencesDetailed(symbolName: string, relativePath?: string, operation?: OperationContext, location?: SymbolLocation, limit?: number): Promise<FindReferencesResult> {
+  async findReferencesDetailed(symbolName: string, relativePath?: string, operation?: OperationContext, location?: SymbolLocation, limit?: number, requireDeclaration = false): Promise<FindReferencesResult> {
     if (limit !== undefined && (!location || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000))
       throw new CodeQueryError('INVALID_ARGUMENT', 'limit must be an integer from 1 to 1000 and requires a Roslyn symbolLocation.');
     if (relativePath) this.localPath(relativePath);
     if (symbolName.includes('/') || /\[\d+\]/.test(symbolName)) throw new CodeQueryError('LEGACY_SYMBOL_ID', 'Serena namePath cannot identify a Roslyn symbol; search again.');
     if (!location) {
-      const found = await this.findSymbolsDetailed(symbolName, undefined, relativePath, operation);
+      const found = await this.findSymbolsDetailed(symbolName, undefined, relativePath, operation, 'exact');
       const candidates = found.symbols.filter(symbol => symbol.name === symbolName);
       return { symbolName, references: [], totalReferences: 0, source: 'roslyn', analysisCompleteness: 'incomplete', queryComplete: false,
         truncated: found.truncated, resolution: candidates.length > 1 ? 'ambiguous' : 'incomplete', candidates, candidateCount: found.truncated ? undefined : candidates.length,
@@ -303,8 +304,15 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
     if (relativePath && path.relative(this.localPath(relativePath), this.localPath(location.file))) throw new CodeQueryError('INVALID_ARGUMENT', 'relativePath and symbolLocation.file disagree.');
     return this.perform(operation, async () => {
       this.validateLocation(location);
+      const includeDeclaration = requireDeclaration && this.referenceDeclaration;
       const reply = this.accept(await this.client!.request({ operation: 'references', snapshot: location.snapshotId, project: location.project,
-        file: location.file, position: location.position, symbolName, ...(limit === undefined ? {} : { limit }) }, this.options.queryTimeoutMs ?? 30000, operation));
+        file: location.file, position: location.position, symbolName, ...(includeDeclaration ? { requireDeclaration: true } : {}),
+        ...(limit === undefined ? {} : { limit }) }, this.options.queryTimeoutMs ?? 30000, operation));
+      const declaration = includeDeclaration ? this.symbol(reply.declaration as CodeSymbol) : undefined;
+      if (declaration && (declaration.name !== symbolName || declaration.location!.position !== location.position ||
+        path.relative(this.localPath(declaration.location!.project), this.localPath(location.project)) ||
+        path.relative(this.localPath(declaration.file), this.localPath(location.file))))
+        throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Resolved declaration does not match the requested location.');
       if (!Array.isArray(reply.references) || reply.references.length > (limit ?? 100) || typeof reply.truncated !== 'boolean' || !Number.isSafeInteger(reply.totalReferences))
         throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Invalid reference result.');
       const references: SymbolReference[] = reply.references.map((item: Record<string, unknown>) => {
@@ -314,7 +322,7 @@ export class RoslynAdapter implements CodeReferenceQuery, ContextCodeQuery {
         return { ...item, symbolName, lineKind: 'reference' } as unknown as SymbolReference;
       });
       if ((reply.totalReferences as number) < references.length || reply.snapshot !== location.snapshotId) throw new CodeQueryError('HOST_PROTOCOL_ERROR', 'Reference snapshot/coverage mismatch.');
-      return { symbolName, symbolLocation: location, references, totalReferences: reply.totalReferences as number, source: 'roslyn', analysisCompleteness: 'incomplete',
+      return { symbolName, symbolLocation: location, ...(declaration ? { declaration } : {}), references, totalReferences: reply.totalReferences as number, source: 'roslyn', analysisCompleteness: 'incomplete',
         queryComplete: false, truncated: reply.truncated, resolution: 'resolved', limitations: this.limitations(reply), semanticContext: this.evidence(reply) };
     });
   }

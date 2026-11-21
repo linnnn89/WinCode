@@ -2,6 +2,7 @@
 
 import { getDefaultConfig, WINCODE_VERSION } from './Core/Config.js';
 import { ToolRouter } from './Core/ToolRouter.js';
+import { absoluteWorkspace } from './Core/DynamicWorkspaces.js';
 import { WinCodeMcpServer } from './Gateway/McpServer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -12,16 +13,21 @@ async function main() {
   let workspaceRoot = process.cwd();
   let workspaceRootSource: 'argument' | 'cwd' = 'cwd';
   const args = process.argv.slice(2);
+  const dynamic = args.includes('--dynamic-workspace');
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--workspace' || args[i] === '-w') {
       const target = args[++i];
       if (!target || !path.isAbsolute(target)) throw new Error('--workspace requires an absolute directory path.');
-      workspaceRoot = target;
+      workspaceRoot = dynamic ? absoluteWorkspace(target) : target;
       workspaceRootSource = 'argument';
     }
   }
 
   if (args.includes('--print-connection')) {
+    if (dynamic && args.every(arg => arg === '--print-connection' || arg === '--dynamic-workspace')) {
+      process.stdout.write(JSON.stringify(connectionGuide(), null, 2) + '\n');
+      return;
+    }
     if (workspaceRootSource !== 'argument') throw new Error('--print-connection requires --workspace with an absolute target path.');
     if (args.some(arg => !['--print-connection', '--workspace', '-w', workspaceRoot].includes(arg)))
       throw new Error('--print-connection accepts only --workspace; add other startup options explicitly to the generated configuration.');
@@ -31,9 +37,12 @@ async function main() {
 
   const config = getDefaultConfig(workspaceRoot);
   config.workspaceRootSource = workspaceRootSource;
+  if (dynamic) config.workspaceMode = 'dynamic';
   // 此文件是用户显式选择的启动配置，不从目标仓库自动发现或接受 MCP 参数指定执行程序。
   const roslynIndex = args.indexOf('--roslyn-config');
   if (roslynIndex >= 0) {
+    if (config.workspaceMode === 'dynamic' && workspaceRootSource !== 'argument')
+      throw new Error('--dynamic-workspace with --roslyn-config requires --workspace to identify the authorized project.');
     const file = args[roslynIndex + 1];
     if (!file || !path.isAbsolute(file)) throw new Error('--roslyn-config requires an absolute JSON file path.');
     const handle = await fs.open(file, 'r');

@@ -1,9 +1,4 @@
-/**
- * One active workspace session per gateway process (v0.5).
- * Not a multi-tenant server: concurrent workspace_open is serialized by ToolRouter.
- * Architecture still treats the session as a replaceable object so a later
- * multi-workspace mode does not have to fight a hidden global.
- */
+/** One session per workspace router. Dynamic connections can initialize several in the same millisecond. */
 export interface WorkspaceSession {
   id: string;
   workspaceRoot: string;
@@ -14,8 +9,8 @@ export interface WorkspaceSession {
 }
 
 export class SessionManager {
+  private static sequence = 0;
   private session: WorkspaceSession | null = null;
-  private seq = 0;
 
   get current(): WorkspaceSession | null {
     return this.session;
@@ -24,7 +19,7 @@ export class SessionManager {
   open(workspaceRoot: string, cacheNamespace: string): WorkspaceSession {
     const now = Date.now();
     this.session = {
-      id: `ws_${++this.seq}_${now.toString(36)}`,
+      id: `ws_${++SessionManager.sequence}_${now.toString(36)}`,
       workspaceRoot,
       cacheNamespace,
       fingerprint: null,

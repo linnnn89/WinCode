@@ -1,6 +1,6 @@
 # 代码与工作区
 
-先按目标取证，再按结果中的缺口补读。连接固定到启动工作区；已知正确根就直接查询。workspace_open 用于确认或恢复同根，换项目需对应连接。版本或工作区不符见[诊断手册](diagnostics.md)。
+先按目标取证，再按结果中的缺口补读。原生连接的 `health.workspaceBinding.mode` 为 `dynamic` 时，在每次项目工具调用（含下表各查询、回收站及 `wincode_ui_review`）和 `nextRequest` 续读中传相同的 `workspacePath`。它是当前任务或用户点名项目的绝对目录。例如 `wincode_search_text({"workspacePath":"I:/WinCode","scopePaths":["src"],"query":"ToolRouter"})`。`workspace_open` 直接用 `path`，一次打开仅作用于该请求。固定连接按启动根查询。版本或工作区不符见[诊断手册](diagnostics.md)。
 
 ## 选择读取方式
 
@@ -94,7 +94,9 @@ wincode_analyze_change_impact({target: selected.name, symbolLocation: selected.l
 
 location 含 snapshotId、project/file 和零基 UTF-16 position；不猜偏移、不选首个同名项。不带 symbolLocation 的 Roslyn 引用请求只返回候选。编辑受跟踪输入、重载、释放 Host 或更换连接后旧定位可能失效；按错误重新搜索。
 
-引用的 limit 与最终 maxOutputChars 分别约束条数和文本。totalReferences 是当前快照发现数，returnedReferences 是返回数；检查 referencesTruncated/outputOmissions，必要时在有效 location 上提高预算。这不是分页，也不扩大生成代码、动态调用或未加载项目的覆盖。影响分析只聚合实际返回引用；未知总数或截断可为 null。已有影响报告时直接据其规划，不为通用步骤再次调用 plan_refactoring。
+只给 `analyze_change_impact` 传符号名称时，Roslyn 在当前快照中按区分大小写的完整名称匹配。`partial` 属性或方法的定义与实现合计为一个声明。唯一匹配时会查询其引用。遇到重名或重载，`totalReferences` 为 `null`，表示尚未统计引用。可从 `matchedSymbols` 中按项目、文件和签名选定声明，用其 `symbolLocation` 重试。
+
+引用的 limit 与最终 maxOutputChars 分别约束条数和文本。totalReferences 是当前快照发现数，returnedReferences 是返回数；检查 referencesTruncated/outputOmissions，必要时在有效 location 上提高预算。这不是分页，也不扩大生成代码、动态调用或未加载项目的覆盖。携带精确定位时，影响分析验证所选项目、文档及声明标识符起点，并从同一次快照查询取得声明与引用。传入使用位置会返回 SYMBOL_MISMATCH。影响分析只聚合实际返回引用；未知总数或截断可为 null。已有影响报告时直接据其规划，不为通用步骤再次调用 plan_refactoring。
 
 Roslyn 当前排除分析器／生成器，queryComplete 为 false；零引用不证明可以删除。diagnosticSummary 的 compilationErrorCount/loadDiagnosticCount 是快照计数，samplesDisplayed/samplesOmitted 区分样例与省略。countsComplete 不包括未加载项目、分析器或警告，也不提高查询完整性。多个同名组件按路径和项目身份区分，不按显示名合并。
 
@@ -106,7 +108,7 @@ Roslyn 当前排除分析器／生成器，queryComplete 为 false；零引用�
 {"enabled":true,"allowProjectEvaluation":true,"project":"App/App.csproj","configuration":"Debug","targetFramework":"net10.0","dotnetPath":"C:/dotnet/dotnet.exe","hostPath":"C:/WinCode/tools/WinCode.Code.Host/bin/Release/net10.0/publish/WinCode.Code.Host.dll","additionalInputs":[]}
 ```
 
-路径是示例。project 相对固定工作区，dotnetPath/hostPath 为实际绝对普通文件；不支持链接。配置最多16KiB；loadTimeoutMs 默认120000、范围1–120000，queryTimeoutMs 默认30000、范围1–60000。配置、TFM与入口固定于实例，改变后需重建连接。
+路径是示例。project 相对启动时授权的工作区，dotnetPath/hostPath 为实际绝对普通文件；不支持链接。配置最多16KiB；loadTimeoutMs 默认120000、范围1–120000，queryTimeoutMs 默认30000、范围1–60000。动态模式须用 `--workspace` 明确该配置所属的项目。其他请求目录使用 local-text。
 
 additionalInputs 用于非标准构建数据：最多32个工作区内相对文件，数组JSON最多4096个UTF-16字符；不接受目录、glob、重复或链接。缺失输入应恢复或修正配置，不静默删除。自动跟踪已加载源码、项目、引用及常规构建配置，不保证发现自定义 targets 的任意外部输入；diskFreshnessVerified/externalCustomInputsVerified 仍为 false。
 

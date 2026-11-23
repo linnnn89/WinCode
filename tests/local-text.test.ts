@@ -126,6 +126,27 @@ it('limits symbol scanning to the requested file before reading unrelated conten
   } finally { t.mock.restoreAll(); }
 }));
 
+it('keeps complete C# identifier names and finds their exact textual uses', async () => fixture(async (adapter, root) => {
+  const lines = [
+    'public class 订单服务 {}', 'public class 订单服务扩展 {}', 'public class Order订单 {}',
+    'public class @class {}', 'public class Order_2 {}', 'public class 订\\u5355工厂 {}',
+    'public class Consumer {', '  订单服务 a;', '  订单服务扩展 b;', '  Order订单 c;',
+    '  @class d;', '  订\\u5355服务 e;', '  Order_2 f;', '  订单工厂 g;',
+    '  public 订单服务 读取订单() => a;', '}',
+  ];
+  await fs.writeFile(path.join(root, 'Orders.cs'), lines.join('\n'));
+  const symbols = (await adapter.findSymbolsDetailed('', undefined, 'Orders.cs')).symbols;
+  assert.deepEqual(symbols.map(s => s.name), ['订单服务', '订单服务扩展', 'Order订单', 'class', 'Order_2', '订单工厂', 'Consumer', '读取订单']);
+  assert.equal(symbols[5].signature, lines[5]);
+  for (const [name, expected] of Object.entries({
+    '订单服务': [8, 12, 15], '订单服务扩展': [9], Order订单: [10], class: [11], Order_2: [13], '订单工厂': [14], Order: [],
+  })) {
+    const refs = await adapter.findReferencesDetailed(name);
+    assert.ok(refs.queryComplete);
+    assert.deepEqual(refs.references.map(r => r.line), expected, name);
+  }
+}));
+
 it('reference definition paths do not restrict reference scan scope', async () => fixture(async (adapter, root) => {
   await fs.writeFile(path.join(root, 'Definition.cs'), 'class Target {}');
   await fs.writeFile(path.join(root, 'Use.cs'), 'Target.Run();');

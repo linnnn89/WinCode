@@ -2,7 +2,7 @@ import { rangeCoverage } from './ContextRangeCoverage.js';
 import { clipContextText, PreparedContextResult } from '../Core/Context.js';
 
 /** One serialization boundary: JSON escaping, metadata and legacy text all share the budget. */
-export function contextResponse(context: PreparedContextResult, responseFormat: 'compact' | 'legacy' = 'compact') {
+export function contextResponse(context: PreparedContextResult, responseFormat: 'compact' | 'legacy' = 'compact', workspacePath?: string) {
   const data = structuredClone(context);
   const omitted = new Set(data.omittedFiles);
   const selectedFiles = data.relatedFiles.map(item => item.path);
@@ -30,7 +30,7 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
       return { ...item, ...(item.locationKind === 'symbol' ? { symbolCoverage: 'unknown' } : {}),
         ...(blocked ? { nextAction: 'Use a file reader for the remaining long line; maximum response budget reached.' } :
           endLine >= startLine ? { nextRequest: {
-            task: 'Read following source lines; this continuation does not establish whole-task coverage.',
+            workspacePath, task: 'Read following source lines; this continuation does not establish whole-task coverage.',
             lineRanges: [{ file: item.file, startLine, endLine }], maxTokens,
           } } : {}),
       };
@@ -54,7 +54,7 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
     data.evidenceInsufficient = data.metrics.returnedFiles === 0 || (data.metrics.includeFullText && !data.packedContent);
     data.omittedFiles = [...omitted].slice(0, omittedListLimit);
     if (omitted.size > omittedListLimit) metadataTruncated = true;
-    const coverage = rangeCoverage(data, originalEvidence, originalIssues, requestedRanges, coverageDetailLimit);
+    const coverage = rangeCoverage(data, originalEvidence, originalIssues, requestedRanges, coverageDetailLimit, workspacePath);
     const counts = { complete: 0, partial: 0, omitted: 0, unknown: 0 };
     for (const file of selectedFiles) counts[bodyStatus(file)]++;
     const hasNextRequest = coverage?.details.some(item => 'nextRequest' in item) || evidence.some(item => 'nextRequest' in item);
@@ -119,7 +119,7 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
     if (data.task.length > 64) { metadataTruncated = true; data.task = clipContextText(data.task, 64); continue; }
     // Keep one actionable gap when it is small; long path metadata must not crowd out source.
     if (coverageDetailLimit > 1 || (coverageDetailLimit === 1 &&
-      JSON.stringify(rangeCoverage(data, originalEvidence, originalIssues, requestedRanges, coverageDetailLimit)?.details[0]).length > maxCharacters / 4)) {
+      JSON.stringify(rangeCoverage(data, originalEvidence, originalIssues, requestedRanges, coverageDetailLimit, workspacePath)?.details[0]).length > maxCharacters / 4)) {
       metadataTruncated = true; coverageDetailLimit--; continue;
     }
     if (data.packedContent) {

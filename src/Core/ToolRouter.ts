@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { WinCodeConfig, WINCODE_VERSION } from './Config.js';
+import { continuationWorkspacePath, WinCodeConfig, WINCODE_VERSION } from './Config.js';
 import { CacheManager, KnownCacheStats } from './Cache.js';
 import { RequestAdmission } from './RequestAdmission.js';
 import { WorkspaceManager, WorkspaceOpenOptions, WorkspaceDirectoryOptions } from './Workspace.js';
@@ -628,7 +628,7 @@ export class ToolRouter {
   async reviewUi(request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[], candidateCodeFiles?: string[]): Promise<UiReviewResult> {
     // MCP owns the request slot across both stages, preventing workspace changes between them.
     return reviewUi((input, abort) => this.inspectUi(input, abort),
-      this.config.workspaceRoot, request, candidateFiles, signal, textQueries, candidateCodeFiles);
+      this.config.workspaceRoot, request, candidateFiles, signal, textQueries, candidateCodeFiles, continuationWorkspacePath(this.config));
   }
 
   async dispose(): Promise<void> {

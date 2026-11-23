@@ -21,6 +21,7 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
   let fileIssuesOmitted = 0;
   let filesRead = 0;
   const visited = new Set<string>();
+  const completedDirectories = Array.isArray(relativePath) && relativePath.length > 1 ? new Set<string>() : undefined;
   const deadline = Date.now() + timeoutMs;
   const fileLimit = 256 * 1024;
   const totalLimit = 8 * 1024 * 1024;
@@ -112,6 +113,8 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
     try {
       const actualPath = await fs.realpath(dir);
       if (!isInside(actualPath, realRoot)) { mark('invalid-scope', false, false, path.relative(root, dir)); return; }
+      if (completedDirectories?.has(actualPath)) return;
+      const issuesBefore = fileIssues.length + fileIssuesOmitted;
       // Stream directory entries so an enormous directory does not allocate an unbounded array.
       operation?.metrics?.count('scan.directoryOpenAttempts');
       const handle = await fs.opendir(dir);
@@ -124,6 +127,8 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
         else if (entry.isFile()) await read(fullPath);
         else if (entry.isSymbolicLink()) mark('symlink-skipped', false, false, path.relative(root, fullPath));
       }
+      // Record only completed subtrees. Explicit roots skipped by an earlier parent's ignore rules remain searchable.
+      if (!stopped && fileIssues.length + fileIssuesOmitted === issuesBefore) completedDirectories?.add(actualPath);
     } catch (error) { rethrowOperationError(error, operation); mark('read-error', false, false, path.relative(root, dir)); }
   };
   if (relativePath) {

@@ -242,6 +242,39 @@ async function withDynamicClient(cwd: string, options: string[], run: (client: C
   finally { await client.close(); }
 }
 
+it('dynamic source continuations replay directly across projects within the response budget', { timeout: 45000 }, async () =>
+  fixture(async (a, b) => withDynamicClient(path.dirname(a), [], async client => {
+    const projects = [a, b];
+    for (const [index, root] of projects.entries()) {
+      await fs.writeFile(path.join(root, 'Api.cs'), [
+        'public class Api {', ...Array.from({ length: 120 }, () => '  // MARK_' + index), '}',
+      ].join('\n'));
+    }
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await client.callTool({ name, arguments: args });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      return { data: body(result), text: (result.content[0] as { text: string }).text };
+    };
+    const pending = await Promise.all(projects.map(async workspacePath => {
+      const { data, text } = await call('wincode_search_text', { workspacePath, query: 'MARK_', scopePaths: ['Api.cs'], maxOutputChars: 2048 });
+      assert.ok(text.length <= 2048);
+      assert.ok(data.returnedItems > 0 && data.returnedItems < data.foundItems);
+      const outline = (await call('wincode_file_outline', { workspacePath, file: 'Api.cs' })).data;
+      const preview = (await call('wincode_prepare_context', { workspacePath, scopeFiles: ['Api.cs'], task: 'Preview Api', symbol: 'Api' })).data;
+      const gap = (await call('wincode_prepare_context', { workspacePath, task: 'Read to EOF',
+        lineRanges: [{ file: 'Api.cs', startLine: 118, endLine: 150 }] })).data;
+      return [data.matches[0].nextRequest, outline.nextRequest, outline.symbols[0].nextRequest,
+        preview.evidence[0].nextRequest, gap.coverage.details[0].nextRequest];
+    }));
+    await Promise.all(pending.map(async (requests, index) => {
+      for (const next of requests) {
+        assert.equal(next?.workspacePath, await fs.realpath(projects[index]));
+        const { data } = await call('wincode_prepare_context', next);
+        assert.match(data.evidence[0].snippet, new RegExp('MARK_' + index));
+      }
+    }));
+  })));
+
 it('one dynamic stdio connection reads the correct same-named file across sequential and overlapping workspace requests', { timeout: 45000 }, async t =>
   fixture(async (a, b) => withDynamicClient(path.dirname(a), [], async client => {
     const call = async (name: string, args: Record<string, unknown> = {}) => {

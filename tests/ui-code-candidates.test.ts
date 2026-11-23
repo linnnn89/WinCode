@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { mapUiCodeCandidates, validateCandidateCodeFiles } from '../src/Core/UiCodeMapper.js';
+import { mapUiCodeCandidates, validateCandidateCodeFiles, type UiCodeCandidate } from '../src/Core/UiCodeMapper.js';
 import { mapUiSources } from '../src/Core/UiSourceMapper.js';
 import { reviewUi } from '../src/CompositeTools/UiReview.js';
 import { UiNode, UiInspectResult } from '../src/Core/UiContracts.js';
@@ -59,7 +59,7 @@ it('compact UI evidence preserves snapshot IDs and image while sharing command c
   const snapshot: UiInspectResult = { schemaVersion: '1.0', protocolVersion: '1.0', requestId: 'same-snapshot', success: true,
     pid: 123, hwnd: '0x123', treeComplete: false, truncated: true, truncateReason: 'maxDepth', annotatedPngBase64: 'AA==',
     tree: { id: 1, parentId: null, controlType: 'Window', children } };
-  const reviewed = await reviewUi(async () => snapshot, root, { pid: 123 }, ['View.xaml'], undefined, undefined, ['ViewModel.cs']);
+  const reviewed = await reviewUi(async () => snapshot, root, { pid: 123 }, ['View.xaml'], undefined, undefined, ['ViewModel.cs'], root);
   const original = structuredClone(reviewed);
   const full = uiResponse(reviewed), compact = uiResponse(reviewed, 'compact');
   assert.deepEqual(reviewed, original, 'formatting must not mutate the captured evidence');
@@ -78,6 +78,7 @@ it('compact UI evidence preserves snapshot IDs and image while sharing command c
   const first = data.codeEvidence.clues[0];
   assert.equal(first.candidates, undefined);
   assert.ok(first.candidateIds.length > 0);
+  assert.ok(data.codeEvidence.candidates.every((candidate: UiCodeCandidate) => candidate.nextRequest.workspacePath === root));
   for (const clue of data.codeEvidence.clues) for (const id of clue.candidateIds)
     assert.ok(data.codeEvidence.candidates.some((candidate: any) => candidate.id === id));
   const unique = new Set(data.codeEvidence.candidates.map((c: any) => JSON.stringify([c.file, c.line, c.kind, c.identifier])));

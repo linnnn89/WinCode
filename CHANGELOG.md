@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Source-reading `nextRequest` arguments include the selected project in dynamic workspace mode and count toward the existing response budget.
+- Local C# declaration and reference scans recognize Unicode identifiers, verbatim names and Unicode escapes. Symbol results use the comparison name (for example, `class` for `@class`) and retain the original declaration signature.
+- Overlapping text search scopes share completed directory walks within a request. Explicitly named ignored directories are still searched.
+
 ## 0.17.1 (2026-10-17)
 
 - Share one request-local source scan by default for up to four local-text keywords in `prepare_context`, preserving query order, diagnostics and scoped/ranged bypasses. Bounded scans or any query reaching 500 matches fall back to sequential queries under the existing deadline and can cost more. Add opt-in internal phase/work metrics and a model-free paired `benchmark:context` command with an explicit sequential baseline. No new MCP arguments, dependencies, persistent source cache or UI behavior changes.

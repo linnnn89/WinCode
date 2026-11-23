@@ -1,4 +1,5 @@
 import { maskScriptNonCode } from './ScriptLexicalMask.js';
+import { csharpIdentifierValue, csharpTypeDeclaration, isCSharpKeyword } from './CSharpIdentifiers.js';
 import { maskCSharpNonCode } from './CSharpLexicalMask.js';
 import type { CodeSymbol } from './CodeQueries.js';
 
@@ -25,27 +26,10 @@ export function parseTextDeclarations(content: string, relPath: string, ext: str
 
     // C# symbol patterns
     if (ext === '.cs') {
-      const classMatch = trimmed.match(/\bclass ([A-Za-z0-9_]+)/);
-      if (classMatch) {
-        symbols.push({ name: classMatch[1], kind: 'class', file: relPath, line: lineNum, signature: originalLines[i].trim() });
-        continue;
-      }
-
-      const structMatch = trimmed.match(/\bstruct ([A-Za-z0-9_]+)/);
-      if (structMatch) {
-        symbols.push({ name: structMatch[1], kind: 'struct', file: relPath, line: lineNum, signature: originalLines[i].trim() });
-        continue;
-      }
-
-      const enumMatch = trimmed.match(/\benum ([A-Za-z0-9_]+)/);
-      if (enumMatch) {
-        symbols.push({ name: enumMatch[1], kind: 'enum', file: relPath, line: lineNum, signature: originalLines[i].trim() });
-        continue;
-      }
-
-      const interfaceMatch = trimmed.match(/\binterface ([A-Za-z0-9_]+)/);
-      if (interfaceMatch) {
-        symbols.push({ name: interfaceMatch[1], kind: 'interface', file: relPath, line: lineNum, signature: originalLines[i].trim() });
+      const type = csharpTypeDeclaration(trimmed);
+      if (type) {
+        if (!type.name) throw new TextLexicalError('Unsupported C# identifier spelling.');
+        symbols.push({ name: type.name, kind: type.kind, file: relPath, line: lineNum, signature: originalLines[i].trim() });
         continue;
       }
 
@@ -54,10 +38,11 @@ export function parseTextDeclarations(content: string, relPath: string, ext: str
       if (visibility && open >= 0) {
         const header = trimmed.slice(visibility.index + visibility[0].length, open).trim();
         const tokens = header.split(' ');
-        const name = tokens.pop() ?? '';
+        const spelling = tokens.pop() ?? '';
+        const name = csharpIdentifierValue(spelling);
         const returnType = tokens.join(' ').replace(/^(?:(?:async|static|virtual|override|sealed) )+/, '');
-        if (/^[A-Za-z0-9_]+$/.test(name) && returnType && /^[A-Za-z0-9_<>?, \[\]]+$/.test(returnType) &&
-          !['if', 'for', 'while', 'switch', 'using', 'catch'].includes(name)) {
+        if (name && !isCSharpKeyword(spelling) && returnType &&
+          returnType.split(/[<>?, \[\]]+/).filter(Boolean).every(part => csharpIdentifierValue(part) !== undefined)) {
           symbols.push({ name, kind: 'method', file: relPath, line: lineNum, signature: originalLines[i].trim() });
           continue;
         }

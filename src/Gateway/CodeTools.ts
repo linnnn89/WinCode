@@ -1,4 +1,5 @@
 import { defineTool, jsonResult } from './ToolDefinition.js';
+import { continuationWorkspacePath } from '../Core/Config.js';
 import { contextResponse } from './ContextResponse.js';
 import { referenceResponse } from './ReferenceResponse.js';
 import { validateContextScope, type PreparedContextOptions } from '../Core/Context.js';
@@ -119,7 +120,8 @@ export const CODE_TOOLS = [
     },
   }, {
     validate: (args, { paths }) => { validateContextScope(args, paths.workspaceRoot); },
-    execute: async (args, { router, signal }) => contextResponse(await router.prepareContext(args, signal), args.responseFormat),
+    execute: async (args, { router, signal }) => contextResponse(await router.prepareContext(args, signal),
+      args.responseFormat, continuationWorkspacePath(router.config)),
   }),
   defineTool<{ query: string; kind?: string }>({
     name: 'wincode_find_code_symbol',

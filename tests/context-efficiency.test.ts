@@ -121,6 +121,23 @@ function payload(result: any) {
   return { data, texts };
 }
 
+it('overlapping directory scopes preserve the scan budget and explicit ignored roots', async () => fixture(async (root, _router, call) => {
+  const nested = path.join(root, 'src', 'nested');
+  for (const dir of [nested, path.join(root, 'src', 'obj'), path.join(root, 'tail')]) await fs.mkdir(dir, { recursive: true });
+  for (let first = 0; first < 2600; first += 40) {
+    await Promise.all(Array.from({ length: 40 }, (_, index) => fs.writeFile(path.join(nested, (first + index) + '.pad'), '')));
+  }
+  const hits = ['src/obj/Source.cs', 'tail/Source.cs'];
+  for (const file of hits) await fs.writeFile(path.join(root, file), '// DIRECTORY_MARKER');
+  for (const scopePaths of [['src', 'tail'], ['src', 'src/nested', 'tail'], ['src/nested', 'src', 'tail'], ['src', 'src/obj', 'tail']]) {
+    const result = await call({ query: 'DIRECTORY_MARKER', scopePaths }, 'wincode_search_text');
+    assert.notEqual(result.isError, true);
+    const data = JSON.parse(result.content[0].text);
+    assert.equal(data.queryComplete, true, JSON.stringify({ scopePaths, error: data.queryError }));
+    assert.deepEqual(data.matches.map((match: { file: string }) => match.file), scopePaths.includes('src/obj') ? hits : ['tail/Source.cs']);
+  }
+}));
+
 it('scoped navigation finds a literal call, outlines its file and follows source without reading outside links', async t => fixture(async (root, _router, call) => {
   await fs.mkdir(path.join(root, 'src'));
   const source = 'public class Session {\n public void Save() {\n Cache[0].Save("marker");\n }\n}';

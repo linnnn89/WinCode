@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { WinCodeConfig } from './Config.js';
+import { continuationWorkspacePath, type WinCodeConfig } from './Config.js';
 import { scanLocalFiles, type LocalScanResult } from './LocalTextScanner.js';
 import { parseTextDeclarations } from './TextDeclarations.js';
 import { boundedInteger, isWorkspacePathInside } from './WorkspaceContracts.js';
@@ -42,8 +42,8 @@ export function validateFileOutline(options: FileOutlineOptions, root: string) {
     maxOutputChars: boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars') };
 }
 
-function nextRead(file: string, line: number, fileLineCount: number) {
-  return { task: 'Inspect the located source; text matches and declarations are not semantic identity.',
+function nextRead(config: WinCodeConfig, file: string, line: number, fileLineCount: number) {
+  return { workspacePath: continuationWorkspacePath(config), task: 'Inspect the located source; text matches and declarations are not semantic identity.',
     lineRanges: [{ file: file.replace(/\\/g, '/'), startLine: Math.max(1, line - 8), endLine: Math.min(fileLineCount, line + 16) }] };
 }
 
@@ -117,7 +117,7 @@ export async function searchText(config: WinCodeConfig, options: TextSearchOptio
         const end = Math.min(lines[index].length, match.index + options.query.length + 80);
         yield { file: file.replace(/\\/g, '/'), line: index + 1, column: match.index + 1,
           preview: lines[index].slice(start, end), previewStartColumn: start + 1,
-          previewTruncated: start > 0 || end < lines[index].length, nextRequest: nextRead(file, index + 1, lines.length) };
+          previewTruncated: start > 0 || end < lines[index].length, nextRequest: nextRead(config, file, index + 1, lines.length) };
       }
     }, scopePaths, operation);
   return boundedResponse({ ...scanMetadata(scan), scope: 'literal-text', query: options.query,
@@ -133,9 +133,9 @@ export async function fileOutline(config: WinCodeConfig, options: FileOutlineOpt
       fileLineCount = content.split(/\r?\n/).length;
       sizeBytes = byteLength;
       return declarationsSupported ? parseTextDeclarations(content, relativeFile, extension, () => checkOperation(operation))
-        .map(symbol => ({ ...symbol, file: symbol.file.replace(/\\/g, '/'), nextRequest: nextRead(file, symbol.line, fileLineCount!) })) : [];
+        .map(symbol => ({ ...symbol, file: symbol.file.replace(/\\/g, '/'), nextRequest: nextRead(config, file, symbol.line, fileLineCount!) })) : [];
     }, file, operation);
   return boundedResponse({ ...scanMetadata(scan), scope: 'file-declarations', file, fileLineCount, sizeBytes,
-    ...(fileLineCount !== null ? { nextRequest: nextRead(file, 1, fileLineCount) } : {}),
+    ...(fileLineCount !== null ? { nextRequest: nextRead(config, file, 1, fileLineCount) } : {}),
     declarationsSupported, symbols: scan.items }, maxOutputChars);
 }

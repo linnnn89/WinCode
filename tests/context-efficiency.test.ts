@@ -28,6 +28,33 @@ it('exclusive scope and exact line ranges avoid all workspace symbol queries', a
   });
 });
 
+it('context reports encoding gaps for invalid source and preserves a literal replacement character', async () => {
+  await fixture(async (root, _router, call) => {
+    const file = 'Decode.cs';
+    const source = 'public class Decode {} // A�B';
+    const range = { task: 'Read Decode', lineRanges: [{ file, startLine: 1, endLine: 1 }] };
+    const symbol = { task: 'Find Decode', symbol: 'Decode', scopeFiles: [file] };
+    for (const bad of [Buffer.from([0xff]), Buffer.from([0])]) {
+      await fs.writeFile(path.join(root, file), Buffer.concat([Buffer.from('public class Decode {} // '), bad]));
+      for (const args of [range, symbol]) {
+        const { data } = payload(await call(args));
+        assert.deepEqual(data.evidence, []);
+        assert.ok(data.fileIssues.some((issue: any) => issue.path === file && issue.reason === 'encoding'));
+        if (args === range) {
+          assert.equal(data.coverage.allRequestedCovered, false);
+          assert.equal(data.coverage.details[0].missingRanges[0].reason, 'encoding');
+        }
+      }
+    }
+    await fs.writeFile(path.join(root, file), source);
+    for (const args of [range, symbol]) {
+      const { data } = payload(await call(args));
+      assert.equal(data.evidence[0].snippet, source);
+      if (args === range) assert.equal(data.coverage.allRequestedCovered, true);
+    }
+  });
+});
+
 it('scoped symbol lookup preserves local fallback limits and rejects ambiguity', async () => {
   await fixture(async (root, router, call) => {
     router.text.findSymbolsDetailed = async () => { throw new Error('unexpected workspace query'); };

@@ -1,11 +1,8 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { probeWorkspaceSdk, isSdkResolutionFailure, SdkPolicyError } from '../Core/WorkspaceSdk.js';
 import { WorkspaceManager, ProjectIdentity } from '../Core/Workspace.js';
 import { WinCodeConfig } from '../Core/Config.js';
 import { AdapterHealthQuery } from '../Core/AdapterStatus.js';
 import { checkOperation, type OperationContext } from '../Core/OperationContext.js';
-
-const execFileAsync = promisify(execFile);
 
 export interface DiagnosticItem {
   category: 'Environment' | 'Project' | 'Dependencies' | 'Windows';
@@ -56,24 +53,28 @@ export class ProjectDiagnostics {
     try {
       checkOperation(operation);
       const executable = this.config.adapters.roslyn?.enabled ? this.config.adapters.roslyn.dotnetPath : 'dotnet';
-      const { stdout } = await execFileAsync(executable, ['--version'], {
-        windowsHide: true,
-        timeout: Math.max(1, Math.min(this.config.timeouts?.dotnetMs ?? 5000, (operation?.deadline ?? Infinity) - Date.now())),
-        signal: operation?.signal,
-      });
+      const version = await probeWorkspaceSdk(this.workspace.root, executable, this.config.timeouts?.dotnetMs ?? 5000, operation);
       items.push({
         category: 'Environment',
         status: 'PASS',
-        message: `.NET SDK detected (Version: ${stdout.trim()}). This does not mean semantic reference analysis is available.`,
+        message: `.NET SDK selected for this workspace (Version: ${version}).`,
       });
-    } catch {
+    } catch (error) {
       checkOperation(operation);
-      items.push({
-        category: 'Environment',
-        status: identity.isDotNet ? 'FAIL' : 'WARN',
-        message: '.NET SDK (dotnet CLI) not found in system PATH.',
-        suggestion: identity.isDotNet ? 'Install .NET SDK to enable building and analyzing C# projects.' : undefined,
-      });
+      const failure = error as { code?: number | string; syscall?: string; signal?: string };
+      let message = `The workspace SDK probe failed (${failure.code ?? failure.signal ?? 'execution error'}).`;
+      let suggestion: string | undefined;
+      if (error instanceof SdkPolicyError) {
+        message = error.message;
+      } else if (failure.code === 'ENOENT' && failure.syscall?.startsWith('spawn')) {
+        message = 'The dotnet executable could not be found.';
+        suggestion = 'Check the configured dotnet path or install the .NET SDK on PATH.';
+      } else if (isSdkResolutionFailure(failure.code)) {
+        message = 'The dotnet host could not find a compatible .NET SDK for this workspace.';
+        suggestion = 'Compare the workspace global.json settings with dotnet --list-sdks.';
+      }
+      const status = identity.isDotNet && !(error instanceof SdkPolicyError) ? 'FAIL' : 'WARN';
+      items.push({ category: 'Environment', status, message, suggestion });
     }
 
     if (this.queries) {

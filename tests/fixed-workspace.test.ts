@@ -242,6 +242,37 @@ async function withDynamicClient(cwd: string, options: string[], run: (client: C
   finally { await client.close(); }
 }
 
+it('dynamic SDK diagnostics honor each selected workspace global.json', { timeout: 45000 }, async t =>
+  fixture(async (a, b) => {
+    const parent = path.dirname(a);
+    const installed = spawnSync('dotnet', ['--version'], { cwd: parent, encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    if (installed.status !== 0) { t.skip('An installed .NET SDK is required for the real resolver comparison'); return; }
+    const version = installed.stdout.trim();
+    for (const root of [a, b]) await fs.writeFile(path.join(root, 'Api.csproj'), '<Project Sdk="Microsoft.NET.Sdk"/>');
+    const pin = (required: string) => JSON.stringify({ sdk: { version: required, rollForward: 'disable' } });
+    await fs.writeFile(path.join(parent, 'global.json'), pin(version).replace('{', '{\n// Inherited SDK selection\n'));
+    await fs.writeFile(path.join(b, 'global.json'), pin('99.0.100'));
+    await withDynamicClient(parent, [], async client => {
+      const diagnose = async (workspacePath: string) => {
+        const response = await client.callTool({ name: 'wincode_diagnose_project', arguments: { workspacePath } });
+        assert.notEqual(response.isError, true, JSON.stringify(response.content));
+        return body(response);
+      };
+      const [available, missing] = await Promise.all([diagnose(a), diagnose(b)]);
+      const environment = (report: typeof available) => report.diagnostics.find((item: { category: string }) => item.category === 'Environment');
+      assert.equal(environment(available).status, 'PASS');
+      assert.ok(environment(available).message.includes(version));
+      assert.equal(environment(missing).status, 'FAIL');
+      assert.equal(missing.overallHealthy, false);
+      assert.match(environment(missing).message, /compatible.*SDK/i);
+      assert.match(environment(missing).suggestion, /global\.json/);
+      await fs.writeFile(path.join(b, 'global.json'), JSON.stringify({ sdk: { paths: ['.dotnet', '$host$'] } }));
+      const custom = environment(await diagnose(b));
+      assert.equal(custom.status, 'WARN');
+      assert.match(custom.message, /unverified.*custom SDK search paths/i);
+    });
+  }));
+
 it('dynamic source continuations replay directly across projects within the response budget', { timeout: 45000 }, async () =>
   fixture(async (a, b) => withDynamicClient(path.dirname(a), [], async client => {
     const projects = [a, b];

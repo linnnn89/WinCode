@@ -153,6 +153,33 @@ it('oversized project descriptors are reported as incomplete instead of read wit
   assert.ok(data.metadata.projectDiscovery.descriptorBytesRead <= data.metadata.projectDiscovery.maxDescriptorBytes);
 }));
 
+it('only active XML elements contribute frameworks and project references', async () => fixture(async (root, _router, call) => {
+  await fs.writeFile(path.join(root, 'Core.csproj'), '<Project Sdk="Microsoft.NET.Sdk"/>');
+  const appFile = path.join(root, 'App.csproj');
+  const declarations = '<PropertyGroup><UseWPF>true</UseWPF><TargetFramework>net6.0-windows</TargetFramework></PropertyGroup>' +
+    '<ItemGroup><ProjectReference Include="Core.csproj" /></ItemGroup>';
+  await fs.writeFile(path.join(root, 'Demo.slnx'), '<Solution><!-- <Project Path="Retired.csproj"/> --><Project Path="App.csproj"/></Solution>');
+  for (const active of [false, true]) {
+    await fs.writeFile(appFile, '<Project Sdk="Microsoft.NET.Sdk">' + (active ? declarations :
+      '<!--' + declarations + '--><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>') + '</Project>');
+    const summary = payload(await call('workspace_open', { path: root }));
+    const graph = payload(await call('wincode_analyze_workspace'), 32768).projectGraph;
+    const app = graph.projects.find((project: { name: string }) => project.name === 'App');
+    assert.ok(app);
+    assert.equal(app.isWpf, active);
+    assert.deepEqual(app.projectReferences, active ? ['Core'] : []);
+    assert.deepEqual(graph.edges, active ? [{ from: 'App', to: 'Core' }] : []);
+    assert.equal(app.targetFramework, active ? 'net6.0-windows' : 'net10.0');
+    assert.equal(summary.metadata.targetFramework, app.targetFramework);
+    assert.equal(summary.metadata.frameworks.includes('WPF'), active);
+    assert.deepEqual(summary.metadata.projectList.sort(), ['App.csproj', 'Core.csproj']);
+  }
+  await fs.writeFile(appFile, '<Project Sdk="Microsoft.NET.Sdk"/>');
+  await fs.writeFile(path.join(root, 'Directory.Build.props'), '<Project><PropertyGroup>' +
+    '<!-- <TargetFramework>net6.0-windows</TargetFramework> --><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>');
+  assert.equal(payload(await call('workspace_open', { path: root })).metadata.targetFramework, 'net8.0');
+}));
+
 it('solution XML entity paths identify the same real project without phantom duplicates', async () => fixture(async (root, _router, call) => {
   await fs.mkdir(path.join(root, 'A&B'));
   await fs.writeFile(path.join(root, 'A&B', 'Core.csproj'), '<Project Sdk="Microsoft.NET.Sdk"/>');

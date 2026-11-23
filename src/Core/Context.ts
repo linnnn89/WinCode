@@ -1,4 +1,5 @@
 import { type OperationContext, checkOperation, rethrowOperationError } from './OperationContext.js';
+import { decodeSourceText, SourceEncodingError } from './SourceText.js';
 import { measureOperation } from './OperationMetrics.js';
 /**
  * Task context for agents: ranked file evidence (path/symbol/line/snippet) inside a token budget.
@@ -406,9 +407,7 @@ export class ContextManager {
           if (!['.cs', '.ts', '.tsx', '.js', '.jsx', '.py'].includes(path.extname(file).toLowerCase())) {
             fileIssues.push({ path: file, reason: 'unsupported-symbol-language' }); continue;
           }
-          const source = await fs.readFile(full, { encoding: 'utf8', signal: operation?.signal });
-          operation?.metrics?.count('context.fileReadCalls');
-          operation?.metrics?.count('context.decodedTextBytes', Buffer.byteLength(source));
+          const source = await this.readSource(full, operation);
           sourceContents.set(file, source);
           const matches = this.queries.findSymbolsInContent(source, file)
             .filter(symbol => symbol.name === opts.symbol);
@@ -580,9 +579,18 @@ export class ContextManager {
   }
 
   private readIssue(error: unknown): string {
+    if (error instanceof SourceEncodingError) return 'encoding';
     if ((error as NodeJS.ErrnoException)?.code === 'TEXT_LEXICAL_UNCERTAINTY') return 'lexical-uncertainty';
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return 'not-found';
     return error instanceof Error && error.message.includes('outside-workspace') ? 'outside-workspace' : 'unreadable';
+  }
+
+  private async readSource(fullPath: string, operation?: OperationContext): Promise<string> {
+    const bytes = await fs.readFile(fullPath, { signal: operation?.signal });
+    operation?.metrics?.count('context.fileReadCalls');
+    const content = decodeSourceText(bytes, true);
+    operation?.metrics?.count('context.decodedTextBytes', bytes.length);
+    return content;
   }
 
   private async readSnippet(
@@ -599,11 +607,7 @@ export class ContextManager {
       const stat = await fs.stat(fullPath);
       if (!stat.isFile()) { issues.push({ path: rel, reason: 'not-file' }); return null; }
       if (stat.size >= 500_000) { issues.push({ path: rel, reason: 'file-too-large' }); return null; }
-      const content = sourceContent ?? await fs.readFile(fullPath, { encoding: 'utf8', signal: operation?.signal });
-      if (sourceContent === undefined) {
-        operation?.metrics?.count('context.fileReadCalls');
-        operation?.metrics?.count('context.decodedTextBytes', Buffer.byteLength(content));
-      }
+      const content = sourceContent ?? await this.readSource(fullPath, operation);
       const lines = content.split(/\r?\n/);
       if (range && range.endLine > lines.length) {
         issues.push({ path: rel, reason: 'line-range-out-of-bounds', fileLineCount: lines.length });

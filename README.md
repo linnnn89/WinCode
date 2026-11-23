@@ -154,7 +154,7 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 | `wincode_ui_type` | Type text into, or set the value of, one uniquely matched control. |
 | `wincode_ui_review` | Inspect UI and return candidate XAML/C# source locations. |
 | `wincode_hello_world` | Read instance identity, workspace binding, capabilities and known status. |
-| `wincode_diagnose_project` | Actively check SDKs, Git and the local environment. |
+| `wincode_diagnose_project` | Check Git, the local environment and SDK selection for the workspace’s nearest `global.json`. Custom SDK search locations are reported as unverified. |
 
 `wincode_analyze_change_impact` is an alias of `analyze_change_impact`. Detailed parameters and workflows: [code analysis](skills/wincode/references/code.md), [UI inspection](skills/wincode/references/ui.md), [diagnostics](skills/wincode/references/diagnostics.md). To inspect a tool's schema in the running connection, pass its name as `toolName` to `wincode_hello_world`.
 
@@ -331,7 +331,7 @@ npm run delivery:verify
 | `wincode_ui_type` | 向唯一命中的控件输入文本，或直接写入其值。 |
 | `wincode_ui_review` | 检查 UI 并返回 XAML/C# 源码候选位置。 |
 | `wincode_hello_world` | 读取实例身份、工作区绑定、能力及已知状态。 |
-| `wincode_diagnose_project` | 主动检查 SDK、Git 和本地环境。 |
+| `wincode_diagnose_project` | 检查 Git、本地环境及工作区最近的 `global.json` 所选的 SDK。自定义 SDK 搜索路径会标记为待验证。 |
 
 `wincode_analyze_change_impact` 是 `analyze_change_impact` 的别名。详细参数与工作流见 [代码分析手册](skills/wincode/references/code.md)、[UI 检查手册](skills/wincode/references/ui.md) 和 [诊断手册](skills/wincode/references/diagnostics.md)。如需查看当前连接中某个工具的参数定义，可将工具名作为 `toolName` 传给 `wincode_hello_world`。
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
+import { decodeSourceText, SourceEncodingError } from './SourceText.js';
 import { measureOperation } from './OperationMetrics.js';
 
 /** 扫描完成仅指文本扫描范围，不代表语义引用完整。 */
@@ -90,11 +91,7 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
         if (!canContinue()) return;
         if (used > fileLimit) { issue('file-byte-limit', true); return; }
         if (!eof && used === remaining) { issue('total-byte-limit', true, true); return; }
-        let content: string;
-        try {
-          content = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, used));
-          if (content.includes('\0')) { issue('encoding'); return; }
-        } catch { issue('encoding'); return; }
+        const content = decodeSourceText(buffer.subarray(0, used));
         filesRead++;
         operation?.metrics?.count('scan.filesDecoded');
         for (const item of extract(content, path.relative(root, fullPath), ext, used)) {
@@ -105,6 +102,7 @@ export async function scanLocalFiles<T>(root: string, timeoutMs: number, extensi
       } finally { await handle.close(); }
     } catch (error) {
       rethrowOperationError(error, operation);
+      if (error instanceof SourceEncodingError) { issue('encoding'); return; }
       issue((error as NodeJS.ErrnoException)?.code === 'TEXT_LEXICAL_UNCERTAINTY' ? 'lexical-uncertainty' : 'read-error');
     }
   };

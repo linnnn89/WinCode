@@ -59,7 +59,7 @@ it('compact UI evidence preserves snapshot IDs and image while sharing command c
   const snapshot: UiInspectResult = { schemaVersion: '1.0', protocolVersion: '1.0', requestId: 'same-snapshot', success: true,
     pid: 123, hwnd: '0x123', treeComplete: false, truncated: true, truncateReason: 'maxDepth', annotatedPngBase64: 'AA==',
     tree: { id: 1, parentId: null, controlType: 'Window', children } };
-  const reviewed = await reviewUi(async () => snapshot, root, { pid: 123 }, ['View.xaml'], undefined, undefined, ['ViewModel.cs']);
+  const reviewed = await reviewUi(async () => snapshot, root, { pid: 123 }, ['View.xaml'], undefined, undefined, ['ViewModel.cs'], root);
   const original = structuredClone(reviewed);
   const full = uiResponse(reviewed), compact = uiResponse(reviewed, 'compact');
   assert.deepEqual(reviewed, original, 'formatting must not mutate the captured evidence');
@@ -75,6 +75,7 @@ it('compact UI evidence preserves snapshot IDs and image while sharing command c
   assert.equal(data.summary.treeComplete, false);
   assert.equal(data.summary.truncateReason, 'maxDepth');
   assert.equal(data.codeEvidence.runtimeSourceVerified, false);
+  assert.ok(data.codeEvidence.candidates.every((candidate: any) => candidate.nextRequest.workspacePath === root));
   const first = data.codeEvidence.clues[0];
   assert.equal(first.candidates, undefined);
   assert.ok(first.candidateIds.length > 0);

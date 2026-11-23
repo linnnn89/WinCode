@@ -13,7 +13,7 @@ export interface UiCodeCandidate {
   kind: 'declaration' | 'assignment';
   identifier: string;
   relatedSymbol?: string;
-  nextRequest: { task: string; scopeFiles: string[]; symbol?: string; lineRanges?: { file: string; startLine: number; endLine: number }[] };
+  nextRequest: { workspacePath?: string; task: string; scopeFiles: string[]; symbol?: string; lineRanges?: { file: string; startLine: number; endLine: number }[] };
 }
 
 export interface UiCodeEvidence {
@@ -53,7 +53,7 @@ const CSHARP_KEYWORDS = new Set(('abstract as base bool break byte case catch ch
 
 /** Closed-file textual navigation. It neither evaluates bindings nor establishes runtime causality. */
 export async function mapUiCodeCandidates(
-  workspaceRoot: string, candidateCodeFiles: string[], sourceEvidence: UiSourceEvidence, signal?: AbortSignal
+  workspaceRoot: string, candidateCodeFiles: string[], sourceEvidence: UiSourceEvidence, signal?: AbortSignal, workspacePath?: string
 ): Promise<UiCodeEvidence> {
   validateCandidateCodeFiles(candidateCodeFiles);
   const result: UiCodeEvidence = {
@@ -162,7 +162,7 @@ export async function mapUiCodeCandidates(
           const candidate: UiCodeCandidate = {
             file: relativeFile, line: index + 1, snippet: rawLines[index].slice(Math.max(0, token.index! - 80), token.index! + 320),
             fileSha256, kind: declaration ? 'declaration' : 'assignment', identifier, relatedSymbol,
-            nextRequest: { task: 'Inspect this source candidate; runtime binding identity is unverified.', scopeFiles: [relativeFile],
+            nextRequest: { ...(workspacePath && { workspacePath }), task: 'Inspect this source candidate; runtime binding identity is unverified.', scopeFiles: [relativeFile],
               // A constructor argument can be a local delegate or shadowed name. Inspect the assignment first.
               lineRanges: [{ file: relativeFile, startLine: index + 1, endLine: index + 1 }],
             },

@@ -66,12 +66,14 @@ export class DynamicWorkspaces {
     if (this.closing) throw new AbortError('Dynamic workspaces are shutting down.');
   }
 
-  async acquire(root: string, lease: RequestLease, passive: boolean, workspacePathToConfirm?: string): Promise<WorkspaceUse> {
+  async acquire(root: string, lease: RequestLease, passive: boolean, rootsToConfirm?: Iterable<string>): Promise<WorkspaceUse> {
     let physical: string;
     try {
       physical = await resolveWorkspaceDirectory(root, lease.operation);
-      if (workspacePathToConfirm && await resolveWorkspaceDirectory(workspacePathToConfirm, lease.operation) !== physical)
-        throw new Error('path and workspacePath must identify the same project.');
+      if (rootsToConfirm) for (const alternate of rootsToConfirm) {
+        if (await resolveWorkspaceDirectory(alternate, lease.operation) !== physical)
+          throw new Error('Absolute paths and workspace selectors must identify the same project.');
+      }
     } catch (error) {
       rethrowOperationError(error, lease.operation);
       throw new WorkspaceSelectionError('INVALID_ARGUMENT', error instanceof Error ? error.message : String(error));

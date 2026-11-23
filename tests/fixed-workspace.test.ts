@@ -275,6 +275,24 @@ it('Windows long and short paths share the explicitly configured dynamic workspa
         assert.notEqual(other.health.session.id, primary.health.session.id);
         const confirmed = await call('workspace_open', { path: configured, workspacePath: alternate });
         assert.equal(await fs.realpath(confirmed.workspace), long);
+        for (const workspacePath of [long, short]) for (const spelling of [long, short]) {
+          const file = path.join(spelling, 'Api.cs');
+          const [search, outline, context] = await Promise.all([
+            call('wincode_search_text', { workspacePath, query: 'ONLY_A', scopePaths: [file] }),
+            call('wincode_file_outline', { workspacePath, file }),
+            call('wincode_prepare_context', { workspacePath, task: 'Read Api', candidateFiles: [file],
+              scopeFiles: [path.join(workspacePath, 'Api.cs')], lineRanges: [{ file, startLine: 1, endLine: 1 }] }),
+          ]);
+          assert.equal(search.matches[0].file, 'Api.cs');
+          assert.equal(outline.symbols[0].name, 'Api');
+          assert.match(context.evidence[0].snippet, /ONLY_A/);
+        }
+        const missing = await call('wincode_prepare_context', { workspacePath: long, task: 'Read missing',
+          scopeFiles: [path.join(short, 'missing.cs')] });
+        assert.ok(missing.fileIssues.some((issue: { reason: string }) => issue.reason === 'not-found'));
+        for (const file of [path.join(b, 'Api.cs'), short + '/sub/../Api.cs', path.join(short, 'Api.cs:stream')]) {
+          assert.equal(body(await client.callTool({ name: 'wincode_file_outline', arguments: { workspacePath: long, file } })).errorCode, 'INVALID_ARGUMENT');
+        }
       });
     }
   }));
@@ -301,6 +319,18 @@ it('one dynamic stdio connection reads the correct same-named file across sequen
       await read(root);
     }
     await Promise.all(Array.from({ length: 16 }, (_, i) => read(i % 2 ? b : a)));
+    await Promise.all([a, b].map(async workspacePath => {
+      const [found, outline, correction] = await Promise.all([
+        call('wincode_search_text', { workspacePath, query: 'Marker', scopePaths: ['Api.cs'] }),
+        call('wincode_file_outline', { workspacePath, file: 'Api.cs' }),
+        call('wincode_prepare_context', { workspacePath, task: 'Read Api', lineRanges: [{ file: 'Api.cs', startLine: 1, endLine: 20 }] }),
+      ]);
+      for (const next of [found.matches[0].nextRequest, outline.nextRequest, outline.symbols[0].nextRequest, correction.coverage.details[0].nextRequest]) {
+        assert.equal(next.workspacePath, await fs.realpath(workspacePath));
+        const read = await call('wincode_prepare_context', next);
+        assert.match(read.evidence[0].snippet, workspacePath === a ? /ONLY_A/ : /ONLY_B/);
+      }
+    }));
     const [left, right] = await Promise.all([a, b].map(workspacePath => call('wincode_hello_world', { workspacePath })));
     for (const [health, root] of [[left, a], [right, b]] as const) {
       const physicalRoot = await fs.realpath(root);

@@ -13,7 +13,8 @@ export type UiReviewResult = UiInspectResult & {
 /** Reuse one snapshot so source node IDs and image badges belong to the same observation. */
 export async function reviewUi(
   inspect: (request: UiInspectRequest, signal?: AbortSignal) => Promise<UiInspectResult>,
-  workspaceRoot: string, request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[], candidateCodeFiles?: string[]
+  workspaceRoot: string, request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[],
+  candidateCodeFiles?: string[], continuationWorkspacePath?: string,
 ): Promise<UiReviewResult> {
   validateCandidateFiles(candidateFiles);
   validateTextQueries(textQueries);
@@ -24,7 +25,7 @@ export async function reviewUi(
     const sourceEvidence = await mapUiSources(workspaceRoot, candidateFiles, snapshot.tree, signal, textQueries);
     if (candidateCodeFiles) {
       try {
-        const codeEvidence = await mapUiCodeCandidates(workspaceRoot, candidateCodeFiles, sourceEvidence, signal);
+        const codeEvidence = await mapUiCodeCandidates(workspaceRoot, candidateCodeFiles, sourceEvidence, signal, continuationWorkspacePath);
         return { ...snapshot, sourceEvidence, codeEvidence };
       } catch (error) {
         if (signal?.aborted) throw error;

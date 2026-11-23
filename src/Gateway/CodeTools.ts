@@ -31,7 +31,10 @@ export const CODE_TOOLS = [
       maxOutputChars: { type: 'integer', minimum: 2048, maximum: 32768, default: 8000, description: 'Budget for the entire serialized JSON text, not model tokens.' },
     } },
   }, {
-    validate: (args, { paths }) => { validateTextSearch(args, paths.workspaceRoot); },
+    validate: (args, { paths, normalizePath }) => {
+      if (normalizePath && args.scopePaths) args.scopePaths = args.scopePaths.map(normalizePath);
+      validateTextSearch(args, paths.workspaceRoot);
+    },
     execute: async (args, { router, signal }) => jsonResult(await router.searchText(args, signal)),
   }),
   defineTool<FileOutlineOptions>({
@@ -44,7 +47,10 @@ export const CODE_TOOLS = [
       maxOutputChars: { type: 'integer', minimum: 2048, maximum: 32768, default: 8000 },
     } },
   }, {
-    validate: (args, { paths }) => { validateFileOutline(args, paths.workspaceRoot); },
+    validate: (args, { paths, normalizePath }) => {
+      if (normalizePath) args.file = normalizePath(args.file);
+      validateFileOutline(args, paths.workspaceRoot);
+    },
     execute: async (args, { router, signal }) => jsonResult(await router.fileOutline(args, signal)),
   }),
   defineTool<PreparedContextOptions>({
@@ -118,8 +124,16 @@ export const CODE_TOOLS = [
       required: ['task'],
     },
   }, {
-    validate: (args, { paths }) => { validateContextScope(args, paths.workspaceRoot); },
-    execute: async (args, { router, signal }) => contextResponse(await router.prepareContext(args, signal), args.responseFormat),
+    validate: (args, { paths, normalizePath }) => {
+      if (normalizePath) {
+        for (const key of ['candidateFiles', 'scopeFiles', 'focusAreas'] as const) {
+          if (args[key]) args[key] = args[key].map(normalizePath);
+        }
+        for (const range of args.lineRanges ?? []) range.file = normalizePath(range.file);
+      }
+      validateContextScope(args, paths.workspaceRoot);
+    },
+    execute: async (args, { router, signal }) => contextResponse(await router.prepareContext(args, signal), args.responseFormat, router.continuationWorkspacePath),
   }),
   defineTool<{ query: string; kind?: string }>({
     name: 'wincode_find_code_symbol',

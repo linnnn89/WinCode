@@ -30,6 +30,10 @@ export class WorkspaceManager {
     return this.binding.root;
   }
 
+  get continuationWorkspacePath(): string | undefined {
+    return this.binding.mode === 'dynamic' ? this.configuredPhysicalRoot ?? this.root : undefined;
+  }
+
   get trashDir(): string {
     return this.config.trashDir;
   }
@@ -112,7 +116,7 @@ export class WorkspaceManager {
   /**
    * Retrieves Git status safely for the current workspace
    */
-  async getGitStatus(operation?: OperationContext): Promise<WorkspaceGitStatus> {
+  async getGitStatus(operation?: OperationContext, observedClean?: boolean): Promise<WorkspaceGitStatus> {
     const gitTimeout = this.config.timeouts?.gitMs ?? 5000;
     try {
       if ((await runGit(this.root, ['rev-parse', '--is-inside-work-tree'], gitTimeout, operation)).stdout.trim() !== 'true') return { isGit: false };
@@ -125,11 +129,11 @@ export class WorkspaceManager {
     const [branch, head, status, remote] = await Promise.allSettled([
       runGit(this.root, ['rev-parse', '--abbrev-ref', 'HEAD'], gitTimeout, operation),
       runGit(this.root, ['rev-parse', '--short', 'HEAD'], gitTimeout, operation),
-      runGit(this.root, ['status', '--porcelain'], gitTimeout, operation),
+      observedClean ?? runGit(this.root, ['status', '--porcelain'], gitTimeout, operation).then(result => !result.stdout.trim()),
       runGit(this.root, ['remote', 'get-url', 'origin'], gitTimeout, operation),
     ]);
     checkOperation(operation);
-    const clean = status.status === 'fulfilled' ? status.value.stdout.trim().length === 0 : undefined;
+    const clean = status.status === 'fulfilled' ? status.value : undefined;
     return { isGit: true,
       ...(branch.status === 'fulfilled' ? { branch: branch.value.stdout.trim() } : {}),
       ...(head.status === 'fulfilled' ? { headCommit: head.value.stdout.trim() } : {}),
@@ -165,7 +169,8 @@ export class WorkspaceManager {
   /**
    * Describes the bound workspace; opening another root is never a mutation path.
    */
-  async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, operation?: OperationContext): Promise<WorkspaceOpenResult> {
+  async openWorkspace(targetPath: string, options: WorkspaceOpenOptions = {}, operation?: OperationContext,
+    observedGitClean?: boolean): Promise<WorkspaceOpenResult> {
     checkOperation(operation);
     this.assertWorkspace(targetPath);
     const maxOutputChars = boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars');
@@ -173,7 +178,7 @@ export class WorkspaceManager {
     await this.validateRoot(operation);
     const { identity, complete, discovery, entryPoints } = await this.discoverProject(operation);
     checkOperation(operation);
-    const git = await this.getGitStatus(operation);
+    const git = await this.getGitStatus(operation, observedGitClean);
     checkOperation(operation);
     const metadata: WorkspaceMetadata = {
       totalFiles: null, totalDirectories: null, totalSizeBytes: null,

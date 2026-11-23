@@ -242,6 +242,43 @@ async function withDynamicClient(cwd: string, options: string[], run: (client: C
   finally { await client.close(); }
 }
 
+function windowsShortPath(directory: string): string {
+  const result = spawnSync('cmd.exe', ['/d', '/u', '/c', 'for %I in (.) do @echo %~fsI'],
+    { cwd: directory, encoding: 'utf16le', windowsHide: true, timeout: 5000 });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  return result.stdout.trim();
+}
+
+it('Windows long and short paths share the explicitly configured dynamic workspace in either direction',
+  { skip: process.platform !== 'win32', timeout: 30000 }, async t => fixture(async (a, b) => {
+    const long = await fs.realpath(a);
+    const short = windowsShortPath(long);
+    assert.equal(await fs.realpath(short), long);
+    if (path.relative(long, short) === '') { t.skip('The fixture volume did not supply a distinct 8.3 path'); return; }
+
+    for (const [configured, alternate] of [[long, short], [short, long]]) {
+      await withDynamicClient(path.dirname(a), ['--workspace', configured], async client => {
+        const call = async (name: string, args: Record<string, unknown>) => {
+          const result = await client.callTool({ name, arguments: args });
+          assert.notEqual(result.isError, true, JSON.stringify(result.content));
+          return body(result);
+        };
+        const [opened, neighbour] = await Promise.all([alternate, b].map(p => call('workspace_open', { path: p })));
+        assert.equal(await fs.realpath(opened.workspace), long);
+        assert.equal(await fs.realpath(neighbour.workspace), await fs.realpath(b));
+        const [primary, alias, other] = await Promise.all([configured, alternate, b]
+          .map(workspacePath => call('wincode_hello_world', { workspacePath })));
+        assert.equal(alias.health.workspaceBinding.source, 'argument');
+        assert.equal(alias.health.session.id, primary.health.session.id);
+        assert.equal(alias.health.cache.namespace, primary.health.cache.namespace);
+        assert.equal(other.health.workspaceBinding.source, 'request');
+        assert.notEqual(other.health.session.id, primary.health.session.id);
+        const confirmed = await call('workspace_open', { path: configured, workspacePath: alternate });
+        assert.equal(await fs.realpath(confirmed.workspace), long);
+      });
+    }
+  }));
+
 it('one dynamic stdio connection reads the correct same-named file across sequential and overlapping workspace requests', { timeout: 45000 }, async t =>
   fixture(async (a, b) => withDynamicClient(path.dirname(a), [], async client => {
     const call = async (name: string, args: Record<string, unknown> = {}) => {
@@ -288,7 +325,7 @@ it('failed workspace selections leave live projects usable and a concurrent tras
     await fs.symlink(b, link, process.platform === 'win32' ? 'junction' : 'dir');
     assert.notEqual((await call('workspace_open', { path: a })).isError, true);
     const original = body(await call('wincode_hello_world', { workspacePath: a })).health.session.id;
-    for (const args of [{ path: missing }, { path: 'relative' }, { path: link }, { path: a, workspacePath: b }]) {
+    for (const args of [{ path: missing }, { path: 'relative' }, { path: link }, { path: a, workspacePath: b }, { path: b, workspacePath: link }]) {
       const rejected = await call('workspace_open', args);
       assert.equal(rejected.isError, true);
       assert.equal(body(rejected).errorCode, 'INVALID_ARGUMENT');
@@ -395,7 +432,8 @@ it('dynamic Roslyn evaluation is confined to the explicitly configured project a
     await withDynamicClient(path.dirname(a), ['--workspace', a, '--roslyn-config', config], async client => {
       const query = (workspacePath: string) => client.callTool({ name: 'wincode_find_code_symbol',
         arguments: { workspacePath, query: 'Api', kind: 'class' } }, { timeout: 110000 });
-      const [semantic, text] = await Promise.all([query(a), query(b)]);
+      const alternateA = process.platform === 'win32' ? windowsShortPath(a) : await fs.realpath(a);
+      const [semantic, text] = await Promise.all([query(alternateA), query(b)]);
       assert.notEqual(semantic.isError, true, JSON.stringify(semantic.content));
       assert.notEqual(text.isError, true, JSON.stringify(text.content));
       const location = body(semantic).symbols.find((item: { name: string }) => item.name === 'Api')?.location;

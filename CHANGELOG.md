@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Dynamic connections reuse the configured project's session and Roslyn snapshot when requests alternate between its Windows long path and its 8.3 short path. If `workspace_open` receives both `path` and `workspacePath`, both must resolve to the same validated directory.
+
 ## 0.17.1 (2026-10-17)
 
 - Share one request-local source scan by default for up to four local-text keywords in `prepare_context`, preserving query order, diagnostics and scoped/ranged bypasses. Bounded scans or any query reaching 500 matches fall back to sequential queries under the existing deadline and can cost more. Add opt-in internal phase/work metrics and a model-free paired `benchmark:context` command with an explicit sequential baseline. No new MCP arguments, dependencies, persistent source cache or UI behavior changes.

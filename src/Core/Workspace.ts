@@ -6,7 +6,7 @@ export { type TrashMoveResult, invalidTrashResult, type ProjectIdentity, type Wo
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runGit } from './GitClient.js';
-import { assertLinkFreePath, assertWorkspaceDirectory } from './FileSystemBoundary.js';
+import { assertLinkFreePath, assertWorkspaceDirectory, resolveWorkspaceDirectory } from './FileSystemBoundary.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { WinCodeConfig } from './Config.js';
 import { randomUUID } from 'node:crypto';
@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 export class WorkspaceManager {
   private config: WinCodeConfig;
   readonly binding: WorkspaceBinding;
+  private configuredPhysicalRoot?: string;
 
   constructor(config: WinCodeConfig) {
     this.config = config;
@@ -82,7 +83,23 @@ export class WorkspaceManager {
   }
 
   async validateRoot(operation?: OperationContext): Promise<void> {
+    if (this.binding.mode === 'dynamic' && this.binding.source === 'argument' && this.configuredPhysicalRoot === undefined) {
+      this.configuredPhysicalRoot = await resolveWorkspaceDirectory(this.root, operation);
+      return;
+    }
     await assertWorkspaceDirectory(this.root, operation);
+  }
+
+  /** The caller has validated the request path. An alternate spelling must still reach the configured directory. */
+  async matchesConfiguredRoot(requested: string, physical: string, operation: OperationContext): Promise<boolean> {
+    if (this.configuredPhysicalRoot !== undefined && physical !== this.configuredPhysicalRoot) return false;
+    if (requested === this.root || physical === this.root) return true;
+    try {
+      return await resolveWorkspaceDirectory(this.root, operation) === physical;
+    } catch (error) {
+      rethrowOperationError(error, operation);
+      return false;
+    }
   }
 
   /**

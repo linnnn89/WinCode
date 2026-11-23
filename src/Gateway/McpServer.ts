@@ -57,6 +57,7 @@ export class WinCodeMcpServer {
       const context: ToolExecutionContext = { router: this.router, signal, tools: this.registry.list(), schemaHash: this.registry.schemaHash };
       let args: Record<string, unknown>;
       let root: string | undefined;
+      let workspacePathToConfirm: string | undefined;
       try {
         const argumentBytes = Buffer.byteLength(JSON.stringify(input), 'utf8');
         if (argumentBytes > ADMISSION_LIMITS.argumentBytes) return toolErrorResult('INVALID_ARGUMENT',
@@ -65,7 +66,7 @@ export class WinCodeMcpServer {
         if (!definition.desktopOnly && input.workspacePath !== undefined) root = absoluteWorkspace(input.workspacePath);
         if (this.dynamic && definition.workspaceControl) {
           const target = absoluteWorkspace(input.path);
-          if (root && path.relative(root, target) !== '') throw new Error('path and workspacePath must identify the same project.');
+          if (root !== target) workspacePathToConfirm = root;
           root = target;
         }
         const config = this.router.config;
@@ -92,7 +93,7 @@ export class WinCodeMcpServer {
         signal = lease.signal; context.signal = signal;
         if (lane !== 'status' && this.startPromise) await this.router.admission.waitFor(this.startPromise, lease);
         if (this.dynamic && root) {
-          selected = await this.dynamic.acquire(root, lease, lane === 'status');
+          selected = await this.dynamic.acquire(root, lease, lane === 'status', workspacePathToConfirm);
           context.router = selected.router;
           // A validated Windows short path can differ from the root bound to this router.
           if (definition.workspaceControl) args.path = selected.router.config.workspaceRoot;

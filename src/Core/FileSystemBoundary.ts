@@ -33,6 +33,15 @@ export async function assertWorkspaceDirectory(root: string, operation?: Operati
   if (!stat?.isDirectory()) throw new Error(`Invalid workspace path: "${root}". Expected an existing directory.`);
 }
 
+/** Validate the supplied spelling before resolving its physical directory. */
+export async function resolveWorkspaceDirectory(root: string, operation?: OperationContext): Promise<string> {
+  await assertWorkspaceDirectory(root, operation);
+  checkOperation(operation);
+  const physical = await fs.realpath(root);
+  checkOperation(operation);
+  return physical;
+}
+
 /** Check both spelling and physical destination before accessing a workspace file. */
 export async function resolveWorkspaceFile(root: string, relative: string): Promise<string> {
   const full = path.resolve(root, relative.replace(/\\/g, '/'));

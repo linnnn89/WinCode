@@ -80,8 +80,10 @@
 | 点击、勾选、列表选择 | 普通连接调用 `wincode_ui_click`（依次尝试 `Invoke` / `Toggle` / `SelectionItem`，不模拟鼠标坐标，不主动激活窗口，但应用自身事件仍可能弹窗或切到前台）。 |
 | 显式展开或折叠容器 | 普通连接调用 `wincode_ui_set_expanded`（`expanded: true/false`，仅用 `ExpandCollapsePattern`）。 |
 | 直接写入或清空控件值 | 调用 `wincode_ui_type` 并传 `mode: "setValue"`（`ValuePattern`）；`--background-ui` 连接须预先由启动者绑定 `--ui-write-window <PID>:<HWND>:<FileTime>`。 |
-| 触发后台 WPF 声明式快捷键 | 在 `--background-ui` + `--ui-shortcut-window <PID>:<HWND>:<FileTime>` 连接上调用 `wincode_ui_shortcut`，触发目标应用内部路由的 `WinCode.WpfBackgroundShortcut.v1` 控件（返回 `shortcut-requested` 后可 `inspect` 该 `automationId` 查看 `shortcutStatus`；接入方式见 [WPF 快捷键说明](../../../tools/WinCode.UIA.Host/Wpf/README.md)）。 |
+| 触发后台 WPF 快捷键 | 在 `--background-ui` 连接上用 `--ui-shortcut-window <PID>:<HWND>:<FileTime>` 授权窗口。调用 `wincode_ui_shortcut` 时填写 `pid`、`hwnd` 和程序声明的入口 ID（`targetAutomationId`）。 |
 | 前台逐键输入 / IME 测试 | 仅在独立隔离会话开启 `--isolated-keyboard` 且目标窗口已位于前台时，调用 `wincode_ui_type`（`mode: "type"`）。 |
+
+收到 `shortcut-requested` 后，用 `wincode_ui_inspect` 的 `query.automationId` 查询同一入口。节点的 `shortcutStatus` 为 `routed` 表示按键已送达控件。若要确认保存成功，还需核对文件或程序中的实际结果。程序如何声明入口，见 [WPF 快捷键接入说明](https://github.com/linnnn89/WinCode/blob/dc26a8202b2274acb28bea52f50ffd1d07f21159/tools/WinCode.UIA.Host/Wpf/README.md)。
 
 - **后台写保护**：在 `--background-ui` 连接上，当目标进程拥有当前前台窗口或前台归属无法核实时，`setValue` 与 `wincode_ui_shortcut` 均会被拒绝（`UI_WRITE_TARGET_DENIED`）；普通 `click` 命中 `WinCode.WpfBackgroundShortcut.v1` 同样会被拒绝。进程重启后须重新绑定窗口。
 - **结果核实**：`actionMethod` 仅证明 UIA 调用已被接受，操作后须另行通过 `inspect` 或应用输出核实业务结果；`inputText` 不会在响应或审计中回显（仅报告 `inputLength`）。

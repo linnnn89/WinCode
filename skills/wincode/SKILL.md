@@ -19,7 +19,7 @@ description: 使用 WinCode MCP 定位项目源码、查询 C# 引用和变更�
 
 ## 使用原则
 
-- 按连接的 `health.workspaceBinding.mode` 选目录。动态模式中，Agent 在每次项目调用的 `workspacePath` 填当前任务或用户指定的绝对项目目录。源码续读直接使用返回的 `nextRequest`，`workspace_open` 使用 `path`。并发任务分别传自己的目录。固定模式使用启动根，遇到 `WORKSPACE_MISMATCH` 时换对应连接。
+- 按连接的 `health.workspaceBinding.mode` 选目录。动态模式中，每次项目调用都用 `workspacePath` 传当前任务或用户指定的绝对项目目录，`workspace_open` 使用 `path`。源码结果返回的 `nextRequest` 可直接传给 `wincode_prepare_context`。旧网关返回的续读参数若缺少 `workspacePath`，补入原请求的项目目录。固定模式使用启动根，遇到 `WORKSPACE_MISMATCH` 时换对应连接。
 - 代码先定位再定向读取。默认 `local-text` 提供文本线索；Roslyn 引用需要当前搜索结果中的完整 `location`。
 - 同一任务需按多个声明名找上下文时，把相关名称放在一次 `wincode_prepare_context.task` 中；local-text 自动合并最多 4 个提取关键词的扫描。已知文件或行号仍优先定向读取，限制与回退见[代码手册](references/code.md#定向上下文)。
 - 查看界面保持只读：明确 PID/HWND，使用 `backgroundOnly:true`。操作界面按用户授权执行，动作后读回结果。后台写值显式用 `mode:"setValue"`；默认 `type` 会请求键盘焦点。

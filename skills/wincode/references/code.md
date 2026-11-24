@@ -1,6 +1,6 @@
 # 代码与工作区
 
-先按目标取证，再按结果中的缺口补读。原生连接的 `health.workspaceBinding.mode` 为 `dynamic` 时，在每次项目工具调用（含下表各查询、回收站及 `wincode_ui_review`）中传 `workspacePath`。源码续读时，直接把返回的 `nextRequest` 作为 `wincode_prepare_context` 的参数。`workspacePath` 是当前任务或用户点名项目的绝对目录。例如 `wincode_search_text({"workspacePath":"I:/WinCode","scopePaths":["src"],"query":"ToolRouter"})`。`workspace_open` 直接用 `path`，一次打开仅作用于该请求。固定连接按启动根查询。版本或工作区不符见[诊断手册](diagnostics.md)。
+先按目标取证，再按结果中的缺口补读。原生连接的 `health.workspaceBinding.mode` 为 `dynamic` 时，每次项目工具调用都需要 `workspacePath`，包括下表各查询、回收站及 `wincode_ui_review`。它是当前任务或用户点名项目的绝对目录。例如 `wincode_search_text({"workspacePath":"I:/WinCode","scopePaths":["src"],"query":"ToolRouter"})`。源码结果的 `nextRequest` 已含项目目录，可原样传给 `wincode_prepare_context`。旧版返回的续读参数若缺少该字段，补入原请求的目录。`workspace_open` 直接用 `path`，一次打开仅作用于该请求。固定连接按启动根查询。版本或工作区不符见[诊断手册](diagnostics.md)。
 
 ## 选择读取方式
 

@@ -4,6 +4,12 @@ import crypto from 'node:crypto';
 import { runGit } from './GitClient.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 
+export interface FingerprintOptions {
+  fresh?: boolean;
+  /** Only a successful live status probe supplies an observation for this request. */
+  onGitStatus?: (isClean: boolean) => void;
+}
+
 /** 文本缓存的有界变更提示及短时复用；它不是 Roslyn 编译输入快照，也不证明全仓内容相同。 */
 export class WorkspaceFingerprint {
   private fpMemo = new Map<string, { value: string; expiresAt: number; cheap: string }>();
@@ -22,7 +28,7 @@ export class WorkspaceFingerprint {
    */
   async computeWorkspaceFingerprint(
     workspaceRoot: string,
-    options?: { fresh?: boolean },
+    options?: FingerprintOptions,
     operation?: OperationContext
   ): Promise<string> {
     const resolvedRoot = path.resolve(workspaceRoot);
@@ -39,7 +45,7 @@ export class WorkspaceFingerprint {
       if (shared && !operation) return shared;
     }
 
-    const pending = this.computeWorkspaceFingerprintUncached(resolvedRoot, operation);
+    const pending = this.computeWorkspaceFingerprintUncached(resolvedRoot, operation, options?.onGitStatus);
     // A cancelled caller owns its computation. Invalidation or a newer observer revokes the right to publish a memo.
     const observation = { shared: operation ? undefined : pending };
     this.fpInflight.set(resolvedRoot, observation);
@@ -94,7 +100,8 @@ export class WorkspaceFingerprint {
     return parts.join('|');
   }
 
-  private async computeWorkspaceFingerprintUncached(resolvedRoot: string, operation?: OperationContext): Promise<string> {
+  private async computeWorkspaceFingerprintUncached(resolvedRoot: string, operation?: OperationContext,
+    onGitStatus?: FingerprintOptions['onGitStatus']): Promise<string> {
     try {
       const gitPath = path.join(resolvedRoot, '.git');
       const hasGit = await fs.stat(gitPath).catch(() => null);
@@ -154,6 +161,7 @@ export class WorkspaceFingerprint {
           );
 
           const payload = [headCommit || branchRef || 'no-head', parsedItems.length.toString(), ...fileStats].join('|');
+          onGitStatus?.(gitStatusRaw.length === 0);
           return crypto.createHash('sha1').update(payload).digest('hex');
         } catch (error) {
           rethrowOperationError(error, operation);

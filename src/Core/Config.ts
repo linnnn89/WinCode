@@ -77,11 +77,6 @@ export interface WinCodeConfig {
   };
 }
 
-/** Source continuations inherit the project selected for this request. */
-export function continuationWorkspacePath(config: WinCodeConfig): string | undefined {
-  return config.workspaceMode === 'dynamic' ? config.workspaceRoot : undefined;
-}
-
 export function getDefaultTimeouts(): WinCodeTimeouts {
   return {
     gitMs: 5_000,

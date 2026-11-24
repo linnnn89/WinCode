@@ -5,10 +5,11 @@
 - Source ranges and scoped symbol reads report an `encoding` gap for malformed UTF-8 or NUL bytes. A literal Unicode replacement character remains valid source text.
 - Workspace summaries and .NET architecture graphs read XML declarations in project and solution files. Commented properties, solution entries and project references no longer appear as active declarations.
 - Project diagnostics check SDK selection against the nearest workspace `global.json` and distinguish a missing CLI from an unavailable compatible SDK. Custom SDK search locations are reported as unverified during read-only diagnostics.
-
-- Source-reading `nextRequest` arguments include the selected project in dynamic workspace mode and count toward the existing response budget.
 - Local C# declaration and reference scans recognize Unicode identifiers, verbatim names and Unicode escapes. Symbol results use the comparison name (for example, `class` for `@class`) and retain the original declaration signature.
 - Overlapping text search scopes share completed directory walks within a request. Explicitly named ignored directories are still searched.
+- Dynamic text searches, file outlines and context requests accept absolute paths using either Windows spelling of the selected project root. Source `nextRequest` arguments include the originating project within the response budget and can be replayed directly.
+- Cancelling workspace analysis stops subsequent project descriptor reads and closes acquired file handles. Healthy workspace confirmations reuse the same request's Git status, and routine tool calls avoid copying the published schemas.
+- Dynamic connections reuse the configured project's session and Roslyn snapshot when requests alternate between its Windows long path and its 8.3 short path. If `workspace_open` receives both `path` and `workspacePath`, both must resolve to the same validated directory.
 
 ## 0.17.1 (2026-10-17)
 

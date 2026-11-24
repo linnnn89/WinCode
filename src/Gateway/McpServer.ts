@@ -1,8 +1,9 @@
-import { Server, ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
+import { Server, ProtocolError, ProtocolErrorCode, type Tool } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import path from 'node:path';
 import { ToolRouter, WorkspaceRecoveryRequiredError } from '../Core/ToolRouter.js';
 import { absoluteWorkspace, DynamicWorkspaces, WorkspaceSelectionError, type WorkspaceUse } from '../Core/DynamicWorkspaces.js';
+import { dynamicNavigationPath } from '../Core/CodeNavigation.js';
 import { getDefaultConfig, WINCODE_VERSION } from '../Core/Config.js';
 import { AbortError, TimeoutError } from '../Core/ResourceManager.js';
 import { ADMISSION_LIMITS, RequestLease, ServerBusyError } from '../Core/RequestAdmission.js';
@@ -54,9 +55,12 @@ export class WinCodeMcpServer {
       }
       const definition = this.registry.resolve(name);
       if (!definition) throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown tool: ${name}`);
-      const context: ToolExecutionContext = { router: this.router, signal, tools: this.registry.list(), schemaHash: this.registry.schemaHash };
+      let toolSnapshot: Tool[] | undefined;
+      const listTools = () => toolSnapshot ??= this.registry.list();
+      const context: ToolExecutionContext = { router: this.router, signal, listTools, schemaHash: this.registry.schemaHash };
       let args: Record<string, unknown>;
       let root: string | undefined;
+      const rootsToConfirm = new Set<string>();
       try {
         const argumentBytes = Buffer.byteLength(JSON.stringify(input), 'utf8');
         if (argumentBytes > ADMISSION_LIMITS.argumentBytes) return toolErrorResult('INVALID_ARGUMENT',
@@ -65,13 +69,15 @@ export class WinCodeMcpServer {
         if (!definition.desktopOnly && input.workspacePath !== undefined) root = absoluteWorkspace(input.workspacePath);
         if (this.dynamic && definition.workspaceControl) {
           const target = absoluteWorkspace(input.path);
-          if (root && path.relative(root, target) !== '') throw new Error('path and workspacePath must identify the same project.');
+          if (root && root !== target) rootsToConfirm.add(root);
           root = target;
         }
         const config = this.router.config;
         const paths = this.dynamic && root && path.relative(config.workspaceRoot, root) !== ''
           ? getDefaultConfig(root) : config;
-        args = this.registry.prepare(name, input, { paths, tools: context.tools });
+        const selectedRoot = this.dynamic && root;
+        args = this.registry.prepare(name, input, { paths, listTools, normalizePath: selectedRoot
+          ? value => dynamicNavigationPath(value, selectedRoot, rootsToConfirm) : undefined });
         context.unbound = Boolean(this.dynamic && !root);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -92,7 +98,7 @@ export class WinCodeMcpServer {
         signal = lease.signal; context.signal = signal;
         if (lane !== 'status' && this.startPromise) await this.router.admission.waitFor(this.startPromise, lease);
         if (this.dynamic && root) {
-          selected = await this.dynamic.acquire(root, lease, lane === 'status');
+          selected = await this.dynamic.acquire(root, lease, lane === 'status', rootsToConfirm);
           context.router = selected.router;
           // A validated Windows short path can differ from the root bound to this router.
           if (definition.workspaceControl) args.path = selected.router.config.workspaceRoot;

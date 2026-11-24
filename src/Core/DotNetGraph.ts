@@ -60,9 +60,12 @@ export async function loadDotNetProjectGraph(
     let content: string;
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
-      const full = await resolveWorkspaceFile(workspaceRoot, rel);
+      const full = await resolveWorkspaceFile(workspaceRoot, rel, operation);
+      checkOperation(operation);
       handle = await fs.open(full, 'r');
+      checkOperation(operation);
       const stat = await handle.stat();
+      checkOperation(operation);
       if (!stat.isFile()) { omit(rel, 'not-a-file'); continue; }
       const capacity = Math.min(graph.limits.maxFileBytes, graph.limits.maxDescriptorBytes - graph.descriptorBytesRead);
       if (stat.size > capacity) { omit(rel, 'descriptor-too-large'); continue; }
@@ -77,6 +80,7 @@ export async function loadDotNetProjectGraph(
       omit(rel, 'descriptor-unreadable-or-outside-workspace');
       continue;
     } finally { await handle?.close(); }
+    checkOperation(operation);
 
     const xml = parseProjectXml(content, 'project');
     if (!xml) { omit(rel, 'invalid-project-xml'); continue; }

@@ -161,7 +161,7 @@ export async function mapUiCodeCandidates(
           const candidate: UiCodeCandidate = {
             file: relativeFile, line: index + 1, snippet: rawLines[index].slice(Math.max(0, token.index! - 80), token.index! + 320),
             fileSha256, kind: declaration ? 'declaration' : 'assignment', identifier, relatedSymbol,
-            nextRequest: { workspacePath, task: 'Inspect this source candidate; runtime binding identity is unverified.', scopeFiles: [relativeFile],
+            nextRequest: { ...(workspacePath && { workspacePath }), task: 'Inspect this source candidate; runtime binding identity is unverified.', scopeFiles: [relativeFile],
               // A constructor argument can be a local delegate or shadowed name. Inspect the assignment first.
               lineRanges: [{ file: relativeFile, startLine: index + 1, endLine: index + 1 }],
             },

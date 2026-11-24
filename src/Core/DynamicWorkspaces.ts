@@ -1,7 +1,6 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getDefaultConfig } from './Config.js';
-import { assertWorkspaceDirectory } from './FileSystemBoundary.js';
+import { resolveWorkspaceDirectory } from './FileSystemBoundary.js';
 import { checkOperation, rethrowOperationError } from './OperationContext.js';
 import { AbortError, Mutex } from './ResourceManager.js';
 import type { RequestLease } from './RequestAdmission.js';
@@ -67,21 +66,23 @@ export class DynamicWorkspaces {
     if (this.closing) throw new AbortError('Dynamic workspaces are shutting down.');
   }
 
-  async acquire(root: string, lease: RequestLease, passive: boolean): Promise<WorkspaceUse> {
-    // Check the spelling before realpath so a junction cannot acquire an already-open router by alias.
+  async acquire(root: string, lease: RequestLease, passive: boolean, rootsToConfirm?: Iterable<string>): Promise<WorkspaceUse> {
     let physical: string;
     try {
-      await assertWorkspaceDirectory(root, lease.operation);
-      physical = await fs.realpath(root);
+      physical = await resolveWorkspaceDirectory(root, lease.operation);
+      if (rootsToConfirm) for (const alternate of rootsToConfirm) {
+        if (await resolveWorkspaceDirectory(alternate, lease.operation) !== physical)
+          throw new Error('Absolute paths and workspace selectors must identify the same project.');
+      }
     } catch (error) {
       rethrowOperationError(error, lease.operation);
       throw new WorkspaceSelectionError('INVALID_ARGUMENT', error instanceof Error ? error.message : String(error));
     }
     this.checkActive(lease);
-    const config = this.primary.config;
-    if (config.workspaceRootSource === 'argument' && path.relative(config.workspaceRoot, root) === ''
-      && physical === await fs.realpath(config.workspaceRoot)) {
-      return { router: this.primary, release() {} };
+    if (this.primary.config.workspaceRootSource === 'argument') {
+      const matches = await this.primary.workspace.matchesConfiguredRoot(root, physical, lease.operation);
+      this.checkActive(lease);
+      if (matches) return { router: this.primary, release() {} };
     }
     const hit = this.select(physical, passive);
     if (hit) return hit;

@@ -79,6 +79,7 @@ export const WORKSPACE_TOOLS = [
         gateway: 'WinCode Agent Gateway', version: WINCODE_VERSION, runtime: RUNTIME_IDENTITY,
         uiMode: router.config.backgroundUi ? 'background' : 'standard',
         uiWriteWindowBound: Boolean(router.config.backgroundUi && router.config.uiWriteWindow),
+        uiShortcutWindowBound: Boolean(router.config.backgroundUi && router.config.uiShortcutWindow),
         globalKeyboardEnabled: Boolean(!router.config.backgroundUi && router.config.isolatedKeyboard),
         toolContract: { schemaHash, toolCount: tools.length,
           ...(selectedTool ? { tool: { name: selectedTool.name, inputSchema: selectedTool.inputSchema,

@@ -50,16 +50,19 @@ async function main() {
     if (config.backgroundUi) throw new Error('--isolated-keyboard cannot be combined with --background-ui.');
     config.isolatedKeyboard = true;
   }
-  const windowIndex = args.indexOf('--ui-write-window');
-  if (windowIndex !== -1) {
+  for (const [flag, setting] of [
+    ['--ui-write-window', 'uiWriteWindow'], ['--ui-shortcut-window', 'uiShortcutWindow'],
+  ] as const) {
+    const windowIndex = args.indexOf(flag);
+    if (windowIndex === -1) continue;
     const parts = (args[windowIndex + 1] ?? '').split(':');
     const [pid, hwnd, processStartFileTime] = parts;
     const target = { pid: Number(pid), hwnd, processStartFileTime };
-    if (!config.backgroundUi || args.lastIndexOf('--ui-write-window') !== windowIndex || parts.length !== 3 ||
+    if (!config.backgroundUi || args.lastIndexOf(flag) !== windowIndex || parts.length !== 3 ||
         !/^[1-9][0-9]*$/.test(pid) || !hasBackgroundTarget(target) || !/^[1-9][0-9]{0,18}$/.test(processStartFileTime) ||
         BigInt(processStartFileTime) > 0x7fffffffffffffffn)
-      throw new Error('--ui-write-window requires --background-ui and one PID:HWND:processStartFileTime binding from the launcher.');
-    config.uiWriteWindow = target;
+      throw new Error(`${flag} requires --background-ui and one PID:HWND:processStartFileTime binding from the launcher.`);
+    config[setting] = target;
   }
   const repomixIndex = args.indexOf('--repomix-cli');
   if (repomixIndex !== -1) {

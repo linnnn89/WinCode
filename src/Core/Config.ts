@@ -46,11 +46,18 @@ export interface RoslynConfig {
   additionalInputs?: readonly string[];
 }
 
+interface UiWindowBinding {
+  pid: number;
+  hwnd: string;
+  processStartFileTime: string;
+}
+
 export interface WinCodeConfig {
   readonly workspaceRoot: string;
   workspaceMode?: 'fixed' | 'dynamic';
   backgroundUi?: boolean;
-  uiWriteWindow?: { pid: number; hwnd: string; processStartFileTime: string };
+  uiWriteWindow?: UiWindowBinding;
+  uiShortcutWindow?: UiWindowBinding;
   isolatedKeyboard?: boolean;
   /** Exact physical project roots validated by the launcher for native Git. */
   trustedGitRoots?: readonly string[];

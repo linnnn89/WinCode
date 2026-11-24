@@ -189,6 +189,23 @@ const typeDefinition = defineTool<UiTypeArgs>({
 });
 
 export const UI_TOOLS = [
+  defineTool<UiActionArgs>({
+    name: 'wincode_ui_shortcut',
+    description: 'Request an application-declared WPF shortcut on the background window bound by the launcher. Use the exact AutomationId of its WinCode.WpfBackgroundShortcut.v1 control. The app routes its configured gesture internally. Inspect the application or its saved output to verify the result.',
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { pid: actionTargetProperties.pid, hwnd: actionTargetProperties.hwnd, targetAutomationId: actionTargetProperties.targetAutomationId },
+      required: ['pid', 'hwnd', 'targetAutomationId'],
+    },
+  }, {
+    invalidArguments, desktopOnly: true, requestBudget: 'ui', preserveOutcomeOnInterruption: true,
+    validate: args => validateActionRequest(args, 'wpfShortcut'),
+    execute: async (args, { router, signal }) => {
+      const result = await router.performUiAction({ ...args, hwnd: args.hwnd?.trim(), action: 'wpfShortcut', backgroundOnly: true }, signal);
+      return jsonResult(result, false, !result.success);
+    },
+  }),
   defineTool<UiListWindowsRequest>({
     name: 'wincode_ui_list_windows',
     description: 'Lists visible top-level Windows windows without activation, screenshots or control traversal. Optional filters are combined with AND. Select a returned PID and HWND explicitly; titles do not establish project ownership. Results may become stale immediately.',

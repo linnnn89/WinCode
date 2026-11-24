@@ -35,6 +35,7 @@
 | `readStates` | 可选布尔值，默认 `false`；只读状态，不执行动作或读取输入值 |
 | `query` | 可选对象；至少有一个规范定位字段 `automationId/name/controlType`，每个为非空白字符串、最长 256；可选 `maxSearchNodes` 整数 1–5000、默认 1000，`maxMatches` 整数 1–20、默认 10。仅有未知字段不构成有效查询 |
 | `wincode_ui_click` | `pid`/`hwnd` 至少一个；`targetAutomationId`/`targetName`/`targetControlType` 至少一个，每个为非空白字符串、最长 256 |
+| `wincode_ui_shortcut` | 仅在启动者为后台窗口单独授权后出现。必填 `pid`、`hwnd`、`targetAutomationId`。最后一项取应用声明的快捷键 ID。需要助手协议版本 8。 |
 | `wincode_ui_set_expanded` | 同 click 的定位字段，必填 `expanded` 布尔值；只用 ExpandCollapsePattern 明确设置展开／折叠，已处于所需状态时不操作；需要 inspectionVersion 4 Host |
 | `wincode_ui_type` | 按选择器定位唯一控件，`inputText` 最长 4096 个字符。默认连接必填 `mode:"setValue"`，空字符串会清空值。启用独立会话发键后才支持 `mode:"type"` 和 `clearBefore`。 |
 | `wincode_ui_review` | 接受上述 inspect 的全部规范字段，另必填 `candidateFiles`：1–16 个相对 `.xaml` 路径、每项最长 512；可选 `candidateCodeFiles`：1–8 个相对 `.cs` 路径、每项最长 512；可选 `textQueries`：最多 5 个非空字面字符串、每项最长 80 |

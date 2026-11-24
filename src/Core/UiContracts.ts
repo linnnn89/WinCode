@@ -17,6 +17,7 @@ export interface UiNode {
   name?: string;
   controlType?: string;
   className?: string;
+  shortcutStatus?: 'ready' | 'pending' | 'routed' | 'failed' | 'unknown';
   bounds?: UiRect;
   relativeBounds?: UiRect;
   isEnabled?: boolean;
@@ -44,10 +45,10 @@ export interface UiQuery {
 
 export type UiScopeSelector = Pick<UiQuery, 'automationId' | 'name' | 'controlType'>;
 
-export type UiAction = 'click' | 'type' | 'setValue' | 'setExpanded';
+export type UiAction = 'click' | 'type' | 'setValue' | 'setExpanded' | 'wpfShortcut';
 
 /** 取证版本与能力必须对应；5 增加 inspect/setExpanded 的父级路径。 */
-export const UI_INSPECTION_VERSIONS = { QUERY_AND_STATES: 2, ACTIONS: 3, EXPAND_COLLAPSE: 4, PARENT_SCOPE: 5, PROTECTED_UI: 7 } as const;
+export const UI_INSPECTION_VERSIONS = { QUERY_AND_STATES: 2, ACTIONS: 3, EXPAND_COLLAPSE: 4, PARENT_SCOPE: 5, PROTECTED_UI: 7, WPF_SHORTCUT: 8 } as const;
 
 export function hasBackgroundTarget(request: UiInspectRequest): boolean {
   const handle = typeof request.hwnd === 'string' ? request.hwnd.trim() : '';
@@ -77,7 +78,7 @@ export function validateUiScope(scopePath: unknown, action?: string): void {
 }
 
 export function isUiAction(action: unknown): action is UiAction {
-  return action === 'click' || action === 'type' || action === 'setValue' || action === 'setExpanded';
+  return action === 'click' || action === 'type' || action === 'setValue' || action === 'setExpanded' || action === 'wpfShortcut';
 }
 
 /**
@@ -99,7 +100,10 @@ export function validateUiAction(request: UiInspectRequest): void {
   if (request.clearBefore === true && request.action !== 'type') throw new Error('clearBefore is only supported for the type action.');
   if (request.action === 'setExpanded' && typeof request.expanded !== 'boolean') throw new Error('expanded must be boolean.');
   if (request.action !== 'setExpanded' && request.expanded !== undefined) throw new Error('expanded is only supported for setExpanded.');
-  if (request.action === 'click' || request.action === 'setExpanded') {
+  if (request.action === 'wpfShortcut' && (!hasBackgroundTarget(request) || !request.targetAutomationId ||
+      request.targetName !== undefined || request.targetControlType !== undefined))
+    throw new Error('A WPF shortcut requires pid, hwnd and the exact AutomationId of a registered shortcut.');
+  if (request.action === 'click' || request.action === 'setExpanded' || request.action === 'wpfShortcut') {
     if (request.inputText !== undefined) throw new Error(`inputText is not accepted for the ${request.action} action.`);
     return;
   }
@@ -242,6 +246,7 @@ export const UiErrorCodes = {
   SHUTDOWN: 'SHUTDOWN',
   // 语义操作（click/type/setValue）结果码。只有唯一命中的目标才允许被操作。
   TARGET_NOT_FOUND: 'TARGET_NOT_FOUND',
+  TARGET_NOT_REGISTERED: 'TARGET_NOT_REGISTERED',
   SCOPE_NOT_FOUND: 'SCOPE_NOT_FOUND',
   SCOPE_AMBIGUOUS: 'SCOPE_AMBIGUOUS',
   SCOPE_SEARCH_INCOMPLETE: 'SCOPE_SEARCH_INCOMPLETE',

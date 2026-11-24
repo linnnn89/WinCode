@@ -120,7 +120,9 @@ WinCode looks for Repomix in its own installation. Use `--repomix-cli <absolute-
 
 For shared-desktop work, add `--background-ui` to a fixed or dynamic connection. This allows window listing and inspection by PID and HWND. For direct ValuePattern writes, the launcher must also pass `--ui-write-window <PID>:<HWND>:<processStartFileTime>` for one top-level window. Writes require explicit `mode:"setValue"` and are refused when the target process owns the foreground window or foreground ownership cannot be confirmed. Applications can still respond to changes by opening their own dialogs.
 
-`wincode_hello_world` reports `uiMode`, `uiWriteWindowBound` and `globalKeyboardEnabled`. Both background connections and single `backgroundOnly:true` inspections require helper version 7. Images require a matching window identity and confirmed window-only capture method.
+For a WPF app you control, declare a shortcut in the app and add `--ui-shortcut-window <PID>:<HWND>:<processStartFileTime>` to its background connection. Then call `wincode_ui_shortcut` with the exact ID declared by the app. WinCode leaves the foreground keyboard alone. The app handles its own shortcut and may open a dialog. [WPF setup and usage](tools/WinCode.UIA.Host/Wpf/README.md)
+
+`wincode_hello_world` reports `uiMode`, `uiWriteWindowBound`, `uiShortcutWindowBound` and `globalKeyboardEnabled`. Background inspection requires helper version 7 or later. Declared shortcuts require version 8 or later. Images require a matching window identity and confirmed window-only capture method.
 
 See the [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md) for client configuration and the optional agent Skill. After rebuilding, reconnect the client's MCP server to load the updated process and tool schemas.
 
@@ -313,7 +315,9 @@ $appProcess = Get-Process -Id 12345
 '{0}:0x{1:X}:{2}' -f $appProcess.Id, $appProcess.MainWindowHandle.ToInt64(), $appProcess.StartTime.ToFileTimeUtc()
 ```
 
-`wincode_hello_world` 返回 `uiMode`、`uiWriteWindowBound` 和 `globalKeyboardEnabled`。后台连接和普通连接的单次 `backgroundOnly:true` 检查均要求原生助手协议版本 7。网关核实窗口身份和取图方式后才会返回图片。
+如果要在后台试自己 WPF 程序的快捷键，先在程序里声明允许使用的快捷键，再给后台连接加上 `--ui-shortcut-window <PID>:<HWND>:<processStartFileTime>`。用 `wincode_ui_shortcut` 指定快捷键的 ID，程序会在自己的窗口里处理。前台键盘仍由您使用。程序自己的处理逻辑仍可能弹窗。[WPF 接入方法](tools/WinCode.UIA.Host/Wpf/README.md)
+
+`wincode_hello_world` 返回 `uiMode`、`uiWriteWindowBound`、`uiShortcutWindowBound` 和 `globalKeyboardEnabled`。后台检查要求原生助手协议版本至少为 7，后台快捷键要求至少为 8。网关核实窗口身份和取图方式后才会返回图片。
 
 客户端配置和可选的智能体 Skill 安装方式见 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。重新构建后，需要重新连接客户端中的 MCP 服务器，才能加载更新后的进程和工具参数定义。
 

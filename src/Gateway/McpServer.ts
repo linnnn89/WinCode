@@ -24,11 +24,12 @@ export class WinCodeMcpServer {
 
   constructor(private readonly router: ToolRouter) {
     const dynamic = router.config.workspaceMode === 'dynamic';
-    this.registry = new ToolRegistry(dynamic, router.config.backgroundUi, router.config.isolatedKeyboard);
+    this.registry = new ToolRegistry(dynamic, router.config.backgroundUi, router.config.isolatedKeyboard, Boolean(router.config.uiShortcutWindow));
     if (dynamic) this.dynamic = new DynamicWorkspaces(router);
     const instructions = [
       dynamic && 'For each project tool call, send the current task directory or the absolute project path named by the user as workspacePath. workspace_open uses path. Concurrent tasks select their own projects.',
       router.config.backgroundUi && 'Background UI is enforced. Inspect by PID and HWND. Only the launcher-bound window accepts direct writes.',
+      router.config.uiShortcutWindow && 'Use wincode_ui_shortcut only for shortcuts declared by the bound WPF window. Check the application for the result.',
     ].filter(Boolean).join(' ');
     this.server = new Server({ name: 'wincode-agent-gateway', version: WINCODE_VERSION }, { capabilities: { tools: {} },
       ...(instructions ? { instructions } : {}) });

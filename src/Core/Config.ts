@@ -52,7 +52,7 @@ export interface WinCodeConfig {
   backgroundUi?: boolean;
   uiWriteWindow?: { pid: number; hwnd: string; processStartFileTime: string };
   isolatedKeyboard?: boolean;
-  /** Exact project roots authorized by the launcher to run native Git. */
+  /** Exact physical project roots validated by the launcher for native Git. */
   trustedGitRoots?: readonly string[];
   workspaceRootSource?: 'argument' | 'cwd' | 'configuration' | 'request';
   cacheDir: string;

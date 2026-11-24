@@ -41,10 +41,6 @@ async function main() {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--trust-git') trustedGitRoots.push(await resolveWorkspaceDirectory(absoluteWorkspace(args[++i])));
   }
-  if (trustedGitRoots.length && workspaceRootSource === 'argument') {
-    const physical = await resolveWorkspaceDirectory(workspaceRoot);
-    if (trustedGitRoots.includes(physical)) workspaceRoot = physical;
-  }
   const config = getDefaultConfig(workspaceRoot);
   config.trustedGitRoots = trustedGitRoots;
   config.workspaceRootSource = workspaceRootSource;

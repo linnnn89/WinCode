@@ -16,7 +16,7 @@ type Call = (name: string, args?: Record<string, unknown>) => Promise<any>;
 async function fixture(run: (root: string, router: ToolRouter, call: Call) => Promise<void>, trustGit = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-summary-'));
   const config = getDefaultConfig(root);
-  if (trustGit) config.trustedGitRoots = [root];
+  if (trustGit) config.trustedGitRoots = [await fs.realpath(root)];
 
   config.adapters.flaui.enabled = false;
   config.adapters.repomix.useCli = false;

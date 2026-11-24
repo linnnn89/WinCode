@@ -313,6 +313,29 @@ function windowsShortPath(directory: string): string {
   return result.stdout.trim();
 }
 
+it('fixed stdio keeps its Windows short-path binding when Git trusts the physical project',
+  { skip: process.platform !== 'win32', timeout: 30000 }, async t => fixture(async (a, b) => {
+    const physical = await fs.realpath(a), short = windowsShortPath(physical);
+    if (path.relative(physical, short) === '') { t.skip('The volume did not supply a distinct short path'); return; }
+    assert.equal(await fs.realpath(short), physical);
+    const init = spawnSync('git', ['init', '-q'], { cwd: physical, windowsHide: true, encoding: 'utf8' });
+    assert.equal(init.status, 0, init.stderr);
+    for (const [explicit, trusted] of [[true, true], [false, true], [true, false]] as const) {
+      const client = new Client({ name: 'fixed-short-git', version: '1' });
+      try {
+        const workspaceArgs = explicit ? ['--workspace', short] : [];
+        await client.connect(new StdioClientTransport({ command: process.execPath, cwd: short, stderr: 'pipe',
+          args: [path.resolve('dist/index.js'), ...workspaceArgs, '--trust-git', trusted ? physical : b] }));
+        const opened = body(await client.callTool({ name: 'workspace_open', arguments: { path: short } }));
+        assert.equal(opened.workspace, short, opened.errorCode);
+        if (trusted) assert.equal(opened.git.isGit, true);
+        else assert.equal(opened.git.errorCode, 'GIT_NOT_TRUSTED');
+        const wrong = body(await client.callTool({ name: 'workspace_open', arguments: { path: b } }));
+        assert.equal(wrong.errorCode, 'WORKSPACE_MISMATCH');
+      } finally { await client.close(); }
+    }
+  }));
+
 it('Windows long and short paths share the explicitly configured dynamic workspace in either direction',
   { skip: process.platform !== 'win32', timeout: 30000 }, async t => fixture(async (a, b) => {
     const long = await fs.realpath(a);

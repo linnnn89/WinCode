@@ -5,7 +5,7 @@ import { isWorkspacePathInside, validateTrashPath, type TrashMoveResult, type Pr
 export { type TrashMoveResult, invalidTrashResult, type ProjectIdentity, type WorkspaceTreeItem, type WorkspaceGitStatus, type WorkspaceMetadata, type WorkspaceOpenOptions, type WorkspaceDirectoryOptions, type WorkspaceDirectoryResult, type WorkspaceOpenResult, validateWorkspaceDirectoryOptions, validateTrashPath } from './WorkspaceContracts.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { gitRootIsTrusted, publicGitRemote, runGit } from './GitClient.js';
+import { resolveTrustedGitRoot, publicGitRemote, runGit } from './GitClient.js';
 import { assertLinkFreePath, assertWorkspaceDirectory, resolveWorkspaceDirectory } from './FileSystemBoundary.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { WinCodeConfig } from './Config.js';
@@ -120,14 +120,15 @@ export class WorkspaceManager {
   async getGitStatus(operation?: OperationContext, observedClean?: boolean): Promise<WorkspaceGitStatus> {
     const gitTimeout = this.config.timeouts?.gitMs ?? 5000;
     const trusted = this.config.trustedGitRoots;
+    const gitRoot = await resolveTrustedGitRoot(this.root, trusted, operation);
     checkOperation(operation);
-    if (!gitRootIsTrusted(this.root, trusted)) {
+    if (!gitRoot) {
       const absent = await fs.lstat(path.join(this.root, '.git')).then(() => false,
         (e: NodeJS.ErrnoException) => e.code === 'ENOENT');
       checkOperation(operation);
       return absent ? { isGit: false } : { isGit: null, status: 'unknown', errorCode: 'GIT_NOT_TRUSTED' };
     }
-    const git = (args: string[]) => runGit(this.root, trusted, args, gitTimeout, operation);
+    const git = (args: string[]) => runGit(gitRoot, trusted, args, gitTimeout, operation);
     try {
       if ((await git(['rev-parse', '--is-inside-work-tree'])).stdout.trim() !== 'true') return { isGit: false };
     } catch (error) {

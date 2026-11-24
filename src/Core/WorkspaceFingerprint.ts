@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { gitRootIsTrusted, runGit } from './GitClient.js';
+import { resolveTrustedGitRoot, runGit } from './GitClient.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 
 export interface FingerprintOptions {
@@ -32,7 +32,8 @@ export class WorkspaceFingerprint {
     operation?: OperationContext
   ): Promise<string> {
     const resolvedRoot = path.resolve(workspaceRoot);
-    const cheap = await this.cheapChangeProbe(resolvedRoot, operation);
+    const gitRoot = await resolveTrustedGitRoot(resolvedRoot, this.trustedGitRoots, operation);
+    const cheap = await this.cheapChangeProbe(resolvedRoot, gitRoot, operation);
     checkOperation(operation);
     if (options?.fresh) {
       this.invalidateFingerprint(resolvedRoot);
@@ -45,7 +46,7 @@ export class WorkspaceFingerprint {
       if (shared && !operation) return shared;
     }
 
-    const pending = this.computeWorkspaceFingerprintUncached(resolvedRoot, operation, options?.onGitStatus);
+    const pending = this.computeWorkspaceFingerprintUncached(resolvedRoot, gitRoot, operation, options?.onGitStatus);
     // A cancelled caller owns its computation. Invalidation or a newer observer revokes the right to publish a memo.
     const observation = { shared: operation ? undefined : pending };
     this.fpInflight.set(resolvedRoot, observation);
@@ -80,12 +81,12 @@ export class WorkspaceFingerprint {
     this.fpInflight.delete(resolved);
   }
 
-  private async cheapChangeProbe(resolvedRoot: string, operation?: OperationContext): Promise<string> {
+  private async cheapChangeProbe(resolvedRoot: string, gitRoot: string | undefined, operation?: OperationContext): Promise<string> {
     const gen = this.watchGeneration.get(resolvedRoot) ?? 0;
     checkOperation(operation);
-    const gitDir = path.join(resolvedRoot, '.git');
-    const git = gitRootIsTrusted(resolvedRoot, this.trustedGitRoots) ? await fs.lstat(gitDir).catch(() => null) : null;
-    const candidates = git?.isDirectory() ? [path.join(gitDir, 'HEAD'), path.join(gitDir, 'index')] : [];
+    const gitDir = gitRoot && path.join(gitRoot, '.git');
+    const git = gitDir ? await fs.lstat(gitDir).catch(() => null) : null;
+    const candidates = gitDir && git?.isDirectory() ? [path.join(gitDir, 'HEAD'), path.join(gitDir, 'index')] : [];
     candidates.push(path.join(resolvedRoot, 'package.json'));
     const parts = [`watch:${gen}`];
     for (const file of candidates) {
@@ -100,20 +101,19 @@ export class WorkspaceFingerprint {
     return parts.join('|');
   }
 
-  private async computeWorkspaceFingerprintUncached(resolvedRoot: string, operation?: OperationContext,
+  private async computeWorkspaceFingerprintUncached(resolvedRoot: string, gitRoot: string | undefined, operation?: OperationContext,
     onGitStatus?: FingerprintOptions['onGitStatus']): Promise<string> {
     try {
-      if (!gitRootIsTrusted(resolvedRoot, this.trustedGitRoots))
-        return await this.computeDirectoryFingerprintFallback(resolvedRoot, operation);
-      const gitPath = path.join(resolvedRoot, '.git');
+      if (!gitRoot) return await this.computeDirectoryFingerprintFallback(resolvedRoot, operation);
+      const gitPath = path.join(gitRoot, '.git');
       const git = await fs.lstat(gitPath).catch(() => null);
       checkOperation(operation);
 
       if (git?.isDirectory() || git?.isFile()) {
         try {
           const [headRes, statusRes] = await Promise.allSettled([
-            runGit(resolvedRoot, this.trustedGitRoots, ['rev-parse', 'HEAD'], 3000, operation),
-            runGit(resolvedRoot, this.trustedGitRoots, ['status', '--porcelain=v1', '-z'], 5000, operation),
+            runGit(gitRoot, this.trustedGitRoots, ['rev-parse', 'HEAD'], 3000, operation),
+            runGit(gitRoot, this.trustedGitRoots, ['status', '--porcelain=v1', '-z'], 5000, operation),
           ]);
           checkOperation(operation);
           const headCommit = headRes.status === 'fulfilled' ? headRes.value.stdout.trim() : '';
@@ -127,7 +127,7 @@ export class WorkspaceFingerprint {
           let branchRef = '';
           if (!headCommit) {
             try {
-              branchRef = (await runGit(resolvedRoot, this.trustedGitRoots, ['symbolic-ref', '--quiet', 'HEAD'], 3000, operation)).stdout.trim();
+              branchRef = (await runGit(gitRoot, this.trustedGitRoots, ['symbolic-ref', '--quiet', 'HEAD'], 3000, operation)).stdout.trim();
             } catch (error) { rethrowOperationError(error, operation); }
           }
 
@@ -152,7 +152,7 @@ export class WorkspaceFingerprint {
 
           const fileStats = await Promise.all(
             itemsToStat.map(async ({ statusType, relPath, origPath }) => {
-              const fullPath = path.resolve(resolvedRoot, relPath);
+              const fullPath = path.resolve(gitRoot, relPath);
               const pathKey = origPath ? `${relPath}<-${origPath}` : relPath;
               try {
                 const stat = await fs.lstat(fullPath);

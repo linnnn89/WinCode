@@ -3,12 +3,23 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isWorkspacePathInside } from './WorkspaceContracts.js';
-import { checkOperation, type OperationContext } from './OperationContext.js';
+import { assertLinkFreePath } from './FileSystemBoundary.js';
+import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 
 const execFileAsync = promisify(execFile);
 
-export function gitRootIsTrusted(root: string, trustedRoots: readonly string[] = []): boolean {
-  return trustedRoots.includes(path.resolve(root));
+export async function resolveTrustedGitRoot(root: string, trustedRoots: readonly string[] | undefined,
+  operation?: OperationContext): Promise<string | undefined> {
+  checkOperation(operation);
+  if (!trustedRoots?.length) return;
+  try {
+    const physical = await fs.realpath(root);
+    checkOperation(operation);
+    if (!trustedRoots.includes(physical)) return;
+    // A Windows short spelling can identify the granted directory. Links remain outside the grant.
+    if (path.resolve(root) !== physical) await assertLinkFreePath(root, operation);
+    return physical;
+  } catch (error) { rethrowOperationError(error, operation); }
 }
 
 /** Expose only the host and repository path of a recognized Git network address. */
@@ -56,10 +67,10 @@ export async function resolveGitExecutable(root: string, operation?: OperationCo
 }
 
 export async function runGit(root: string, trustedRoots: readonly string[] | undefined, args: string[], timeout: number, operation?: OperationContext): Promise<{ stdout: string }> {
-  checkOperation(operation);
-  if (!gitRootIsTrusted(root, trustedRoots) || !gitRootIsTrusted(await fs.realpath(root), trustedRoots))
+  const physical = await resolveTrustedGitRoot(root, trustedRoots, operation);
+  if (!physical)
     throw Object.assign(new Error('Native Git was not authorized for this workspace.'), { code: 'GIT_NOT_TRUSTED' });
-  const executable = await resolveGitExecutable(root, operation);
+  const executable = await resolveGitExecutable(physical, operation);
   const remaining = () => {
     checkOperation(operation);
     return Math.max(1, Math.min(timeout, (operation?.deadline ?? Infinity) - Date.now()));
@@ -77,8 +88,8 @@ export async function runGit(root: string, trustedRoots: readonly string[] | und
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     !/^(?:GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+))$/i.test(key)));
   const result = await execFileAsync(executable, ['--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', ...args], {
-    cwd: root, windowsHide: true, shell: false, timeout: remaining(), signal: operation?.signal, maxBuffer: 1024 * 1024, encoding: 'utf8',
-    env: { ...env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0', GIT_CEILING_DIRECTORIES: path.dirname(root) },
+    cwd: physical, windowsHide: true, shell: false, timeout: remaining(), signal: operation?.signal, maxBuffer: 1024 * 1024, encoding: 'utf8',
+    env: { ...env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0', GIT_CEILING_DIRECTORIES: path.dirname(physical) },
   });
   checkOperation(operation);
   return result;

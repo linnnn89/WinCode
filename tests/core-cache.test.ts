@@ -102,7 +102,7 @@ describe('core-cache', () => {
         await fs.writeFile(source, 'one');
         const reads = t.mock.method(fs, 'readFile');
         const opens = t.mock.method(fs, 'open');
-        const cache = new CacheManager(testCacheDir, undefined, undefined, undefined, [root]);
+        const cache = new CacheManager(testCacheDir, undefined, undefined, undefined, [await fs.realpath(root)]);
         let statusReports = 0;
         const options = { fresh: true, onGitStatus: () => { statusReports++; } };
         const first = await cache.computeWorkspaceFingerprint(root, options);

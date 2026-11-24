@@ -119,7 +119,7 @@ export function contextResponse(context: PreparedContextResult, responseFormat: 
     if (data.task.length > 64) { metadataTruncated = true; data.task = clipContextText(data.task, 64); continue; }
     // Keep one actionable gap when it is small; long path metadata must not crowd out source.
     if (coverageDetailLimit > 1 || (coverageDetailLimit === 1 &&
-      JSON.stringify(rangeCoverage(data, originalEvidence, originalIssues, requestedRanges, coverageDetailLimit)?.details[0]).length > maxCharacters / 4)) {
+      JSON.stringify(rangeCoverage(data, originalEvidence, originalIssues, requestedRanges, coverageDetailLimit, workspacePath)?.details[0]).length > maxCharacters / 4)) {
       metadataTruncated = true; coverageDetailLimit--; continue;
     }
     if (data.packedContent) {

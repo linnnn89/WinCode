@@ -1,6 +1,7 @@
 /** File-derived .NET declarations; never evaluates MSBuild or imports outside projects. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseProjectXml } from './ProjectXml.js';
 import { resolveWorkspaceFile } from './FileSystemBoundary.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { listDirectory } from './WorkspaceBrowser.js';
@@ -81,16 +82,18 @@ export async function loadDotNetProjectGraph(
     } finally { await handle?.close(); }
     checkOperation(operation);
 
+    const xml = parseProjectXml(content, 'project');
+    if (!xml) { omit(rel, 'invalid-project-xml'); continue; }
     const field = (value?: string) => {
       if (value && value.length > 512) { omit(rel, 'metadata-field-budget'); return undefined; }
       return value?.trim();
     };
-    const sdk = field(content.match(/<Project\s+[^>]*Sdk="([^"]+)"/i)?.[1]);
+    const sdk = field(xml.sdk);
     const refs: string[] = [];
-    for (const match of content.matchAll(/<ProjectReference\s+Include="([^"]+)"/gi)) {
+    for (const reference of xml.projectReferences) {
       checkOperation(operation);
       if (refs.length >= 16) { omit(rel, 'reference-budget'); break; }
-      const full = path.resolve(workspaceRoot, path.dirname(rel), match[1].replace(/\\/g, '/'));
+      const full = path.resolve(workspaceRoot, path.dirname(rel), reference.replace(/\\/g, '/'));
       if (!isWorkspacePathInside(workspaceRoot, full)) { omit(rel, 'reference-outside-workspace'); continue; }
       refs.push(path.relative(workspaceRoot, full).replace(/\\/g, '/'));
     }
@@ -115,12 +118,8 @@ export async function loadDotNetProjectGraph(
     } else omit(rel, 'entry-point-entry-budget');
     graph.projects.push({
       name: path.basename(rel, path.extname(rel)), relativePath: rel, sdk,
-      targetFramework: field((content.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i) ||
-        content.match(/<TargetFrameworks>([^<]+)<\/TargetFrameworks>/i))?.[1]),
-      outputType: field(content.match(/<OutputType>([^<]+)<\/OutputType>/i)?.[1]),
-      isWpf: /<UseWPF>\s*true\s*<\/UseWPF>/i.test(content),
-      isWinUi: /<UseWinUI>\s*true\s*<\/UseWinUI>/i.test(content),
-      isWinForms: /<UseWindowsForms>\s*true\s*<\/UseWindowsForms>/i.test(content),
+      targetFramework: field(xml.targetFramework ?? xml.targetFrameworks), outputType: field(xml.outputType),
+      isWpf: xml.isWpf, isWinUi: xml.isWinUi, isWinForms: xml.isWinForms,
       isWeb: (sdk ?? '').toLowerCase().includes('web'), projectReferences: refs, entryPoints,
     });
   }

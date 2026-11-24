@@ -110,9 +110,9 @@ After connecting, call `wincode_hello_world` and check `health.workspaceBinding.
 
 The agent can use `workspace_open` to obtain the project summary, `wincode_list_directory` to browse a directory, and `wincode_search_text` to locate code. For UI inspection, start the target application in your interactive Windows desktop session and use the example above.
 
-With `--dynamic-workspace`, the agent supplies the current task's absolute directory as `workspacePath` on every project call, including follow-up reads. For example, `wincode_search_text({"workspacePath":"C:/projects/App","query":"Save"})` searches App. `workspace_open` selects its project with `path`. Simultaneous requests have independent roots, caches and file watchers. Up to four requested projects stay open. A fifth replaces the least recently used idle project, or returns `WORKSPACE_BUSY` while all four are in use. Other open projects can serve requests during eviction. A project whose cleanup fails retains its slot and reports `WORKSPACE_RECOVERY_REQUIRED` with `restart_gateway`. Desktop-only tools still take a PID or window handle.
+With `--dynamic-workspace`, the agent supplies the current task's absolute directory as `workspacePath` on every project call. A returned source-reading `nextRequest` already includes the selected path and can be submitted directly to `wincode_prepare_context`. For example, `wincode_search_text({"workspacePath":"C:/projects/App","query":"Save"})` searches App. `workspace_open` selects its project with `path`. Simultaneous requests have independent roots, caches and file watchers. Up to four requested projects stay open. A fifth replaces the least recently used idle project, or returns `WORKSPACE_BUSY` while all four are in use. Other open projects can serve requests during eviction. A project whose cleanup fails retains its slot and reports `WORKSPACE_RECOVERY_REQUIRED` with `restart_gateway`. Desktop-only tools still take a PID or window handle.
 
-On dynamic connections, search, outline and context accept absolute file arguments under either the long or the Windows 8.3 spelling of the selected root. Source `nextRequest` objects already include the originating workspace and can be passed directly to `wincode_prepare_context`.
+On dynamic connections, search, outline and context accept absolute file arguments under either the long or the Windows 8.3 spelling of the selected root.
 
 Fixed mode is the default when the dynamic flag is absent. It binds to `--workspace` or the launch directory. Opening another project returns `WORKSPACE_MISMATCH`. To use Roslyn on a dynamic connection, add `--workspace <authorized-root> --roslyn-config <absolute-config>`. The authorized project's Windows long path and 8.3 short path share one session and Roslyn snapshot. Other projects use local text.
 
@@ -156,7 +156,7 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 | `wincode_ui_type` | Type text into, or set the value of, one uniquely matched control. |
 | `wincode_ui_review` | Inspect UI and return candidate XAML/C# source locations. |
 | `wincode_hello_world` | Read instance identity, workspace binding, capabilities and known status. |
-| `wincode_diagnose_project` | Actively check SDKs, Git and the local environment. |
+| `wincode_diagnose_project` | Check Git, the local environment and SDK selection for the workspace’s nearest `global.json`. Custom SDK search locations are reported as unverified. |
 
 `wincode_analyze_change_impact` is an alias of `analyze_change_impact`. Detailed parameters and workflows: [code analysis](skills/wincode/references/code.md), [UI inspection](skills/wincode/references/ui.md), [diagnostics](skills/wincode/references/diagnostics.md). To inspect a tool's schema in the running connection, pass its name as `toolName` to `wincode_hello_world`.
 
@@ -289,9 +289,9 @@ npm run delivery:verify
 
 智能体可以使用 `workspace_open` 获取项目摘要，使用 `wincode_list_directory` 浏览目录，再通过 `wincode_search_text` 定位代码。检查 UI 时，先在交互式 Windows 桌面会话中启动目标应用，再参考前面的使用示例。
 
-动态模式下，智能体在每次项目工具调用及续读时，把当前任务或用户点名的项目绝对目录填入 `workspacePath`。例如 `wincode_search_text({"workspacePath":"I:/WinCode","query":"openWorkspace"})` 搜索 WinCode。`workspace_open` 使用已有的 `path` 参数。并发请求各自绑定目标目录、缓存和文件监听。网关最多保留四个按请求打开的项目，第五个会替换最久未使用的空闲项目。健康名额都在使用或初始化时返回 `WORKSPACE_BUSY`。回收期间其他已打开的项目可以继续处理请求。清理失败的项目继续占用一个名额，访问该项目时会返回 `WORKSPACE_RECOVERY_REQUIRED` 和 `restart_gateway`。纯桌面工具继续使用 PID 或窗口句柄。
+动态模式下，智能体在每次项目工具调用时，把当前任务或用户点名的项目绝对目录填入 `workspacePath`。源码续读的 `nextRequest` 已包含本次选定的目录，可直接提交给 `wincode_prepare_context`。例如 `wincode_search_text({"workspacePath":"I:/WinCode","query":"openWorkspace"})` 搜索 WinCode。`workspace_open` 使用已有的 `path` 参数。并发请求各自绑定目标目录、缓存和文件监听。网关最多保留四个按请求打开的项目，第五个会替换最久未使用的空闲项目。健康名额都在使用或初始化时返回 `WORKSPACE_BUSY`。回收期间其他已打开的项目可以继续处理请求。清理失败的项目继续占用一个名额，访问该项目时会返回 `WORKSPACE_RECOVERY_REQUIRED` 和 `restart_gateway`。纯桌面工具继续使用 PID 或窗口句柄。
 
-动态连接上的文本搜索、文件大纲和上下文读取都接受项目内的绝对文件路径。项目根可使用 Windows 长路径或 8.3 短路径。源码结果里的 `nextRequest` 已带上原项目，可以直接传给 `wincode_prepare_context`。
+动态连接上的文本搜索、文件大纲和上下文读取都接受项目内的绝对文件路径。项目根可使用 Windows 长路径或 8.3 短路径。
 
 省略动态标志即为固定模式，工作区由 `--workspace` 或启动目录确定。请求打开其他项目会返回 `WORKSPACE_MISMATCH`。动态连接也可加 `--workspace <已授权项目> --roslyn-config <配置绝对路径>`。通过 Windows 长路径或 8.3 短路径访问该项目时，共用同一会话和 Roslyn 快照。其他项目使用本地文本。
 
@@ -335,7 +335,7 @@ npm run delivery:verify
 | `wincode_ui_type` | 向唯一命中的控件输入文本，或直接写入其值。 |
 | `wincode_ui_review` | 检查 UI 并返回 XAML/C# 源码候选位置。 |
 | `wincode_hello_world` | 读取实例身份、工作区绑定、能力及已知状态。 |
-| `wincode_diagnose_project` | 主动检查 SDK、Git 和本地环境。 |
+| `wincode_diagnose_project` | 检查 Git、本地环境及工作区最近的 `global.json` 所选的 SDK。自定义 SDK 搜索路径会标记为待验证。 |
 
 `wincode_analyze_change_impact` 是 `analyze_change_impact` 的别名。详细参数与工作流见 [代码分析手册](skills/wincode/references/code.md)、[UI 检查手册](skills/wincode/references/ui.md) 和 [诊断手册](skills/wincode/references/diagnostics.md)。如需查看当前连接中某个工具的参数定义，可将工具名作为 `toolName` 传给 `wincode_hello_world`。
 

@@ -242,6 +242,70 @@ async function withDynamicClient(cwd: string, options: string[], run: (client: C
   finally { await client.close(); }
 }
 
+it('dynamic SDK diagnostics honor each selected workspace global.json', { timeout: 45000 }, async t =>
+  fixture(async (a, b) => {
+    const parent = path.dirname(a);
+    const installed = spawnSync('dotnet', ['--version'], { cwd: parent, encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    if (installed.status !== 0) { t.skip('An installed .NET SDK is required for the real resolver comparison'); return; }
+    const version = installed.stdout.trim();
+    for (const root of [a, b]) await fs.writeFile(path.join(root, 'Api.csproj'), '<Project Sdk="Microsoft.NET.Sdk"/>');
+    const pin = (required: string) => JSON.stringify({ sdk: { version: required, rollForward: 'disable' } });
+    await fs.writeFile(path.join(parent, 'global.json'), '// Inherited SDK selection\n' + pin(version));
+    await fs.writeFile(path.join(b, 'global.json'), pin('99.0.100'));
+    await withDynamicClient(parent, [], async client => {
+      const diagnose = async (workspacePath: string) => {
+        const response = await client.callTool({ name: 'wincode_diagnose_project', arguments: { workspacePath } });
+        assert.notEqual(response.isError, true, JSON.stringify(response.content));
+        return body(response);
+      };
+      const [available, missing] = await Promise.all([diagnose(a), diagnose(b)]);
+      const environment = (report: typeof available) => report.diagnostics.find((item: { category: string }) => item.category === 'Environment');
+      assert.equal(environment(available).status, 'PASS');
+      assert.ok(environment(available).message.includes(version));
+      assert.equal(environment(missing).status, 'FAIL');
+      assert.equal(missing.overallHealthy, false);
+      assert.match(environment(missing).message, /compatible.*SDK/i);
+      assert.match(environment(missing).suggestion, /global\.json/);
+      await fs.writeFile(path.join(b, 'global.json'), JSON.stringify({ sdk: { paths: ['.dotnet', '$host$'] } }));
+      const custom = environment(await diagnose(b));
+      assert.equal(custom.status, 'WARN');
+      assert.match(custom.message, /unverified.*custom SDK search paths/i);
+    });
+  }));
+
+it('dynamic source continuations replay directly across projects within the response budget', { timeout: 45000 }, async () =>
+  fixture(async (a, b) => withDynamicClient(path.dirname(a), [], async client => {
+    const projects = [a, b];
+    for (const [index, root] of projects.entries()) {
+      await fs.writeFile(path.join(root, 'Api.cs'), [
+        'public class Api {', ...Array.from({ length: 120 }, () => '  // MARK_' + index), '}',
+      ].join('\n'));
+    }
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await client.callTool({ name, arguments: args });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      return { data: body(result), text: (result.content[0] as { text: string }).text };
+    };
+    const pending = await Promise.all(projects.map(async workspacePath => {
+      const { data, text } = await call('wincode_search_text', { workspacePath, query: 'MARK_', scopePaths: ['Api.cs'], maxOutputChars: 2048 });
+      assert.ok(text.length <= 2048);
+      assert.ok(data.returnedItems > 0 && data.returnedItems < data.foundItems);
+      const outline = (await call('wincode_file_outline', { workspacePath, file: 'Api.cs' })).data;
+      const preview = (await call('wincode_prepare_context', { workspacePath, scopeFiles: ['Api.cs'], task: 'Preview Api', symbol: 'Api' })).data;
+      const gap = (await call('wincode_prepare_context', { workspacePath, task: 'Read to EOF',
+        lineRanges: [{ file: 'Api.cs', startLine: 118, endLine: 150 }] })).data;
+      return [data.matches[0].nextRequest, outline.nextRequest, outline.symbols[0].nextRequest,
+        preview.evidence[0].nextRequest, gap.coverage.details[0].nextRequest];
+    }));
+    await Promise.all(pending.map(async (requests, index) => {
+      for (const next of requests) {
+        assert.equal(next?.workspacePath, await fs.realpath(projects[index]));
+        const { data } = await call('wincode_prepare_context', next);
+        assert.match(data.evidence[0].snippet, new RegExp('MARK_' + index));
+      }
+    }));
+  })));
+
 function windowsShortPath(directory: string): string {
   const result = spawnSync('cmd.exe', ['/d', '/u', '/c', 'for %I in (.) do @echo %~fsI'],
     { cwd: directory, encoding: 'utf16le', windowsHide: true, timeout: 5000 });

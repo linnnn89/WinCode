@@ -28,6 +28,33 @@ it('exclusive scope and exact line ranges avoid all workspace symbol queries', a
   });
 });
 
+it('context reports encoding gaps for invalid source and preserves a literal replacement character', async () => {
+  await fixture(async (root, _router, call) => {
+    const file = 'Decode.cs';
+    const source = 'public class Decode {} // A�B';
+    const range = { task: 'Read Decode', lineRanges: [{ file, startLine: 1, endLine: 1 }] };
+    const symbol = { task: 'Find Decode', symbol: 'Decode', scopeFiles: [file] };
+    for (const bad of [Buffer.from([0xff]), Buffer.from([0])]) {
+      await fs.writeFile(path.join(root, file), Buffer.concat([Buffer.from('public class Decode {} // '), bad]));
+      for (const args of [range, symbol]) {
+        const { data } = payload(await call(args));
+        assert.deepEqual(data.evidence, []);
+        assert.ok(data.fileIssues.some((issue: any) => issue.path === file && issue.reason === 'encoding'));
+        if (args === range) {
+          assert.equal(data.coverage.allRequestedCovered, false);
+          assert.equal(data.coverage.details[0].missingRanges[0].reason, 'encoding');
+        }
+      }
+    }
+    await fs.writeFile(path.join(root, file), source);
+    for (const args of [range, symbol]) {
+      const { data } = payload(await call(args));
+      assert.equal(data.evidence[0].snippet, source);
+      if (args === range) assert.equal(data.coverage.allRequestedCovered, true);
+    }
+  });
+});
+
 it('scoped symbol lookup preserves local fallback limits and rejects ambiguity', async () => {
   await fixture(async (root, router, call) => {
     router.text.findSymbolsDetailed = async () => { throw new Error('unexpected workspace query'); };
@@ -120,6 +147,23 @@ function payload(result: any) {
   assert.ok(length <= data.metrics.budgetTokens * 4, `response ${length} exceeds total character budget`);
   return { data, texts };
 }
+
+it('overlapping directory scopes preserve the scan budget and explicit ignored roots', async () => fixture(async (root, _router, call) => {
+  const nested = path.join(root, 'src', 'nested');
+  for (const dir of [nested, path.join(root, 'src', 'obj'), path.join(root, 'tail')]) await fs.mkdir(dir, { recursive: true });
+  for (let first = 0; first < 2600; first += 40) {
+    await Promise.all(Array.from({ length: 40 }, (_, index) => fs.writeFile(path.join(nested, (first + index) + '.pad'), '')));
+  }
+  const hits = ['src/obj/Source.cs', 'tail/Source.cs'];
+  for (const file of hits) await fs.writeFile(path.join(root, file), '// DIRECTORY_MARKER');
+  for (const scopePaths of [['src', 'tail'], ['src', 'src/nested', 'tail'], ['src/nested', 'src', 'tail'], ['src', 'src/obj', 'tail']]) {
+    const result = await call({ query: 'DIRECTORY_MARKER', scopePaths }, 'wincode_search_text');
+    assert.notEqual(result.isError, true);
+    const data = JSON.parse(result.content[0].text);
+    assert.equal(data.queryComplete, true, JSON.stringify({ scopePaths, error: data.queryError }));
+    assert.deepEqual(data.matches.map((match: { file: string }) => match.file), scopePaths.includes('src/obj') ? hits : ['tail/Source.cs']);
+  }
+}));
 
 it('scoped navigation finds a literal call, outlines its file and follows source without reading outside links', async t => fixture(async (root, _router, call) => {
   await fs.mkdir(path.join(root, 'src'));

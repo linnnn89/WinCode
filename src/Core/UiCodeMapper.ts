@@ -1,3 +1,4 @@
+import { isCSharpKeyword } from './CSharpIdentifiers.js';
 import { maskCSharpNonCode } from './CSharpLexicalMask.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -48,8 +49,6 @@ export function validateCandidateCodeFiles(value: unknown): asserts value is str
     throw new Error('candidateCodeFiles must contain 1–8 relative in-workspace .cs paths without parent traversal.');
   }
 }
-
-const CSHARP_KEYWORDS = new Set(('abstract as base bool break byte case catch char checked class const continue decimal default delegate do double else enum event explicit extern false finally fixed float for foreach goto if implicit in int interface internal is lock long namespace new null object operator out override params private protected public readonly ref return sbyte sealed short sizeof stackalloc static string struct switch this throw true try typeof uint ulong unchecked unsafe ushort using virtual void volatile while').split(' '));
 
 /** Closed-file textual navigation. It neither evaluates bindings nor establishes runtime causality. */
 export async function mapUiCodeCandidates(
@@ -158,7 +157,7 @@ export async function mapUiCodeCandidates(
           const assignment = /^\s*=(?!=|>)/.test(right);
           if (!declaration && !assignment) continue;
           const argument = assignment ? /^\s*=\s*new\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*(?:<[^;(){}]*>)?\s*\(\s*(?:this\.)?([A-Za-z_][A-Za-z0-9_]*)\s*(?=[,)])/.exec(right)?.[1] : undefined;
-          const relatedSymbol = argument && argument.length <= 128 && !CSHARP_KEYWORDS.has(argument) ? argument : undefined;
+          const relatedSymbol = argument && argument.length <= 128 && !isCSharpKeyword(argument) ? argument : undefined;
           const candidate: UiCodeCandidate = {
             file: relativeFile, line: index + 1, snippet: rawLines[index].slice(Math.max(0, token.index! - 80), token.index! + 320),
             fileSha256, kind: declaration ? 'declaration' : 'assignment', identifier, relatedSymbol,

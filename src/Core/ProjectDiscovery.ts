@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseProjectXml } from './ProjectXml.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { isWorkspacePathInside, validateWorkspaceDirectoryOptions, type ProjectIdentity, type WorkspaceMetadata, type WorkspaceTreeItem, type WorkspaceDirectoryOptions, type WorkspaceDirectoryResult } from './WorkspaceContracts.js';
 import { DEFAULT_IGNORES, directoryOmission, previewOmission } from './WorkspaceBrowser.js';
@@ -126,47 +127,35 @@ export async function discoverProject(root: string, parent?: OperationContext): 
     }
   }
   if (queue.length) omit('.', 'entry-budget');
-  const decodeXmlPath = (value: string): string | null => {
-    const named: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-    let valid = true;
-    const decoded = value.replace(/&([^;]*);|&/g, (_match, entity: string | undefined) => {
-      if (entity && Object.hasOwn(named, entity)) return named[entity];
-      if (entity && /^(?:#[0-9]+|#x[0-9a-fA-F]+)$/.test(entity)) {
-        const code = entity.startsWith('#x') ? Number.parseInt(entity.slice(2), 16) : Number.parseInt(entity.slice(1), 10);
-        // XML 1.0 permits these characters; reject NUL, surrogate halves and invalid code points.
-        if (Number.isSafeInteger(code) && (code === 9 || code === 10 || code === 13 ||
-          (code >= 0x20 && code <= 0xd7ff) || (code >= 0xe000 && code <= 0xfffd) ||
-          (code >= 0x10000 && code <= 0x10ffff))) return String.fromCodePoint(code);
-      }
-      valid = false;
-      return '';
-    });
-    return valid ? decoded : null;
+  const readXml = async (file: string, rootElement: 'project' | 'solution') => {
+    const content = await readDescriptor(file);
+    if (content === null) return null;
+    const parsed = parseProjectXml(content, rootElement);
+    if (!parsed) omit(file, 'invalid-project-xml');
+    return parsed;
   };
   for (const solution of solutions) {
-    const content = await readDescriptor(solution);
-    if (!content) continue;
-    const isXml = solution.toLowerCase().endsWith('.slnx');
-    const regex = isXml
-      ? /<Project\b[^>]*\bPath\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
-      : /Project\("\{[A-Za-z0-9-]+\}"\)\s*=\s*"[^"]+",\s*"([^"]+\.csproj)"/g;
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      const project = isXml ? decodeXmlPath(match[1] ?? match[2]) : match[1];
-      if (project === null) omit(solution, 'invalid-project-path-entity');
-      else if (!isXml || project.toLowerCase().endsWith('.csproj')) acceptProject(project);
+    if (solution.toLowerCase().endsWith('.slnx')) {
+      const xml = await readXml(solution, 'solution');
+      for (const project of xml?.solutionProjects ?? []) acceptProject(project);
+    } else {
+      const content = await readDescriptor(solution);
+      if (!content) continue;
+      const declarations = /Project\("\{[A-Za-z0-9-]+\}"\)\s*=\s*"[^"]+",\s*"([^"]+\.csproj)"/g;
+      for (const match of content.matchAll(declarations)) acceptProject(match[1]);
     }
   }
   for (const project of Array.from(projects).slice(0, 5)) {
-    const content = await readDescriptor(project);
-    if (!content) continue;
-    targetFramework ??= content.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i)?.[1].trim();
-    if (/<UseWPF>\s*true\s*<\/UseWPF>/i.test(content)) frameworks.add('WPF');
-    if (/<UseWinUI>\s*true\s*<\/UseWinUI>/i.test(content)) frameworks.add('WinUI');
-    if (/<UseWindowsForms>\s*true\s*<\/UseWindowsForms>/i.test(content)) frameworks.add('WinForms');
+    const xml = await readXml(project, 'project');
+    if (!xml) continue;
+    targetFramework ??= xml.targetFramework ?? xml.targetFrameworks;
+    if (xml.isWpf) frameworks.add('WPF');
+    if (xml.isWinUi) frameworks.add('WinUI');
+    if (xml.isWinForms) frameworks.add('WinForms');
   }
   if (!targetFramework && manifests.has('Directory.Build.props')) {
-    targetFramework = (await readDescriptor('Directory.Build.props'))?.match(/<TargetFramework>([^<]+)<\/TargetFramework>/i)?.[1].trim();
+    const props = await readXml('Directory.Build.props', 'project');
+    targetFramework = props?.targetFramework ?? props?.targetFrameworks;
   }
   if (manifests.has('package.json')) { packageManagers.add('npm/node'); frameworks.add('Node.js / TypeScript'); }
   if (manifests.has('requirements.txt') || manifests.has('pyproject.toml')) { packageManagers.add('pip/python'); frameworks.add('Python'); }

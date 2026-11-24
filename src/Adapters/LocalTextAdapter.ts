@@ -6,6 +6,7 @@ import type { CacheManager } from '../Core/Cache.js';
 import { checkOperation, type OperationContext } from '../Core/OperationContext.js';
 import { scanLocalFiles, type LocalScanResult } from '../Core/LocalTextScanner.js';
 import { measureOperation } from '../Core/OperationMetrics.js';
+import { csharpIdentifierValue, hasCSharpReference } from '../Core/CSharpIdentifiers.js';
 import { parseTextDeclarations } from '../Core/TextDeclarations.js';
 import { CodeQueryError, LOCAL_TEXT_LIMITATIONS, computeTypeMatchStats,
   type CodeSymbol, type SymbolReference, type FindSymbolsResult, type FindReferencesResult } from '../Core/CodeQueries.js';
@@ -112,17 +113,20 @@ export class LocalTextAdapter {
   async findReferencesDetailed(symbolName: string, relativePath?: string, operation?: OperationContext): Promise<FindReferencesResult> {
     checkOperation(operation);
     if (symbolName.includes('/') || /\[\d+\]/.test(symbolName)) throw new CodeQueryError('LEGACY_SYMBOL_ID', 'Legacy Serena identities are retired; supply a plain name or configure Roslyn and search again.');
+    const csharpName = csharpIdentifierValue(symbolName);
     const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const match = new RegExp(`\\b${escaped}\\b`);
     const declaration = new RegExp(`(^|\\s)(class|interface|struct|enum)\\s+${escaped}\\b`);
     const scan = await scanLocalFiles<SymbolReference>(this.config.workspaceRoot, this.config.timeouts.fileScanMs,
       ['.cs', '.ts', '.tsx', '.js', '.jsx', '.py', '.xaml', '.xml', '.csproj', '.sln'], 200,
-      function* (content, file) {
+      function* (content, file, extension) {
         const lines = content.split(/\r?\n/);
         for (let index = 0; index < lines.length; index++) {
           const preview = lines[index].trim();
-          if (/^(?:\/\/|\*|\/\*|#|<!--)/.test(preview) || declaration.test(preview)) continue;
-          if (match.test(lines[index])) yield { symbolName, file, line: index + 1, preview };
+          if (/^(?:\/\/|\*|\/\*|#|<!--)/.test(preview)) continue;
+          const found = extension === '.cs' && csharpName ? hasCSharpReference(lines[index], csharpName)
+            : !declaration.test(preview) && match.test(lines[index]);
+          if (found) yield { symbolName, file, line: index + 1, preview };
         }
       }, undefined, operation);
     const result: FindReferencesResult = {

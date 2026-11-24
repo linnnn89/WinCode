@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `--background-ui` for shared-desktop UI inspection, launcher-bound background `ValuePattern` writes (`--ui-write-window`, `inspectionVersion 7`), and opt-in application-declared WPF background shortcuts via `wincode_ui_shortcut` (`--ui-shortcut-window`, `WinCode.WpfBackgroundShortcut.v1`, `inspectionVersion 8`). Keep global keystrokes disabled unless `--isolated-keyboard` is set in an isolated session.
+- Require explicit `--trust-git` authorization per repository for native Git execution (`GIT_NOT_TRUSTED` otherwise), accept `--repomix-cli` for an explicit trusted Repomix entry, and route `wincode_safe_move_to_trash` through the native Windows handle-verifying helper.
 - Source ranges and scoped symbol reads report an `encoding` gap for malformed UTF-8 or NUL bytes. A literal Unicode replacement character remains valid source text.
 - Workspace summaries and .NET architecture graphs read XML declarations in project and solution files. Commented properties, solution entries and project references no longer appear as active declarations.
 - Project diagnostics check SDK selection against the nearest workspace `global.json` and distinguish a missing CLI from an unavailable compatible SDK. Custom SDK search locations are reported as unverified during read-only diagnostics.

@@ -1,125 +1,91 @@
 # 代码与工作区
 
-先按目标取证，再按结果中的缺口补读。原生连接的 `health.workspaceBinding.mode` 为 `dynamic` 时，每次项目工具调用都需要 `workspacePath`，包括下表各查询、回收站及 `wincode_ui_review`。它是当前任务或用户点名项目的绝对目录。例如 `wincode_search_text({"workspacePath":"I:/WinCode","scopePaths":["src"],"query":"ToolRouter"})`。源码结果的 `nextRequest` 已含项目目录，可原样传给 `wincode_prepare_context`。旧版返回的续读参数若缺少该字段，补入原请求的目录。`workspace_open` 直接用 `path`，一次打开仅作用于该请求。固定连接按启动根查询。版本或工作区不符见[诊断手册](diagnostics.md)。
+先定位范围，再按结果中的缺口定向补读。原生连接的 `health.workspaceBinding.mode` 为 `dynamic` 时，除 `workspace_open` 使用 `path` 外，下列项目工具（含回收目录移动与 `wincode_ui_review`）每次调用均须传入目标项目的绝对路径 `workspacePath`（例如 `wincode_search_text({"workspacePath":"C:/projects/App","scopePaths":["src"],"query":"ToolRouter"})`）。源码查询返回的 `nextRequest` 已包含对应的 `workspacePath`，可直接传给 `wincode_prepare_context`。固定模式按启动根目录查询。连接或版本异常见 [诊断与恢复](diagnostics.md)。
 
 ## 选择读取方式
 
-| 已知信息或目标 | 用法 |
-|---|---|
-| 文件与行号 | prepare_context 的 lineRanges，直接读所需分支 |
-| 文件与声明名 | scopeFiles + symbol；仅声明附近片段 |
-| 文件但位置未知 | file_outline 后按 nextRequest 续读，或 scopeFiles 预览 |
-| 只知道关键词 | search_text 限定 scopePaths，再读命中位置 |
-| C# 精确引用 | Roslyn 搜索并消歧，再传完整 location |
-| 项目概览或依赖 | workspace_open / list_directory / analyze_workspace |
+| 已知信息或目标 | 推荐工具与方式 |
+| --- | --- |
+| 已知文件与起止行号 | `wincode_prepare_context` 的 `lineRanges` 直接精读目标区间 |
+| 已知文件与声明名称 | `wincode_prepare_context` 的 `scopeFiles` + `symbol` 读取声明附近窗口 |
+| 已知文件但位置不明 | 先调用 `wincode_file_outline` 获取声明列表，再按 `nextRequest` 续读 |
+| 仅知关键词或字符串 | `wincode_search_text`（限定 `scopePaths`）定位行号后再读上下文 |
+| C# 精确引用与变更影响 | 启用 Roslyn 后先搜索符号消歧，再将完整 `location` 传给引用/影响工具 |
+| 项目结构或依赖关系 | `workspace_open` / `wincode_list_directory` / `wincode_analyze_workspace` |
 
-已有文件读取工具且位置明确时，可直接有界读取，不必绕经 MCP。默认声明窗口通常只有24行，审查异常处理或资源释放时要覆盖相关分支；不要把片段完整当成整个方法完整。取得足够证据后继续分析，不例行拉全文。
+若宿主环境已具备本地文件读取工具且行号明确，可直接有界读取本地文件。默认符号窗口约 24 行，检查资源释放或异常处理时请覆盖完整逻辑分支，勿将局部片段完整等同于整个方法完整。
 
-## 工具字段
+## 工具与字段约束
 
-参数以当前 Schema 为准。名称区分大小写，未知字段可能被忽略；scopeFile 不能代替 scopeFiles，symbolName 不能代替查符号时的 query。原始参数总上限64KiB UTF-8 JSON。
+参数名称严格区分大小写，未声明的额外字段会被剔除而不生效（例如 `scopeFile` 不能代替 `scopeFiles`，查符号时 `symbolName` 不能代替 `query`）。单次请求原始 JSON 上限为 **64 KiB**（UTF-8）。
 
-| 导航工具 | 必填字段 | 可选字段及范围 |
+| 工具 | 必填字段 | 可选字段与范围约束 |
 | --- | --- | --- |
-| `wincode_search_text` | `query`：非空白单行字面量，最长 256；不接受正则表达式 | `scopePaths`：1–20 个字面文件或目录，默认工作区；`caseSensitive`：布尔值，默认 false；`maxResults`：整数 1–200，默认 50；`maxOutputChars`：整数 2048–32768，默认 8000 |
-| `wincode_file_outline` | `file`：工作区内字面文件 | `maxSymbols`：整数 1–200，默认 100；`maxOutputChars`：整数 2048–32768，默认 8000 |
+| `workspace_open` | `path`：非空字符串（最长 4096） | `includeTree`：布尔值；`maxOutputChars`：整数 `2048–32768`（默认 8000） |
+| `wincode_list_directory` | 无（动态模式需 `workspacePath`） | `path`：默认 `.`（最长 4096）；`maxDepth`：`1–5`（默认 1）；`maxEntries`：`1–500`（默认 100）；`maxOutputChars`：`2048–32768`（默认 8000）；`includeIgnored`：默认 `false` |
+| `wincode_analyze_workspace` | 无（动态模式需 `workspacePath`） | `maxDepth`：整数 `1–5`（默认 2）；整份序列化 JSON 上限 `32768` UTF-16 字符 |
+| `wincode_search_text` | `query`：非空白单行字面量（最长 256，不支持正则） | `scopePaths`：`1–20` 个字面文件或目录（默认全工作区）；`caseSensitive`：默认 `false`；`maxResults`：`1–200`（默认 50）；`maxOutputChars`：`2048–32768`（默认 8000） |
+| `wincode_file_outline` | `file`：工作区内字面文件路径 | `maxSymbols`：`1–200`（默认 100）；`maxOutputChars`：`2048–32768`（默认 8000） |
+| `wincode_find_code_symbol` | `query`：非空名称子串（忽略大小写，Roslyn 最长 256） | `kind`：符号类型（Roslyn 最长 128，区分大小写；`local-text` 忽略大小写）。不支持文件范围参数，单文件符号读取请用 `prepare_context` 的 `scopeFiles + symbol` |
+| `wincode_find_references` | `symbolName`：非空字符串 | `relativePath`：定义文件相对路径；`symbolLocation`：Roslyn 搜索返回的完整定位（`snapshotId`/`project`/`file`/`position` 均必填）；`limit`：Roslyn 条数 `1–1000`（默认 100，须配 `symbolLocation`）；`maxOutputChars`：`2048–32768`（默认 8000） |
+| `analyze_change_impact` | `target`：非空符号名 | `symbolLocation`：搜索返回的完整定位（提供时 `target` 须为该符号的简单名称）；公布别名 `wincode_analyze_change_impact` |
+| `wincode_plan_refactoring` | `target`、`goal`：非空字符串 | `symbolLocation`：同影响分析 |
+| `wincode_safe_move_to_trash` | `filePath`：工作区内普通文件相对路径 | `reason`：移动原因说明；经原生 Windows 助手校验句柄后移入本地回收目录，仅在用户明确授权移除文件时调用 |
 
-
-| 工具 | 必填字段 | 可选字段及类型 |
-| --- | --- | --- |
-| `workspace_open` | `path`: 非空字符串，最长 4096 | `includeTree`: 布尔值；`maxOutputChars`: 整数 2048–32768，默认 8000 |
-| `wincode_list_directory` | 无 | `path`: 非空字符串，最长 4096，默认 `.`；`maxDepth`: 整数 1–5，默认 1；`maxEntries`: 整数 1–500，默认 100；`maxOutputChars`: 整数 2048–32768，默认 8000；`includeIgnored`: 布尔值，默认 false |
-| `wincode_analyze_workspace` | 无 | `maxDepth`: 整数 1–5，默认 2；整份 JSON 最多 32768 个 UTF-16 字符 |
-| `wincode_find_code_symbol` | `query`: 非空字符串 | `kind`: 字符串，按下述提供方支持范围使用；Roslyn 的 query 最长 256、kind 最长 128。此工具未声明文件范围参数，指定文件取证改用下面的 `scopeFiles` |
-| `wincode_find_references` | `symbolName`: 非空字符串 | `relativePath`: 定义文件相对路径（Roslyn 用于限定候选，local-text 不据此缩小引用扫描）；`symbolLocation`: Roslyn 搜索返回的 location 对象（snapshotId/project/file/position 均必填，路径各最长 4096）；同时提供 relativePath 时必须与 location.file 一致；`limit`: 整数 1–1000，Roslyn 默认 100，必须同时提供 symbolLocation，不改变 local-text 扫描；`maxOutputChars`: 整数 2048–32768，默认 8000，两种提供方均适用 |
-| `analyze_change_impact` | `target`: 非空字符串 | `symbolLocation`: 搜索返回的完整定位；提供时 target 必须是该符号的简单名称 |
-| `wincode_plan_refactoring` | `target`、`goal`: 非空字符串 | `symbolLocation`: 同影响分析 |
-| `wincode_safe_move_to_trash` | `filePath`: 工作区内相对路径字符串 | `reason`: 字符串；该工具实际移动文件，须符合用户授权 |
-
-导航使用字面路径，不支持 glob 或根外链接；默认跳过生成目录。search_text 单文件256KiB、合计8MiB、最多5000枚举项，输出限制也可能截断。检查 foundItems/returnedItems、fileIssues/fileIssuesOmitted 和扫描完整性。
-
-`kind` 随提供方而异：local-text 支持有限 C#/TS/JS/Python 声明模式；Roslyn 支持 class/interface/struct/enum/type/method/property，构造函数归 method。query 是忽略大小写的名称子串；Roslyn kind 大小写精确，local-text kind 忽略大小写。prepare_context.symbol 则为大小写精确声明名。
-
-wincode_analyze_change_impact 是 analyze_change_impact 的公布别名，wincode_workspace_open 是 workspace_open 的兼容别名；使用实际 tools/list 中的名称。
+- 路径参数均使用字面路径（兼容动态连接所选项目根的标准长路径与 Windows 8.3 短路径），不支持 glob 通配符或工作区外符号链接，默认跳过编译生成目录。
+- `wincode_search_text` 单文件上限 256 KiB、单次扫描总读取上限 8 MiB、最多枚举 5000 项；注意结合 `foundItems`、`returnedItems`、`fileIssues` 与扫描完整性判断结果。
+- `kind` 支持范围：`local-text` 覆盖有限的 C# / TS / JS / Python 声明模式；Roslyn 支持 `class` / `interface` / `struct` / `enum` / `type` / `method` / `property`（构造函数归入 `method`）。
 
 ## 定向上下文
 
-wincode_prepare_context 参数：
+`wincode_prepare_context` 参数规则：
 
-| 字段 | 类型与数量 | 规则 |
+| 字段 | 类型与约束 | 作用与组合规则 |
 | --- | --- | --- |
-| `task` | 必填字符串，非空白，最长 8192 | 描述要核对的问题 |
-| `candidateFiles` | 可选字符串数组，最多 20，每项最长 1024 | 优先候选，**不排他**；与 `scopeFiles` 同用时须在其内 |
-| `scopeFiles` | 可选字符串数组，1–20，每项最长 1024 | 排他范围；不能与 `focusAreas` 同用 |
-| `symbol` | 可选字符串，最长 128，不含空白 | 大小写精确声明名；必须有 `scopeFiles`，不能与 `lineRanges` 同用 |
-| `lineRanges` | 可选对象数组，1–8 | 每项必填 `file`（非空字符串，最长 1024）、`startLine/endLine`（正整数）；1 起始闭区间、起点≤终点、每段≤500行，每文件仅一段；若有 scope，必须在 scope 内；不能与 `symbol` 或 `includeFullText:true` 同用 |
-| `focusAreas` | 可选字符串数组，最多 5，每项最长 1024 | 文件或目录；不支持通配符 |
-| `compress` | 可选布尔值 | 仅在全文且实际使用 CLI 时转发压缩选项；内置降级不做 AST 压缩 |
-| `outputFormat` | 可选字符串 `markdown/xml` | 默认 `markdown`，用于打包正文 |
-| `includeFullText` | 可选布尔值 | 默认 `false`；`true` 仍受总预算约束 |
-| `responseFormat` | 可选字符串 `compact/legacy` | 默认 `compact`；两种形式都计入文本预算 |
-| `maxTokens` | 可选整数 512–65536 | 默认 8000；按 UTF-16 字符÷4估算，并非精确模型 token |
+| `task` | 必填非空白字符串（最长 8192） | 描述当前需要核查的具体问题或目标声明名 |
+| `candidateFiles` | 可选字符串数组（最多 20 项，每项 `<=1024`） | **优先候选（非排他）**；与 `scopeFiles` 同用时须包含在其范围内 |
+| `scopeFiles` | 可选字符串数组（`1–20` 项，每项 `<=1024`） | **排他文件范围**；不可与 `focusAreas` 同用 |
+| `symbol` | 可选无空白字符串（最长 128） | 区分大小写的精确声明名；必须配合 `scopeFiles`，不可与 `lineRanges` 同用 |
+| `lineRanges` | 可选对象数组（`1–8` 项） | 每项含 `file`（`<=1024`）与正整数 `startLine` / `endLine`（1 起始闭区间，每段 `<=500` 行，每文件限一段）；不可与 `symbol` 或 `includeFullText: true` 同用 |
+| `focusAreas` | 可选字符串数组（最多 5 项，每项 `<=1024`） | 聚焦文件或目录直属文件（不支持通配符） |
+| `compress` / `outputFormat` | 可选布尔值 / `"markdown"`（默认）或 `"xml"` | `compress` 仅在全文且调用外部 Repomix CLI 时转发，内置降级不做 AST 压缩 |
+| `includeFullText` / `responseFormat` | 可选布尔值（默认 `false`）/ `"compact"`（默认）或 `"legacy"` | 即使设 `includeFullText: true` 仍受总预算裁剪；`legacy` 额外附加 Markdown 文本并计入同一预算 |
+| `maxTokens` | 可选整数 `512–65536`（默认 8000） | 按 `UTF-16 字符数 / 4` 估算（含 JSON 元数据与转义），非具体模型 tokenizer 精确值 |
 
-例如，已知保存逻辑所在行：
-
-```json
-{"task":"核对保存失败时的资源释放","lineRanges":[{"file":"src/Service.cs","startLine":50,"endLine":80}],"maxTokens":2000}
-```
-
-未知文件但知道多个相关声明名时，可在同一次 task 中列出名称，例如 `{"task":"ChatViewModel ConversationWindowService 核对窗口关闭流程","maxTokens":8000}`。0.17.1 的 local-text 默认将最多 4 个提取关键词合并为一次工作区扫描；把关键声明名放在描述前面，无需也不要添加 `batchSymbols` 等未公布的 MCP 参数。单关键词、`scopeFiles`、`lineRanges` 和不支持批量查询的提供方保持原有路径，不要为凑批量而扩大任务范围。
-
-任一关键词达到 500 条声明匹配，或扫描因文件、总字节、枚举项、时间预算截断时，工具在剩余请求期限内回退逐关键词查询，以保留各查询的结果与缺口；这种情况可能更慢。保持单文件 256KiB、总读取 8MiB、最多 5000 枚举项的每次扫描限制。`Async` 等宽泛词容易碰到结果上限，优先使用具体声明名。合并扫描不提高语义完整性；继续检查 `queryComplete`、`limitations` 及相关范围信息，`lexical-uncertainty` 仍表示有文件无法可靠解析。计时与工作计数供本地基准使用，不是新的工具参数或响应字段。
-
-先读 summary 的 scope/status/nextAction，再核对正文与 coverage。requested-lines、packed-files、displayed-snippets 是不同范围；complete 只描述该范围。lineRanges 检查 allRequestedCovered、completeLines、missingRanges；endLineComplete:false 时补读整条尾行。越界可用返回的有效交集 nextRequest；maximum-budget-without-progress 时改用文件读取，不重复原请求。
-
-symbol 只读取声明附近窗口，symbolCoverage:unknown；必要时用 nextRequest 继续。scopeFiles/symbol 的 coverage 可能为 null，不能据 queryComplete 或非空正文认定整个方法已覆盖。candidateFiles 只是优先候选，排他范围必须使用 scopeFiles；focusAreas 仅有限发现目录直属文件。
-
-检查 relatedFiles.bodyStatus/bodyStatusScope、truncated、metadataTruncated、omittedFiles 和 fileIssues。selectedFiles、packedFiles、returnedFiles 含义不同，无法计数时可为 null。maxTokens 是 UTF-16 字符÷4的估算，计入元数据和转义，不是真实模型 token。默认 compact 返回一个JSON块；legacy 还返回Markdown，两者都计入预算。
-
-文本结果不构成跨请求原子快照。文件编辑、更换连接或需要新的代码范围时重新取证；临时 overflow 附件失效时重新获取上下文，不删除整个缓存。
+- **已知行号精读示例**：
+  ```json
+  {"workspacePath":"C:/projects/App","task":"核对保存失败时的资源释放","lineRanges":[{"file":"src/Service.cs","startLine":50,"endLine":80}],"maxTokens":2000}
+  ```
+- **多声明名合并扫描（0.17.1+）**：未知具体文件但知道多个相关声明名时，可将名称放在同一次 `task` 前部（如 `{"task":"ChatViewModel ConversationWindowService 核对窗口关闭流程","maxTokens":8000}`）。`local-text` 默认将最多 4 个提取关键词合并为一次目录扫描；若任一词达到 500 条匹配或触发扫描截断，则在剩余期限内自动回退为逐词查询（避免使用 `Async` 等过宽泛词，且切勿传入 `batchSymbols` 等不存在的参数）。
+- **覆盖率核查**：先看 `summary`（`scope` / `status` / `nextAction`），再核对 `coverage`（区分 `requested-lines`、`packed-files`、`displayed-snippets`）。使用 `lineRanges` 时核对 `allRequestedCovered`、`missingRanges` 与 `endLineComplete`；使用 `symbol` 时 `symbolCoverage` 为 `unknown`，按返回的 `nextRequest` 继续补读。
 
 ## 文本与 Roslyn 引用
 
-默认 source=local-text：有限声明扫描与文本引用线索，不提供编译器身份。lexical-uncertainty、degraded、queryComplete:false 表示实际限制；即使文本扫描完整也不能证明语义完整。实例提供方看 hello.codeProvider，不能只看 health.text.semanticConfigured。
-
-Roslyn 引用流程：
-
-1. `wincode_find_code_symbol({query:"Save"})`，按 signature、file、location.project 选择声明。
-2. 原样传回所选 name/location：
-
-```javascript
-wincode_find_references({symbolName: selected.name, symbolLocation: selected.location})
-wincode_analyze_change_impact({target: selected.name, symbolLocation: selected.location})
-```
-
-location 含 snapshotId、project/file 和零基 UTF-16 position；不猜偏移、不选首个同名项。不带 symbolLocation 的 Roslyn 引用请求只返回候选。编辑受跟踪输入、重载、释放 Host 或更换连接后旧定位可能失效；按错误重新搜索。
-
-只给 `analyze_change_impact` 传符号名称时，Roslyn 在当前快照中按区分大小写的完整名称匹配。`partial` 属性或方法的定义与实现合计为一个声明。唯一匹配时会查询其引用。遇到重名或重载，`totalReferences` 为 `null`，表示尚未统计引用。可从 `matchedSymbols` 中按项目、文件和签名选定声明，用其 `symbolLocation` 重试。
-
-引用的 limit 与最终 maxOutputChars 分别约束条数和文本。totalReferences 是当前快照发现数，returnedReferences 是返回数；检查 referencesTruncated/outputOmissions，必要时在有效 location 上提高预算。这不是分页，也不扩大生成代码、动态调用或未加载项目的覆盖。携带精确定位时，影响分析验证所选项目、文档及声明标识符起点，并从同一次快照查询取得声明与引用。传入使用位置会返回 SYMBOL_MISMATCH。影响分析只聚合实际返回引用；未知总数或截断可为 null。已有影响报告时直接据其规划，不为通用步骤再次调用 plan_refactoring。
-
-Roslyn 当前排除分析器／生成器，queryComplete 为 false；零引用不证明可以删除。diagnosticSummary 的 compilationErrorCount/loadDiagnosticCount 是快照计数，samplesDisplayed/samplesOmitted 区分样例与省略。countsComplete 不包括未加载项目、分析器或警告，也不提高查询完整性。多个同名组件按路径和项目身份区分，不按显示名合并。
+- 默认后端 `source: "local-text"` 执行启发式声明与文本扫描（支持 C# Unicode 标识符与 `@` 逐字标识符），不具备编译器级类型消歧能力；出现 `lexical-uncertainty`、`degraded` 或 `queryComplete: false` 时须留意覆盖缺口。当前后端以 `hello.codeProvider` 为准。
+- **Roslyn 精确引用流程**：
+  1. 调用 `wincode_find_code_symbol({ query: "Save" })`，按返回的 `signature`、`file`、`location.project` 选定目标声明。
+  2. 将所选符号的 `name` 与完整 `location`（含 `snapshotId`、`project`、`file` 与 0 基 UTF-16 `position`）原样传回：
+     ```json
+     {"symbolName":"Save","symbolLocation":{"snapshotId":"...","project":"...","file":"...","position":120}}
+     ```
+- 若向 `analyze_change_impact` 仅传符号名而不带 `symbolLocation`，Roslyn 在当前快照中唯一匹配时才会统计引用；遇到重载或同名符号时 `totalReferences` 返回 `null`，需从 `matchedSymbols` 中选定精确 `symbolLocation` 重试。向 `symbolLocation` 传入调用处而非声明处会返回 `SYMBOL_MISMATCH`。
+- Roslyn 当前排除分析器与源生成器，`queryComplete` 保持 `false`，**零引用不等于可安全删除**。编辑源码、手动释放内存或重启 Host 后旧 `snapshotId` 失效，需重新搜索符号获取新 `location`。
 
 ## 显式配置 Roslyn
 
-仅在用户允许项目求值时用启动参数 `--roslyn-config <绝对JSON路径>`；不从目标仓库自动发现并执行配置。MSBuild 设计时求值可能执行 targets，不会自动 restore 或安装SDK。
+仅在用户允许 MSBuild 设计时项目求值时，通过网关启动参数 `--roslyn-config <绝对JSON路径>` 启用（动态模式须同时传 `--workspace <授权项目根>`）：
 
 ```json
-{"enabled":true,"allowProjectEvaluation":true,"project":"App/App.csproj","configuration":"Debug","targetFramework":"net10.0","dotnetPath":"C:/dotnet/dotnet.exe","hostPath":"C:/WinCode/tools/WinCode.Code.Host/bin/Release/net10.0/publish/WinCode.Code.Host.dll","additionalInputs":[]}
+{"enabled":true,"allowProjectEvaluation":true,"project":"App/App.csproj","configuration":"Debug","targetFramework":"net10.0","dotnetPath":"C:/Program Files/dotnet/dotnet.exe","hostPath":"C:/path/to/WinCode/tools/WinCode.Code.Host/bin/Release/net10.0/publish/WinCode.Code.Host.dll","additionalInputs":[]}
 ```
 
-路径是示例。project 相对启动时授权的工作区，dotnetPath/hostPath 为实际绝对普通文件；不支持链接。配置最多16KiB；loadTimeoutMs 默认120000、范围1–120000，queryTimeoutMs 默认30000、范围1–60000。动态模式须用 `--workspace` 明确该配置所属的项目。其他请求目录使用 local-text。
-
-additionalInputs 用于非标准构建数据：最多32个工作区内相对文件，数组JSON最多4096个UTF-16字符；不接受目录、glob、重复或链接。缺失输入应恢复或修正配置，不静默删除。自动跟踪已加载源码、项目、引用及常规构建配置，不保证发现自定义 targets 的任意外部输入；diskFreshnessVerified/externalCustomInputsVerified 仍为 false。
-
-INPUT_BUDGET_EXCEEDED 时缩小合法输入范围，不接受截断快照。默认发现排除生成／缓存目录，实际加载与显式输入优先。内部 Host 协议不作为 MCP 参数发送；维护时以交付源码为准。交付需完整 Code Host publish 目录，包括依赖和 BuildHost-netcore，不能只复制DLL。
+- 配置文件上限 16 KiB；`project` 为相对授权工作区的路径，`dotnetPath` 与 `hostPath` 须为实际普通文件绝对路径（不支持符号链接，且需保留完整的 Code Host `publish/` 目录及 `BuildHost-netcore`）。`loadTimeoutMs` 默认 `120000`（`1–120000`），`queryTimeoutMs` 默认 `30000`（`1–60000`）。
+- `additionalInputs` 可声明最多 32 个工作区内相对文件（JSON 数组 `<=4096` UTF-16 字符，不支持目录、glob 或链接）；遇到 `INPUT_BUDGET_EXCEEDED` 时缩小项目输入范围。
 
 ## 文件移除
 
-仅在任务授权移除文件时调用 wincode_safe_move_to_trash；重构计划本身不执行修改。查看 outcome：
+重构建议工具本身不修改任何文件；仅在任务明确授权移除文件时调用 `wincode_safe_move_to_trash`，并核查返回的 `outcome`：
 
-- completed：文件移动和元数据均完成。
-- not_moved：未移动，检查 failureStage 和实际文件状态。
-- partial：已移动但元数据失败。保留 originalPath/trashPath/metadataPath 并告知实际位置，不重复移动或自动移回；metadataPath 不证明内容已写入。
-
-取消或断连不代表回滚。恢复依据完整路径和成功写入的元数据，不从截短的展示文件名猜原路径。
+- `completed`：文件移入本地回收目录且 `.meta.json` 元数据写入完成。
+- `not_moved`：文件未移动，检查 `failureStage` 与原文件状态。
+- `partial`：文件已移动但元数据记录未完成；保留并告知返回的 `originalPath`、`trashPath` 与 `metadataPath` 供人工核实恢复，切勿重复移动或盲目自动移回。

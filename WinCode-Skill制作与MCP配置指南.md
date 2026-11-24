@@ -1,18 +1,24 @@
 # WinCode Skill 安装、维护与 MCP 配置指南
 
-适用于 **0.16.0**，核对日期 2026-09-12（北京时间）。以下使用本机 `I:/WinCode` 路径举例；其他机器必须替换路径。客户端界面名称随版本变化，以实际界面为准。
+适用版本：**0.17.1**。下文使用 `C:/path/to/WinCode` 和 `C:/projects/App` 作为路径占位符，实际配置时请替换为本机绝对路径。不同客户端的设置界面名称可能随版本调整，请以客户端实际界面为准。
 
 ## 1. 三个独立对象
 
-- **Skill 手册**指导 Agent 选择工具和使用规范字段；被发现或读取不启动服务器。按需模式由 Agent 首次需要时执行随产品交付的会话入口。
-- **磁盘交付物**包含 Gateway、原生 UIA/Code Host 及可选 Tray 的完整发布目录、构建身份和交付清单。
-- **MCP 连接实例**是客户端已经启动的进程；更新源码、构建或复制 Skill 都不会自动更新这个进程。
+日常排查版本或行为不一致时，需区分以下三个彼此独立的对象：
 
-架构与数据流见 [架构说明](WinCode-架构与数据流说明.md)。未完成任务只维护在 [迭代计划](docs/next-iteration.md)，不要按历史计划重复安装和升级。
+- **Skill 手册**：指导智能体选择工具并传入规范参数；发现或读取手册本身不会启动服务器。
+- **磁盘交付物**：包含编译后的 Gateway、原生 `WinCode.UIA.Host` / `WinCode.Code.Host`、可选托盘 `WinCode.Tray` 的完整 Release 发布目录及交付清单（`dist/delivery-manifest.json`）。
+- **MCP 运行实例**：客户端已经拉起的 Node 进程；修改源码、重新编译或同步 Skill 文件都不会自动热更新已运行的进程，必须由客户端重新连接。
 
-## 2. 构建与交付核对
+整体架构见 [架构与数据流说明](WinCode-架构与数据流说明.md)，未完成事项统一维护在 [迭代计划](docs/next-iteration.md)。
 
-预先准备 Windows x64、Git、Node 24（22 兼容；不再支持 20）以及 `global.json` 锁定的 .NET SDK 10.0.303。已发布的 framework-dependent Host 需要 .NET 10 Windows Desktop 运行时。安装前提组件属于环境准备，不由下列检查隐式完成。
+## 2. 构建与交付校验
+
+**前置环境**（需预先独立安装，校验脚本不会自动安装全局依赖）：
+- Windows x64（以 Windows 11 x64 为基准）
+- Git `>=2.36`
+- Node.js `>=22`（推荐 24，兼容 22，不支持 20）
+- `global.json` 锁定的 .NET SDK **10.0.303**（`rollForward: "disable"`）及 .NET 10 Windows Desktop 运行时
 
 在仓库根目录执行：
 
@@ -22,91 +28,89 @@ npm run check
 npm run delivery:verify
 ```
 
-`check` 进行类型检查、Gateway 构建、锁定 NuGet restore、Release UIA/Code Host/Tray 与控制台夹具构建、核心回归、新 stdio 验证与交付清单生成。交互桌面验收另执行 `npm run check:desktop`，需要可用 Windows 桌面。真实 Roslyn/TavernDesk 验收按对应入口执行，详见 [CONTRIBUTING](CONTRIBUTING.md)。Roslyn 维护脚本会锁定还原并构建/发布 Code Host，也会还原生成夹具，不还原用户目标应用；NuGet 缓存缺包时可能访问包源，不能将“不自动安装 SDK”理解为完全离线。
+- `npm run check`：依次执行类型检查、Gateway 构建、NuGet 锁定还原、Release 原生组件与测试夹具构建、核心回归、独立进程 stdio 集成验证，并生成与核验交付清单。
+- `npm run check:desktop`：需要交互式 Windows 桌面会话，执行 WPF UI 与 UI→源码关联验收。
+- `npm run build`：仅编译 TypeScript Gateway，不能单独保证原生组件和交付清单一致。生产模式（`npm start`）只加载已发布的 Release 原生组件；仅 `npm run dev` 显式启用开发期回退。检查报告输出在已忽略的 `test-tmp/check/` 下（清单哈希用于本地一致性核对，并非数字签名）。
 
-`npm run build` 只构建 Gateway，不能单独证明原生 Host、Skill 和整个交付物一致。生产使用发布的 Release Host；`npm run dev` 才显式启用开发回退。报告位于 `test-tmp/check/`，内容哈希不是发布签名。
+## 3. Skill 手册结构与同步
 
-## 3. Skill 的规范来源与同步
+仓库在 `skills/wincode/` 下维护四份受管手册：
+- 路由入口：[SKILL.md](skills/wincode/SKILL.md)
+- 按任务查阅的分册：[代码与工作区](skills/wincode/references/code.md) · [窗口与 UI](skills/wincode/references/ui.md) · [诊断与恢复](skills/wincode/references/diagnostics.md)
 
-仓库维护四份手册：[SKILL.md](skills/wincode/SKILL.md)、[代码](skills/wincode/references/code.md)、[UI](skills/wincode/references/ui.md)、[诊断](skills/wincode/references/diagnostics.md)。入口只负责路由，共享规则与字段按工具族查阅；不把全部手册塞进每次会话。
-
-对本机已约定的安装目录，先检查，再按需同步：
+对本机已安装的 Skill 目录，可先只读核对，再按需同步：
 
 ```powershell
-npm run skill:check -- C:/Users/40218/.agents/skills/wincode
-npm run skill:sync -- C:/Users/40218/.agents/skills/wincode
-npm run skill:check -- C:/Users/40218/.agents/skills/wincode
+npm run skill:check -- C:/Users/<用户名>/.agents/skills/wincode
+npm run skill:sync  -- C:/Users/<用户名>/.agents/skills/wincode
 ```
 
-这些是路径示例，不是跨机器通用目录。同步只管理四份文件，先备份被修改的已有文件，再写入；额外文件不受管，不修改 MCP 配置。受管文件中的本地修改会被仓库版本替换，因此规范更新应先进入仓库；不要把个人配置混入手册。首次同步也可创建目标目录。受管手册改变后重新生成并核对交付清单。
+- `skill:sync` 仅管理上述四份文件：写入前自动将本地已修改的旧文件备份到同级 `.wincode-backup-*`（后缀 `.bak`），目录中的其他个人文件保留不动，也不会改动客户端 MCP 配置。
+- 仓库内的受管手册属于交付清单输入项；若修改了 `skills/wincode/` 下的文件，需重新运行 `npm run check` 更新交付清单。
+- **参数大小写与类型严格匹配**：服务端容忍并剔除未声明的额外字段（不会报错，但该字段不会生效）。例如必须传 `automationId`，误写为 `automationID` 会被忽略；仅含未知字段的 `query` 仍会被判定为缺少有效筛选条件。
 
-**未知字段保持容忍，但不会生效。** 参数名称、大小写、类型和范围以手册字段表为准。例如 `automationId` 是规范字段，`automationID` 不会成为筛选条件；仅含未知字段的 query 仍缺少必需条件。适配器配置字段不能伪装成 MCP 请求参数。
+## 4. 配置启动方式
 
-## 4. 选择启动方式
+### 方式 A：原生 stdio MCP（通用推荐）
 
-### Codex 按需模式
-
-先构建并同步 Skill，再按[会话手册](skills/wincode/references/diagnostics.md#skill-按需会话)用持久交互终端验收连续查询和关闭。通过后，在 Codex `config.toml` 原有 `[mcp_servers.wincode]` 段内设 `enabled = false`，保留 `command/args` 等配置，刷新客户端连接；已运行进程不会因保存配置自行消失。禁用原生条目后，Codex 启动不再因该条目创建 WinCode。
-
-Skill 首次使用启动 `dist/Client/SkillSessionCli.js --workspace <当前项目绝对路径>`；终端须保留 stdin（Codex `exec_command` 使用 `tty:true`）。任务内复用返回的执行会话 ID，工具参数不变，完整结果通过回执中的文件读取。任务收尾显式关闭；不会每次查询重启 Host，也没有额外常驻服务或自动重连。Roslyn 配置须明确匹配目标项目。恢复原生模式时关闭按需会话，把原配置的 `enabled` 恢复为 `true` 后刷新客户端。
-
-此模式依赖客户端执行工具能保留交互会话；不支持时使用下方原生配置。结果文件包含实际源码/截图，保存在安装目录 `test-tmp/skill-sessions/`，不会随连接关闭自动删除。Skill 同步脚本不会替用户切换模式。
-
-### 原生 stdio MCP
-
-在客户端添加 stdio 服务器，分别填写：
-
-| 配置项 | 本机示例 |
-| --- | --- |
-| 名称 | `wincode` |
-| 命令 | `node`，或该机器 Node 可执行文件的绝对路径 |
-| 参数 1 | `I:/WinCode/dist/index.js` |
-| 参数 2 | `--dynamic-workspace` |
-
-参数应为独立数组项，不要拼成一条 shell 字符串。若客户端接受 `mcpServers` 配置，可使用：
+大多数支持 `mcpServers` 的客户端可配置单个**动态工作区**入口，供不同项目共用：
 
 ```json
 {
   "mcpServers": {
     "wincode": {
       "command": "node",
-      "args": ["I:/WinCode/dist/index.js", "--dynamic-workspace"]
+      "args": ["C:/path/to/WinCode/dist/index.js", "--dynamic-workspace"]
     }
   }
 }
 ```
 
-Codex 的 TOML 配置在 `[mcp_servers.wincode]` 中填写同样的 `command` 和 `args`。动态连接从每次调用的 `workspacePath` 获取项目绝对目录，`workspace_open` 用 `path`。连接一次即可交替或并发访问多个项目。固定模式将启动参数写成 `["I:/WinCode/dist/index.js", "--workspace", "I:/New-tarven"]`，其他项目请求会返回 `WORKSPACE_MISMATCH`。
+- 参数必须作为独立数组项传入，不要拼成单条 shell 命令字符串。Codex 的 `config.toml` 可在 `[mcp_servers.wincode]` 下填写相同的 `command` 与 `args`。
+- 在仓库目录运行 `node dist/index.js --print-connection --dynamic-workspace`（或传入 `--workspace <项目绝对路径>`）可直接打印本机 JSON 配置片段。
+- **动态模式（`--dynamic-workspace`）**：每次项目工具调用通过 `workspacePath` 指定项目绝对路径（`workspace_open` 使用 `path`），最多并发保留 4 个活动项目（LRU 回收空闲项目）。
+- **固定模式（默认）**：启动参数传 `["C:/path/to/WinCode/dist/index.js", "--workspace", "C:/projects/App"]`，请求其他目录会返回 `WORKSPACE_MISMATCH`。
 
-可选托盘按 README 启动，并仅给需要管理的实例添加独立参数 --tray。默认不连接托盘、不设置自启动；自动释放关闭，设置内只允许用户手动释放，忙碌时拒绝且不延后执行。本文仅更新配置说明，不代表已修改任何已安装客户端。
+#### 可选启动参数速查
 
-## 5. 验证实际连接
-
-1. 让客户端重新建立 WinCode 连接，再调用 `wincode_hello_world`；核对实例身份、版本、buildId 和工具 schema，而不仅看软件版本字符串。
-2. 用 `npm run delivery:verify` 检查磁盘交付物；将磁盘身份与实际连接对应起来。独立启动的新 stdio 会话通过不等于当前宿主已重连。
-3. 对目标工作区执行一次规范请求，核对目录和结果正文。动态连接可用 `wincode_hello_world({"workspacePath":"I:/WinCode"})` 核对根目录，主动探测时给 `wincode_diagnose_project` 传同一个根。
-
-0.12.1 起 hello 不主动启动探测进程；unknown/null 表示未探测，不代表不可用。已知健康结果也可能陈旧。旧版本 hello 的行为不能套用新版说明。
-
-实例选用的代码提供方看 `hello.codeProvider`，Roslyn 状态看 `hello.health.roslyn`。`hello.health.text.semanticConfigured=false` 只描述文本适配器，即使启用 Roslyn 仍为 false。`wincode_diagnose_project` 会检查 SDK、探测 Repomix/UIA，但不主动加载 Roslyn 项目；已明确授权的 Roslyn 配置由首次符号搜索触发加载。
-
-0.13 系列已经退役外部 Serena，默认 local-text；C# 语义使用随产品交付的 Code Host，通过显式 --roslyn-config 配置入口项目、Configuration、TFM、SDK 与求值许可，字段示例见代码手册。真实 Host/MCP 验收通过也不代表实际客户端已启用 Roslyn。0.12.4 起 Repomix 直接执行已安装 JavaScript bin，不再使用 cmd/npx 包装链，也不会自动下载；非标准安装和降级边界见诊断手册。
-
-## 6. 常见偏差
-
-| 现象 | 核对与处理 |
+| 启动参数 | 作用与约束 |
 | --- | --- |
-| 源码是新版，hello 返回旧版 | 核对实际命令、路径、instanceId 和启动时间；通过客户端重连，不以强杀宿主或复制文件冒充完成 |
-| 字段被忽略，结果不像预期 | 对照规范字段表和实际工具 schema；容忍未知字段并不赋予其语义 |
-| 修改文件后仍看到旧正文 | 核对实际连接 buildId；本轮修复按实际内容校验缓存，旧运行进程需重连。文件或附件引用跨调用不保证永久有效，重新取证而非要求用户先 git add |
-| 取消后客户端已返回但 Host 尚在收尾 | 客户端取消不等于服务端清理完成；同根打开也不再等待清理，检查实际在途状态，不反复重启 |
-| Host 缺失或身份不符 | 完整执行锁定构建和 delivery:verify；不混用旧 DLL、新 Gateway 或开发 Host |
-| Roslyn/Repomix 不可用 | 先核对 provider、显式配置、项目求值许可、已知健康和恢复动作；Roslyn 失败不会暗中换成本地文本，Repomix 降级不代表语义验收成功 |
-| Roslyn 返回候选且 references 为空 | 简单名请求未查询引用；按 signature/file/project 消歧，再传返回的 name 与完整 symbolLocation，不能当作零引用 |
-| 旧定位报 SNAPSHOT_STALE/INPUTS_CHANGED | 等待写入稳定后显式重新搜索，由适配器执行所需重载，再使用新 location；MCP 没有独立 reload 工具 |
-| 限定文件符号取证或 kind 筛选不像预期 | scopeFiles+symbol 支持 .cs/.ts/.tsx/.js/.jsx/.py，属于有限文本匹配；symbol 大小写精确。各后端 kind 类型和大小写规则以代码手册为准，不推定全语言一致 |
-| UI 查不到或出现多个目标 | 核对 PID/HWND 和大小写准确的查询；只有 complete 且 unique 才能声称唯一定位 |
+| `--dynamic-workspace` | 启用按请求切换项目的动态模式；省略时为绑定单一根目录的固定模式。 |
+| `--workspace <绝对目录>` / `-w` | 固定模式下指定绑定工作区；动态模式配合 `--roslyn-config` 时用于标识获准启用 Roslyn 的项目。 |
+| `--roslyn-config <JSON绝对路径>` | 显式启用 C# Code Host（文件 `<=16 KiB` 且 `enabled: true`、`allowProjectEvaluation: true`）。 |
+| `--trust-git <绝对项目根>` | 授权在该项目根目录内运行原生 Git（可重复传入多个）；未授权仓库返回 `GIT_NOT_TRUSTED` 并改用目录指纹。 |
+| `--repomix-cli <JS绝对路径>` | 指定受信的外部 Repomix CLI 入口（`.js`/`.mjs`/`.cjs`）；未指定且内置环境未安装时使用内置打包器。 |
+| `--background-ui` | 启用共用桌面后台 UI 模式：强制要求 `PID` + `HWND` 后台检查（`inspectionVersion >= 7`），隐藏 `click` 与 `set_expanded`。 |
+| `--ui-write-window <PID>:<HWND>:<FileTime>` | 须配合 `--background-ui`；授权对绑定的单个后台顶层窗口执行 `ValuePattern` 赋值（目标处于前台时拒绝）。 |
+| `--ui-shortcut-window <PID>:<HWND>:<FileTime>` | 须配合 `--background-ui`；启用 `wincode_ui_shortcut`（`inspectionVersion >= 8`），仅触发该后台窗口声明的 `WinCode.WpfBackgroundShortcut.v1` 控件。 |
+| `--isolated-keyboard` | 仅限独立隔离桌面会话：开启前台逐键输入（`mode: "type"`）；不可与 `--background-ui` 同用。 |
+| `--tray` | 允许连接到本地可选托盘程序 `WinCode.Tray.exe`，用于查看状态或手动释放空闲 Roslyn 内存。 |
 
-更新后仍无法核对客户端身份时，保留“客户端未验收”状态与实际证据，不反复尝试未声明参数。
+### 方式 B：Codex Skill 按需会话模式
 
-0.13.1 的已知工具失败以同源 JSON 文本和 structuredContent 表达，UI/trash 保留领域信息；未知工具在正常受理时返回 JSON-RPC -32602。未知字段容忍策略与未知工具的协议错误是两回事。影响分析只返回一个 JSON 文本块，formattedReport 在对象内。
+适用于支持持久交互终端（`exec_command` 设 `tty: true`）的 Codex 环境，做到首次调用时才拉起 WinCode：
+
+1. 完成构建并同步 Skill，在 Codex `config.toml` 的 `[mcp_servers.wincode]` 段设置 `enabled = false`，刷新客户端连接（防止客户端启动时自动拉起常驻进程）。
+2. 智能体在任务首次需要时通过交互终端运行 `node "<WinCode目录>/dist/Client/SkillSessionCli.js" --workspace "<项目绝对路径>"`，任务内通过同一个 `session_id` 发送单行 JSON 请求并从 `resultFile` 读取完整结果与图片路径，任务结束发送 `close` 关闭。
+3. 详细交互协议与客户端只读 UI 配方（`readonly-ui` / `expand-ui`）见 [诊断与恢复手册](skills/wincode/references/diagnostics.md#skill-按需会话) 与 [客户端 UI 工作流](docs/hybrid-readonly-orchestration.md)。结果文件保存在 `test-tmp/skill-sessions/`，请勿公开提交。
+
+## 5. 连接验证要点
+
+1. 客户端重连后调用 `wincode_hello_world`（动态模式可传入 `workspacePath`），核对 `version`、`runtime.build.buildId`、`toolContract.schemaHash`、`uiMode` 与 `codeProvider`。
+2. `wincode_hello_world` 仅读取已知缓存状态，不会主动拉起外部探测进程；字段为 `unknown` 或 `null` 仅表示尚未探测，不代表组件不可用。需主动探测 SDK、Git、Repomix 与 UIA 时，请调用 `wincode_diagnose_project`。
+3. 代码分析后端看 `hello.codeProvider`（默认 `local-text`，显式配置后为 `roslyn`），Roslyn 详细状态看 `hello.health.roslyn`（首次执行符号搜索时才实际加载项目）；`hello.health.text.semanticConfigured` 仅描述文本适配器本身，始终为 `false`。
+
+## 6. 常见问题排查
+
+| 现象 | 排查与处理方式 |
+| --- | --- |
+| 源码已更新，但 `hello` 仍返回旧版本或旧 `buildId` | 客户端仍连着旧 Node 进程。核对客户端配置的入口路径与 `instanceId`，在客户端内执行 MCP 重连。 |
+| 传入的筛选字段未生效 | 对照手册字段表或通过 `wincode_hello_world({ toolName })` 查看实际 Schema，检查字段名大小写与类型。 |
+| 修改文件后读取到的仍是旧内容 | 先核对连接 `buildId` 是否为最新构建；跨调用的临时附件不提供永久租约，文件内容变更后重新调用读取工具即可。 |
+| 客户端取消请求后，后台子进程短暂仍在收尾 | 客户端取消返回早于服务端异步清理完成属正常现象；观察在途计数归零即可，无需反复重启连接。 |
+| 报 `HOST_UNAVAILABLE` 或 `VERSION_MISMATCH` | 重新执行 `npm run check` 与 `npm run delivery:verify`，确保使用完整的 Release 发布目录，切勿混用新 Gateway 与旧 DLL。 |
+| Roslyn 不可用或未生效 | 检查启动参数是否包含 `--roslyn-config`、JSON 中是否开启 `allowProjectEvaluation: true`。Roslyn 报错时不会静默降级为 `local-text`。 |
+| Roslyn 查找引用返回候选列表且 `references` 为空 | 仅按简单名称调用且存在重名/重载时不会直接查引用；请按 `signature`/`file`/`project` 选定目标，传入完整 `symbolLocation` 重试。 |
+| 符号定位报 `SNAPSHOT_STALE` / `INPUTS_CHANGED` | 项目文件或源码已变更导致旧快照位置失效；等待文件写入稳定后重新执行 `wincode_find_code_symbol` 获取新 `location`（无独立 reload 工具）。 |
+| Git 状态显示 `GIT_NOT_TRUSTED` | 启动参数未通过 `--trust-git <绝对项目根>` 授权该仓库；按需补充参数并重连，或继续使用默认的目录指纹模式。 |
+| UI 查不到控件或提示非唯一 | 核对目标 `pid`/`hwnd` 及区分大小写的查询条件；仅当 `searchComplete: true` 且 `status: "unique"` 时才代表唯一命中。 |

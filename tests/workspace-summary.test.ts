@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync, type ChildProcess } from 'node:child_process';
+import { channel } from 'node:diagnostics_channel';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/client';
 import { getDefaultConfig } from '../src/Core/Config.js';
@@ -11,9 +13,10 @@ import { WinCodeMcpServer } from '../src/Gateway/McpServer.js';
 
 type Call = (name: string, args?: Record<string, unknown>) => Promise<any>;
 
-async function fixture(run: (root: string, router: ToolRouter, call: Call) => Promise<void>) {
+async function fixture(run: (root: string, router: ToolRouter, call: Call) => Promise<void>, trustGit = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-summary-'));
   const config = getDefaultConfig(root);
+  if (trustGit) config.trustedGitRoots = [await fs.realpath(root)];
 
   config.adapters.flaui.enabled = false;
   config.adapters.repomix.useCli = false;
@@ -43,6 +46,37 @@ function payload(result: any, budget = 8000) {
   assert.ok(result.content[0].text.length <= budget, 'all JSON text must fit the budget');
   return JSON.parse(result.content[0].text);
 }
+
+it('workspace_open returns just the repository address from explicitly trusted Git roots', async () => fixture(async (root, _router, call) => {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: root, windowsHide: true, stdio: 'pipe' });
+  git('init');
+  for (const [origin, expected] of [
+    ['https://example.invalid/org/repo.git', 'https://example.invalid/org/repo.git'],
+    ['https://fixture-user:fixture-pass@example.invalid:8443/org/repo.git?q=fixture-query#fixture-fragment', 'https://example.invalid:8443/org/repo.git'],
+    ['git@example.invalid:org/repo.git', 'example.invalid:org/repo.git'],
+    ['ssh://fixture-user@example.invalid:2222/org/repo.git', 'ssh://example.invalid:2222/org/repo.git'],
+    ['example-helper::local-config', undefined],
+  ] as const) {
+    git('config', 'remote.origin.url', origin);
+    const result = payload(await call('workspace_open', { path: root }));
+    assert.equal(result.git.remoteUrl, expected);
+    assert.doesNotMatch(JSON.stringify(result), /fixture-(user|pass|query|fragment)/);
+  }
+}, true));
+
+it('an MCP request cannot grant Git trust to its workspace', async () => fixture(async (root, router, call) => {
+  await fs.mkdir(path.join(root, '.git'));
+  const children: ChildProcess[] = [];
+  const starts = channel('child_process');
+  const observe = (message: unknown) => { children.push((message as { process: ChildProcess }).process); };
+  starts.subscribe(observe);
+  try {
+    const opened = payload(await call('workspace_open', { path: root, trustedGitRoots: [root] }));
+    assert.deepEqual(opened.git, { isGit: null, status: 'unknown', errorCode: 'GIT_NOT_TRUSTED' });
+    await router.cache.computeWorkspaceFingerprint(root, { fresh: true });
+    assert.ok(children.every(child => !/^git(?:\.exe)?$/i.test(path.basename(child.spawnfile || ''))));
+  } finally { starts.unsubscribe(observe); }
+}));
 
 it('workspace summary keeps identity and useful entries without inventory or tree construction', async () => fixture(async (root, router, call) => {
   await Promise.all(['README.md', 'README.zh-CN.md', 'README.zh-TW.md', 'README.ja-JP.md', 'README.en.md']

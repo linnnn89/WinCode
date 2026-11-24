@@ -116,6 +116,12 @@ On dynamic connections, search, outline and context accept absolute file argumen
 
 Fixed mode is the default when the dynamic flag is absent. It binds to `--workspace` or the launch directory. Opening another project returns `WORKSPACE_MISMATCH`. To use Roslyn on a dynamic connection, add `--workspace <authorized-root> --roslyn-config <absolute-config>`. The authorized project's Windows long path and 8.3 short path share one session and Roslyn snapshot. Other projects use local text.
 
+WinCode looks for Repomix in its own installation. Use `--repomix-cli <absolute-path-to-cli.js>` to select another trusted copy. The builtin packer is available when no trusted CLI is installed. Authorize native Git at startup with `--trust-git <absolute-root>`, once per trusted project. A repository without this authorization reports `GIT_NOT_TRUSTED` and uses a directory fingerprint. Git summaries remove credentials from recognized remote URLs.
+
+For shared-desktop work, add `--background-ui` to a fixed or dynamic connection. This allows window listing and inspection by PID and HWND. For direct ValuePattern writes, the launcher must also pass `--ui-write-window <PID>:<HWND>:<processStartFileTime>` for one top-level window. Writes require explicit `mode:"setValue"` and are refused when the target process owns the foreground window or foreground ownership cannot be confirmed. Applications can still respond to changes by opening their own dialogs.
+
+`wincode_hello_world` reports `uiMode`, `uiWriteWindowBound` and `globalKeyboardEnabled`. Both background connections and single `backgroundOnly:true` inspections require helper version 7. Images require a matching window identity and confirmed window-only capture method.
+
 See the [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md) for client configuration and the optional agent Skill. After rebuilding, reconnect the client's MCP server to load the updated process and tool schemas.
 
 ### Common workflows and tools
@@ -148,7 +154,7 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 | `wincode_find_references` | Find references and report known totals, returned counts and truncation. |
 | `analyze_change_impact` | Assess potential change impact and report uncertainty when evidence is incomplete. |
 | `wincode_plan_refactoring` | Suggest checks and verification steps for a proposed refactoring. |
-| `wincode_safe_move_to_trash` | Move validated workspace files to `trash/` and record the actual completed or partial outcome. |
+| `wincode_safe_move_to_trash` | Move a regular file through the published Windows helper using its verified handle. Returns recovery paths for an unconfirmed move or incomplete metadata. |
 | `wincode_ui_list_windows` | List visible top-level windows with process and title filters. |
 | `wincode_ui_inspect` | Read controls and optional states or screenshots. |
 | `wincode_ui_click` | Click one uniquely matched control through UI Automation patterns. |
@@ -169,7 +175,7 @@ Use actual paths and line numbers from the search result. `lineRanges` selects k
 
 ### Scope and limitations
 
-- **Desktop access:** UI inspection is read-only: it does not click controls, type text or read input-field values. The separate `wincode_ui_click` and `wincode_ui_type` tools are destructive: they act on one uniquely matched control through UI Automation patterns or keyboard input, never mouse simulation, and do not explicitly activate or restore the target window. Application events may still bring it forward. They refuse disabled controls, ambiguous or incomplete matches, read-only values and unconfirmed keyboard focus: `type` requests keyboard focus on the control (which may bring its window to the front), so use it only when the user has approved foreground interaction, and prefer `mode:"setValue"` for background work. Background mode requires both PID and HWND, supports non-minimized windows, and does not activate or restore the target. UI inspection requires an interactive Windows desktop session and does not support headless operation.
+- **Desktop access** requires an interactive Windows session. Standard connections allow semantic control actions and direct value assignment. Global keystrokes are disabled by default. Use `--isolated-keyboard` only in an independently isolated interactive session. The launcher must provide that session. Focus can change between validation and a keystroke. Background connections reject keystrokes, clicks and expansion.
 - **UIA and visual rendering:** Available properties depend on the application's UIA provider. WPF is covered by the project's desktop tests; other frameworks and custom-rendered controls may expose less information. Colors, icons and rendering quality require visual review. Background screenshots use `PrintWindow` without screen-capture fallback; check the returned capture-quality indicators.
 - **Source mapping:** XAML and C# matches identify candidate source locations, with `runtimeSourceVerified: false`. The tool does not verify that the running build matches the source, resolve dynamic bindings or runtime templates, or determine the active `DataContext`.
 - **Analysis coverage:** Project structure analysis reads `.sln` and `.csproj` declarations without MSBuild evaluation. Text-based references are heuristic. Review completeness, omissions and diagnostics before drawing conclusions; no matches in a limited scan do not establish absence across the project.
@@ -183,6 +189,7 @@ Current source version: **0.17.1**. See [CHANGELOG](CHANGELOG.md) for version hi
 ```powershell
 npm run check            # Builds, core regression, stdio integration and delivery verification
 npm run check:desktop    # WPF and UI-to-source tests; requires an interactive Windows desktop
+                         # Only in an isolated session: WINCODE_TEST_ISOLATED_KEYBOARD=1 enables the actual keystroke test
 npm run delivery:verify  # Verify Gateway, native components and managed Skill artifacts
 npm run test:inventory   # Verify automated-test suite registration
 npm run benchmark:agent -- 1  # Run one iteration of the optional scripted benchmark
@@ -295,6 +302,19 @@ npm run delivery:verify
 
 省略动态标志即为固定模式，工作区由 `--workspace` 或启动目录确定。请求打开其他项目会返回 `WORKSPACE_MISMATCH`。动态连接也可加 `--workspace <已授权项目> --roslyn-config <配置绝对路径>`。通过 Windows 长路径或 8.3 短路径访问该项目时，共用同一会话和 Roslyn 快照。其他项目使用本地文本。
 
+WinCode 自动从自身安装目录查找 Repomix。使用其他受信副本时，在网关启动参数中加 `--repomix-cli <CLI 入口的绝对路径>`。找不到受信 CLI 时使用内置打包器。原生 Git 只在启动时用 `--trust-git <绝对项目根目录>` 授权的项目内运行。多个项目可重复传入。发现未授权的 Git 标记时返回 `GIT_NOT_TRUSTED`，使用目录指纹。Git 摘要只展示可识别网络地址的主机和仓库路径。
+
+与 AI 共用桌面时，固定和动态连接都可加 `--background-ui`。单用此选项可以列举窗口、按 PID 和 HWND 检查控件或关联源码。需要写值时，由启动者另加 `--ui-write-window <PID>:<HWND>:<processStartFileTime>`，授权一个顶层窗口。该进程拥有前台窗口或前台归属无法核实时，写入会被拒绝。用 `mode:"setValue"` 给支持 UI Automation ValuePattern 的控件直接赋值。目标应用仍可响应值变化并自行弹窗。
+
+启动者可以用 PowerShell 取得主窗口的绑定值。将示例 PID 换成已核实的测试进程，核对 HWND 与调试目标一致。进程重启后须重新绑定。
+
+```powershell
+$appProcess = Get-Process -Id 12345
+'{0}:0x{1:X}:{2}' -f $appProcess.Id, $appProcess.MainWindowHandle.ToInt64(), $appProcess.StartTime.ToFileTimeUtc()
+```
+
+`wincode_hello_world` 返回 `uiMode`、`uiWriteWindowBound` 和 `globalKeyboardEnabled`。后台连接和普通连接的单次 `backgroundOnly:true` 检查均要求原生助手协议版本 7。网关核实窗口身份和取图方式后才会返回图片。
+
 客户端配置和可选的智能体 Skill 安装方式见 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。重新构建后，需要重新连接客户端中的 MCP 服务器，才能加载更新后的进程和工具参数定义。
 
 ### 常用工作流与工具
@@ -327,7 +347,7 @@ npm run delivery:verify
 | `wincode_find_references` | 查找引用，报告已知总数、返回数量和截断情况。 |
 | `analyze_change_impact` | 评估潜在变更影响，并在信息不完整时报告不确定性。 |
 | `wincode_plan_refactoring` | 为拟议的重构提供检查和验证建议。 |
-| `wincode_safe_move_to_trash` | 将通过路径校验的工作区文件移至 `trash/`，记录实际完成或部分完成的结果。 |
+| `wincode_safe_move_to_trash` | 通过随项目发布的 Windows 助手校验并持有普通文件句柄后移动。移动或元数据记录未能确认时返回恢复所需的路径。 |
 | `wincode_ui_list_windows` | 列出可见顶层窗口，支持按进程和标题筛选。 |
 | `wincode_ui_inspect` | 读取控件信息，以及可选的状态或截图。 |
 | `wincode_ui_click` | 通过 UI Automation 模式点击唯一命中的控件。 |
@@ -348,7 +368,7 @@ npm run delivery:verify
 
 ### 适用范围与限制
 
-- **桌面访问：**UI 检查为只读操作，不点击控件、不输入文本，也不读取输入框的值。单独的 `wincode_ui_click` 与 `wincode_ui_type` 是破坏性操作：只通过 UI Automation 模式或键盘输入操作唯一命中的控件，不使用鼠标坐标模拟，不主动调用激活或还原；应用事件仍可能让窗口进入前台。禁用控件、歧义或不完整的匹配、只读值以及无法确认的键盘焦点都会被拒绝；`type` 会向目标控件索取键盘焦点（可能把该窗口带到前台），因此只在用户授权前台交互时使用，后台写入优先 `mode:"setValue"`。后台模式需同时指定 PID 和 HWND，仅支持未最小化的窗口，检查过程中不激活或还原目标窗口。该功能需要交互式 Windows 桌面会话，不支持在无头环境（Headless）中运行。
+- **桌面访问**需要交互式 Windows 会话。普通连接可以对控件执行语义操作和直接赋值。全局发键默认关闭。仅在已独立隔离的测试会话中使用 `--isolated-keyboard`。该参数本身不会创建隔离会话。从检查焦点到发键之间仍可能发生前台切换。后台连接拒绝键盘、点击和展开折叠。
 - **UIA 与视觉效果：**可读取的属性取决于目标应用的 UIA 提供程序。项目的桌面测试覆盖 WPF，其他框架和自绘控件可能提供较少的信息。颜色、图标和渲染质量需要结合图像检查。后台截图使用 `PrintWindow`，不回退到屏幕截图；应检查返回的截图质量提示。
 - **源码映射：**XAML 和 C# 的匹配结果提供了可能相关的源码位置，`runtimeSourceVerified` 为 `false`。工具不验证运行版本与源码是否一致，不解析动态绑定或运行时模板，也不确定当前的 `DataContext`。
 - **分析范围：**项目结构分析仅静态读取 `.sln` 和 `.csproj` 中的声明，不进行 MSBuild 项目评估。文本引用搜索采用启发式方法。应结合完整性、省略项和诊断信息判断结果；在有限范围内未找到匹配，并不代表整个项目中不存在匹配内容。
@@ -362,6 +382,7 @@ npm run delivery:verify
 ```powershell
 npm run check            # 构建、核心回归、stdio 集成和交付校验
 npm run check:desktop    # WPF 与 UI 源码关联测试，需要交互式 Windows 桌面
+                         # 仅在独立会话中设置 WINCODE_TEST_ISOLATED_KEYBOARD=1，才会执行实际发键用例
 npm run delivery:verify  # 校验 Gateway、原生组件和交付清单中的 Skill 文件
 npm run test:inventory   # 核对自动化测试的套件注册情况
 npm run benchmark:agent -- 1  # 执行一轮可选的脚本化基准测试

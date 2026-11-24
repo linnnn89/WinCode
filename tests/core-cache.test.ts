@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 import { CacheManager } from '../src/Core/Cache.js';
 
@@ -67,10 +68,9 @@ describe('core-cache', () => {
     });
 
     it('should compute sensitive workspace fingerprint that changes upon file edits and additions', async () => {
-      const cache = new CacheManager(testCacheDir);
-      await cache.initialize();
-
-      const fpOriginal = await cache.computeWorkspaceFingerprint(root, { fresh: true });
+      const gitCache = new CacheManager(testCacheDir, 500, 500, undefined, [root]);
+      await gitCache.initialize();
+      const fpOriginal = await gitCache.computeWorkspaceFingerprint(root, { fresh: true });
       assert.ok(fpOriginal && typeof fpOriginal === 'string');
 
       // Create a temporary file in root to simulate workspace change
@@ -78,19 +78,69 @@ describe('core-cache', () => {
       await fs.writeFile(probeFile, 'probe content v1');
 
       try {
-        const fpAfterCreate = await cache.computeWorkspaceFingerprint(root, { fresh: true });
+        const fpAfterCreate = await gitCache.computeWorkspaceFingerprint(root, { fresh: true });
         assert.notStrictEqual(fpAfterCreate, fpOriginal, 'Fingerprint must change when an untracked file is added');
 
         await new Promise((r) => setTimeout(r, 40));
         await fs.writeFile(probeFile, 'probe content v2 modified');
-        const fpAfterModify = await cache.computeWorkspaceFingerprint(root, { fresh: true });
+        const fpAfterModify = await gitCache.computeWorkspaceFingerprint(root, { fresh: true });
         assert.notStrictEqual(fpAfterModify, fpAfterCreate, 'Fingerprint must change when an existing dirty file is modified');
       } finally {
         await fs.unlink(probeFile).catch(() => { });
       }
 
-      const fpRestored = await cache.computeWorkspaceFingerprint(root, { fresh: true });
+      const fpRestored = await gitCache.computeWorkspaceFingerprint(root, { fresh: true });
       assert.strictEqual(fpRestored, fpOriginal, 'Fingerprint should restore when modifications are reverted');
+    });
+
+    it('falls back to workspace changes when Git metadata is unavailable without opening its files', async t => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wincode-fingerprint-'));
+      try {
+        const gitDir = path.join(root, '.git');
+        await fs.mkdir(gitDir);
+        const source = path.join(root, 'Example.txt');
+        await fs.writeFile(source, 'one');
+        const reads = t.mock.method(fs, 'readFile');
+        const opens = t.mock.method(fs, 'open');
+        const cache = new CacheManager(testCacheDir, undefined, undefined, undefined, [await fs.realpath(root)]);
+        let statusReports = 0;
+        const options = { fresh: true, onGitStatus: () => { statusReports++; } };
+        const first = await cache.computeWorkspaceFingerprint(root, options);
+        await fs.writeFile(source, 'longer content');
+        const second = await cache.computeWorkspaceFingerprint(root, options);
+        assert.notEqual(first, second);
+        assert.equal(statusReports, 0);
+        const observed = [...reads.mock.calls, ...opens.mock.calls].map(call => String(call.arguments[0]));
+        assert.ok(observed.every(file => !file.startsWith(gitDir + path.sep)));
+      } finally {
+        assert.equal(path.dirname(root), os.tmpdir());
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('bounds ignored directory entries and closes the stream immediately on cancellation', async t => {
+      const root = await fs.mkdtemp(path.join(testCacheDir, 'wide-'));
+      for (let i = 0; i < 1005; i += 40)
+        await Promise.all(Array.from({ length: Math.min(40, 1005 - i) }, (_, n) => fs.mkdir(path.join(root, '.ignore-' + (i + n)))));
+      const open = fs.opendir.bind(fs), controller = new AbortController();
+      let reads = 0, closes = 0, cancelAt = 0;
+      t.mock.method(fs, 'opendir', async (...args: Parameters<typeof fs.opendir>) => {
+        const dir = await open(...args), read = dir.read.bind(dir), close = dir.close.bind(dir);
+        dir.read = (async () => {
+          const entry = await read();
+          if (++reads === cancelAt) controller.abort();
+          return entry;
+        }) as typeof dir.read;
+        dir.close = (async () => { closes++; await close(); }) as typeof dir.close;
+        return dir;
+      });
+      const bulk = t.mock.method(fs, 'readdir');
+      const cache = new CacheManager(testCacheDir);
+      await cache.computeWorkspaceFingerprint(root, { fresh: true });
+      assert.equal(reads, 1000); assert.equal(closes, 1);
+      reads = 0; cancelAt = 13;
+      await assert.rejects(cache.computeWorkspaceFingerprint(root, { fresh: true }, { signal: controller.signal }), /cancel|abort/i);
+      assert.equal(reads, 13); assert.equal(closes, 2); assert.equal(bulk.mock.callCount(), 0);
     });
 
     it('should detect file edits in non-git directories as well', async () => {

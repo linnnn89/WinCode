@@ -61,6 +61,15 @@ it('an old helper cannot report a requested action as a successful inspection', 
     const refused = parse(older, { action: 'click' });
     assert.equal(refused.success, false);
     assert.equal(refused.errorCode, 'VERSION_MISMATCH');
+    const sent: string[] = [];
+    (adapter as any).executeHost = async (request: { action: string; inputText?: string }) => {
+      sent.push(request.action);
+      assert.equal(request.inputText, undefined);
+      return { ...older, inspectionVersion: 5 };
+    };
+    const keyboard = await adapter.performUiAction({ pid: 1, action: 'type', targetAutomationId: 'edit', inputText: 'fixture' });
+    assert.equal(keyboard.errorCode, 'UI_KEYBOARD_DISABLED');
+    assert.equal(sent.length, 0);
     // 同一版本下，显式失败仍按 Helper 自己的原因上报，不伪装成版本问题。
     const failed = parse({ ...older, success: false, errorCode: 'WINDOW_NOT_FOUND' }, { action: 'click' });
     assert.equal(failed.errorCode, 'WINDOW_NOT_FOUND');
@@ -81,6 +90,7 @@ it('an old helper cannot report a requested action as a successful inspection', 
 
 describe('semantic UI actions against the real WPF fixture', () => {
   const cacheDir = path.resolve(root, 'test-tmp/mcp_ui_action_test');
+  const isolatedKeyboard = process.env.WINCODE_TEST_ISOLATED_KEYBOARD === '1';
   let router: ToolRouter;
   let server: WinCodeMcpServer;
   let client: Client;
@@ -116,6 +126,7 @@ describe('semantic UI actions against the real WPF fixture', () => {
     await fsp.mkdir(cacheDir, { recursive: true });
     const config = getDefaultConfig(root);
     config.cacheDir = path.join(cacheDir, 'cache');
+    config.isolatedKeyboard = isolatedKeyboard;
     router = new ToolRouter(config);
     server = new WinCodeMcpServer(router);
     await router.initialize();
@@ -343,6 +354,15 @@ describe('semantic UI actions against the real WPF fixture', () => {
   it('clicks, refuses ambiguous/disabled targets and writes text without echoing it', { timeout: 180000 }, async () => {
     assert.equal(await echo(), 'idle');
 
+    const background = await startFixture(['--background-fixture']);
+    try {
+      const refused = await call('wincode_ui_type', { ...background.target, targetAutomationId: 'actionInput',
+        mode: 'type', clearBefore: true, inputText: 'fixture' });
+      assert.equal(refused.body.errorCode, isolatedKeyboard ? 'FOCUS_FAILED' : 'INVALID_ARGUMENT');
+      const actual = await call('wincode_ui_inspect', { ...background.target, backgroundOnly: true, query: { automationId: 'actionEcho' } });
+      assert.equal(actual.body.queryResult.matches[0].name, 'idle');
+    } finally { await killProcessTree(background.child); }
+
     const clicked = await call('wincode_ui_click', { pid, hwnd, targetAutomationId: 'actionIncrement' });
     assert.equal(clicked.isError, false, JSON.stringify(clicked.body));
     assert.equal(clicked.body.success, true);
@@ -369,17 +389,17 @@ describe('semantic UI actions against the real WPF fixture', () => {
     assert.equal(toggled.body.success, true, JSON.stringify(toggled.body));
     assert.equal(await echo(), 'toggled:true');
 
-    // 键盘输入需要一个在前台的窗口：显式让夹具取得焦点，而不是让 Host 去激活它。
-    const focus = await call('wincode_ui_click', { pid, hwnd, targetAutomationId: 'actionFocus' });
-    assert.equal(focus.body.success, true, JSON.stringify(focus.body));
-    await new Promise(resolve => setTimeout(resolve, 800));
-
-    const typed = await call('wincode_ui_type', { pid, hwnd, targetAutomationId: 'actionInput', inputText: TYPED_TEXT, clearBefore: true });
-    assert.equal(typed.isError, false, JSON.stringify(typed.body));
-    assert.equal(typed.body.actionMethod, 'keyboard:clear+type');
-    assert.equal(typed.body.inputLength, TYPED_TEXT.length);
-    assert.equal(JSON.stringify(typed.body).includes(TYPED_TEXT), false, 'the sent text must not be echoed back');
-    assert.equal(await echo(), 'text:' + TYPED_TEXT);
+    if (isolatedKeyboard) {
+      const focus = await call('wincode_ui_click', { pid, hwnd, targetAutomationId: 'actionFocus' });
+      assert.equal(focus.body.success, true, JSON.stringify(focus.body));
+      await new Promise(resolve => setTimeout(resolve, 800));
+      const typed = await call('wincode_ui_type', { pid, hwnd, targetAutomationId: 'actionInput', inputText: TYPED_TEXT, clearBefore: true });
+      assert.equal(typed.isError, false, JSON.stringify(typed.body));
+      assert.equal(typed.body.actionMethod, 'keyboard:clear+type');
+      assert.equal(typed.body.inputLength, TYPED_TEXT.length);
+      assert.equal(JSON.stringify(typed.body).includes(TYPED_TEXT), false, 'the sent text must not be echoed back');
+      assert.equal(await echo(), 'text:' + TYPED_TEXT);
+    }
 
     const written = await call('wincode_ui_type', { pid, hwnd, targetAutomationId: 'actionValue', inputText: 'via-value', mode: 'setValue' });
     assert.equal(written.body.success, true, JSON.stringify(written.body));

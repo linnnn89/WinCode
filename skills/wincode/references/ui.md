@@ -36,7 +36,7 @@
 | `query` | 可选对象；至少有一个规范定位字段 `automationId/name/controlType`，每个为非空白字符串、最长 256；可选 `maxSearchNodes` 整数 1–5000、默认 1000，`maxMatches` 整数 1–20、默认 10。仅有未知字段不构成有效查询 |
 | `wincode_ui_click` | `pid`/`hwnd` 至少一个；`targetAutomationId`/`targetName`/`targetControlType` 至少一个，每个为非空白字符串、最长 256 |
 | `wincode_ui_set_expanded` | 同 click 的定位字段，必填 `expanded` 布尔值；只用 ExpandCollapsePattern 明确设置展开／折叠，已处于所需状态时不操作；需要 inspectionVersion 4 Host |
-| `wincode_ui_type` | 具备上述 click 的全部字段，另必填 `inputText`（最长 4096；mode=type 必须非空，mode=setValue 允许空字符串以清空值）；可选 `clearBefore`（布尔，默认 false，仅 mode=type 有效）、`mode`（`type`/`setValue`，默认 `type`） |
+| `wincode_ui_type` | 按选择器定位唯一控件，`inputText` 最长 4096 个字符。默认连接必填 `mode:"setValue"`，空字符串会清空值。启用独立会话发键后才支持 `mode:"type"` 和 `clearBefore`。 |
 | `wincode_ui_review` | 接受上述 inspect 的全部规范字段，另必填 `candidateFiles`：1–16 个相对 `.xaml` 路径、每项最长 512；可选 `candidateCodeFiles`：1–8 个相对 `.cs` 路径、每项最长 512；可选 `textQueries`：最多 5 个非空字面字符串、每项最长 80 |
 
 字段名和类型按表传入，不把 automationID 当作 automationId，也不用字符串代替数字或布尔值。原生接口可能忽略额外字段；调用成功不证明未知参数生效。客户端配方拒绝额外字段。
@@ -100,10 +100,12 @@ findings 包含 kind:logical-group、basis:sibling-order、边界、原生父节
 |---|---|
 | 点击、勾选、选择 | `wincode_ui_click` 使用 Invoke/Toggle/SelectionItem，不先请求焦点；应用事件仍可能激活窗口 |
 | 后台写值或清空 | `wincode_ui_type` 显式传 `mode:"setValue"`，使用 ValuePattern；空字符串清空 |
-| 逐键输入、IME 验证 | `mode:"type"` 会 SetFocus，需用户授权前台交互；默认 mode 也是 type |
+| 逐键输入、IME 验证 | 已隔离的交互会话用 `--isolated-keyboard` 显式开启后才可用 `mode:"type"` |
 | 明确展开或折叠 | `wincode_ui_set_expanded`，expanded:true/false；需要 ExpandCollapsePattern |
 
-`backgroundOnly` 只约束取证，不是 click/type 的禁止激活开关。仅授权后台时，不用启动、恢复、聚焦、坐标或键盘模拟补救失败；ValuePattern 不支持也不自动改用 type。已知会激活的动作先取得前台授权。用户正在游戏、聊天或会议时，不索取焦点；需前台键盘验证时由用户选择时机并切到目标窗口。
+普通连接可用 `backgroundOnly:true` 请求窗口取证。后台连接用 `--background-ui` 强制该策略，允许列窗、检查、关联源码。两者均要求助手协议版本 7。截图缺少窗口来源证据时保留可验证的控件树。后台写值还要求启动参数 `--ui-write-window <PID>:<HWND>:<processStartFileTime>`。启动者须核实调试窗口，进程重启后绑定失效。目标进程处于前台或无法核实前台归属时，写入被拒绝。后台连接禁用点击、全局发键和展开折叠。
+
+键盘模式要求目标窗口已经在前台。助手在清空和输入每个字符前检查焦点，但检查与发键之间仍可能切换窗口。`--isolated-keyboard` 需要启动者提供独立的交互会话。发生 `FOCUS_FAILED` 时读回结果，已输入的部分可能保留。
 
 动作目标由当前观察的 targetAutomationId/targetName/targetControlType 精确定位。零匹配、多匹配或搜索不完整不操作。动作后按预期检查控件状态、页面或提示；需要等待时做有界只读检查。actionMethod 只说明使用的控件模式，不能代替业务结果。输入内容不回显，inputLength 只报告长度。
 

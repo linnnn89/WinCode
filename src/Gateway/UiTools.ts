@@ -1,6 +1,6 @@
 import { defineTool, jsonResult } from './ToolDefinition.js';
 import { uiResponse } from './UiResponse.js';
-import { UI_INSPECT_DEFAULTS, validateUiQuery, validateUiScope, validateWindowQuery, validateUiAction,
+import { UI_INSPECT_DEFAULTS, hasBackgroundTarget, validateUiQuery, validateUiScope, validateWindowQuery, validateUiAction,
   type UiAction, type UiInspectRequest, type UiListWindowsRequest } from '../Core/UiContracts.js';
 import { validateCandidateFiles } from '../Core/UiSourceMapper.js';
 import { validateCandidateCodeFiles } from '../Core/UiCodeMapper.js';
@@ -9,8 +9,8 @@ import { validateTextQueries } from '../Core/UiTextSearch.js';
 function validateInspect(args: UiInspectRequest): void {
   validateUiScope(args.scopePath, 'inspect');
   validateUiQuery(args.query, args.readStates);
-  if (args.backgroundOnly === true && (!args.pid || !args.hwnd))
-    throw new Error('backgroundOnly requires explicit pid and hwnd.');
+  if (args.backgroundOnly === true && !hasBackgroundTarget(args))
+    throw new Error('backgroundOnly requires explicit pid and nonzero hwnd.');
   if (args.hwnd !== undefined && !args.hwnd.trim()) throw new Error('hwnd must be non-empty.');
 }
 
@@ -159,7 +159,7 @@ const clickDefinition = defineTool<UiActionArgs>({
 
 const typeDefinition = defineTool<UiTypeArgs>({
   name: 'wincode_ui_type',
-  description: 'Writes text into exactly one Windows UI Automation control identified by an exact selector. Prefer mode="setValue" for background work: it writes through ValuePattern, needs no keyboard focus, and accepts an empty string to clear the value. mode="type" requests keyboard focus on the control, which may bring its window to the front: use it only when the user approved foreground interaction. Text is never echoed back. Requires either pid or hwnd.',
+  description: 'Writes text to one uniquely matched Windows UI Automation control. For background work use mode="setValue", which uses ValuePattern and accepts an empty string to clear the value. mode="type" requires the target window to already be in the foreground and verifies the focused element before each keyboard operation. If focus changes, inspect the target for partial input. Requires either pid or hwnd.',
   annotations: { readOnlyHint: false, destructiveHint: true },
   inputSchema: {
     type: 'object', additionalProperties: true,

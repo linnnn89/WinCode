@@ -31,6 +31,7 @@ public class InspectRequest
     public UiQueryDto? Query { get; set; }
     public bool ReadStates { get; set; }
     public bool BackgroundOnly { get; set; }
+    public string? WindowCapture { get; set; }
     public string? ProcessName { get; set; }
     public string? TitleContains { get; set; }
     public int? MaxWindows { get; set; }
@@ -78,8 +79,8 @@ public sealed record HostBuildIdentity(string Version, string? InformationalVers
 public class InspectResponse
 {
     public HostBuildIdentity HostIdentity { get; } = HostBuildIdentity.Current;
-    /// <summary>2 增加 query/readStates，3 增加语义操作，4 增加展开／折叠，5 增加父级路径。</summary>
-    public int InspectionVersion { get; set; } = 5;
+    /// <summary>7 增加绑定窗口写入、独立桌面发键协议以及可验证的窗口截图。</summary>
+    public int InspectionVersion { get; set; } = 7;
     public ScopeResultDto? ScopeResult { get; set; }
     public long? HelperPeakWorkingSetBytes { get; set; }
     public QueryResultDto? QueryResult { get; set; }

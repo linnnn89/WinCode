@@ -21,7 +21,7 @@ export interface TrashMoveResult {
   message: string;
   outcome: 'completed' | 'not_moved' | 'partial';
   failureStage?: 'validation' | 'prepare' | 'move' | 'metadata';
-  errorCode?: 'TRASH_NOT_MOVED' | 'TRASH_METADATA_FAILED';
+  errorCode?: 'TRASH_NOT_MOVED' | 'TRASH_METADATA_FAILED' | 'TRASH_MOVE_UNCONFIRMED';
   originalPath?: string;
   metadataPath?: string;
 }
@@ -67,7 +67,7 @@ export interface WorkspaceGitStatus {
   headCommit?: string;
   remoteUrl?: string;
   status?: 'clean' | 'dirty' | 'unknown';
-  errorCode?: 'GIT_UNAVAILABLE' | 'GIT_QUERY_FAILED';
+  errorCode?: 'GIT_UNAVAILABLE' | 'GIT_QUERY_FAILED' | 'GIT_NOT_TRUSTED';
 }
 
 export interface WorkspaceMetadata {

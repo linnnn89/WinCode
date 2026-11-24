@@ -190,7 +190,7 @@ it('cancelling an active Git operation closes its real child before the command 
   processes.subscribe(observe);
   try {
     // The read-only command waits for stdin, so cancellation follows a real spawn without a timing race.
-    await assert.rejects(runGit(process.cwd(), ['hash-object', '--stdin'], 7000, { signal: controller.signal }),
+    await assert.rejects(runGit(process.cwd(), [process.cwd()], ['hash-object', '--stdin'], 7000, { signal: controller.signal }),
       (error: Error) => error.name === 'AbortError');
     assert.ok(pid && closed);
     await withTimeout(closed, 3000, 'cancelled-git-exit');

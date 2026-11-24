@@ -41,6 +41,13 @@ internal static class NativeWindows
     internal static extern bool IsWindowVisible(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    internal static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+    internal const uint GA_ROOT = 2;
+
+    [DllImport("user32.dll")]
     internal static extern bool IsIconic(IntPtr hWnd);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

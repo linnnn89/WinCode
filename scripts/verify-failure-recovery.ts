@@ -95,10 +95,12 @@ for (const stage of stages) {
 for (const stage of ['rename', 'metadata']) {
   await fixture(`trash-${stage}`, async (router, a) => {
     const source = path.join(a, 'OnlyA.cs');
-    const original = stage === 'rename' ? fs.rename : fs.writeFile;
-    const method = stage === 'rename' ? 'rename' : 'writeFile';
+    const method = stage === 'rename' ? 'lstat' : 'writeFile';
+    const original = fs[method];
+    let identityReads = 0;
     (fs as any)[method] = async (...args: any[]) => {
-      if (stage === 'rename' || String(args[0]).endsWith('.meta.json')) throw new Error(`injected:${stage}`);
+      if ((stage === 'rename' && String(args[0]) === source && args[1]?.bigint && ++identityReads === 2) ||
+          (stage === 'metadata' && String(args[0]).endsWith('.meta.json'))) throw new Error(`injected:${stage}`);
       return (original as any)(...args);
     };
     let result;

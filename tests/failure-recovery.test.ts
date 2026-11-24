@@ -211,15 +211,32 @@ it('metadata failure returns partial with durable location; retry and restart pr
 
 for (const stage of ['prepare', 'move'] as const) {
   it(`trash ${stage} failure leaves source intact and does not advertise a destination`, async t => fixture(async (router, a) => {
-    const method = stage === 'prepare' ? 'mkdir' : 'rename';
-    const fault = t.mock.method(fs, method, async () => { throw new Error(`fixture ${stage}`); });
+    const source = path.join(a, 'OnlyA.cs'), saved = path.join(a, 'original.saved');
+    const lstat = fs.lstat.bind(fs);
+    let identityReads = 0;
+    const fault = stage === 'prepare' ? t.mock.method(fs, 'mkdir', async () => { throw new Error('fixture prepare'); }) :
+      t.mock.method(fs, 'lstat', async (...args: Parameters<typeof fs.lstat>) => {
+        const result = await lstat(...args);
+        if (String(args[0]) === source && args[1]?.bigint && ++identityReads === 2) {
+          // Replace a benign fixture after the final path check but before the native handle is opened.
+          await fs.rename(source, saved);
+          await fs.writeFile(source, 'new selection');
+        }
+        return result;
+      });
     let result;
     try { result = await router.moveToTrash('OnlyA.cs'); } finally { fault.mock.restore(); }
     assert.equal(result.outcome, 'not_moved'); assert.equal(result.failureStage, stage);
     assert.equal(result.trashPath, '');
-    assert.equal(await fs.readFile(path.join(a, 'OnlyA.cs'), 'utf8'), 'class OnlyA {}');
+    const expected = stage === 'move' ? 'new selection' : 'class OnlyA {}';
+    assert.equal(await fs.readFile(source, 'utf8'), expected);
+    if (stage === 'move') {
+      assert.equal(await fs.readFile(saved, 'utf8'), 'class OnlyA {}');
+      assert.deepEqual(await fs.readdir(path.join(a, 'trash')), []);
+    }
     const retry = await router.moveToTrash('OnlyA.cs');
     assert.equal(retry.outcome, 'completed'); assert.equal(retry.success, true);
+    assert.equal(await fs.readFile(retry.trashPath, 'utf8'), expected);
     assert.equal(JSON.parse(await fs.readFile(retry.metadataPath!, 'utf8')).originalPath, path.join(a, 'OnlyA.cs'));
   }));
 }

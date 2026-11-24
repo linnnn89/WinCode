@@ -1,6 +1,6 @@
 /**
  * Bounded Windows UI inspection contracts. Optional query/state fields require inspectionVersion 2;
- * semantic actions require inspectionVersion 3; explicit expand/collapse requires version 4; parent paths require version 5.
+ * semantic actions require version 3, expand/collapse version 4, parent paths version 5 and protected window operations version 7.
  */
 
 export interface UiRect {
@@ -47,7 +47,20 @@ export type UiScopeSelector = Pick<UiQuery, 'automationId' | 'name' | 'controlTy
 export type UiAction = 'click' | 'type' | 'setValue' | 'setExpanded';
 
 /** 取证版本与能力必须对应；5 增加 inspect/setExpanded 的父级路径。 */
-export const UI_INSPECTION_VERSIONS = { QUERY_AND_STATES: 2, ACTIONS: 3, EXPAND_COLLAPSE: 4, PARENT_SCOPE: 5 } as const;
+export const UI_INSPECTION_VERSIONS = { QUERY_AND_STATES: 2, ACTIONS: 3, EXPAND_COLLAPSE: 4, PARENT_SCOPE: 5, PROTECTED_UI: 7 } as const;
+
+export function hasBackgroundTarget(request: UiInspectRequest): boolean {
+  const handle = typeof request.hwnd === 'string' ? request.hwnd.trim() : '';
+  if (typeof request.pid !== 'number' || !Number.isInteger(request.pid) || request.pid < 1 || request.pid > 2147483647 ||
+      !/^(?:0x[0-9a-f]{1,16}|[0-9]{1,19})$/i.test(handle)) return false;
+  const value = BigInt(handle);
+  return value > 0n && value <= 0x7fffffffffffffffn;
+}
+
+export function sameUiWindow(request: UiInspectRequest, target?: Pick<UiInspectRequest, 'pid' | 'hwnd'>): boolean {
+  return !!target && hasBackgroundTarget(request) && hasBackgroundTarget(target) &&
+    request.pid === target.pid && BigInt(request.hwnd!) === BigInt(target.hwnd!);
+}
 
 /** Logical descendant scopes: each hop must resolve uniquely, never match the current root itself. */
 export function validateUiScope(scopePath: unknown, action?: string): void {
@@ -221,6 +234,9 @@ export const UiErrorCodes = {
   HOST_UNAVAILABLE: 'HOST_UNAVAILABLE',
   HOST_ERROR: 'HOST_ERROR',
   INVALID_ARGUMENT: 'INVALID_ARGUMENT',
+  UI_BACKGROUND_ONLY: 'UI_BACKGROUND_ONLY',
+  UI_WRITE_TARGET_DENIED: 'UI_WRITE_TARGET_DENIED',
+  UI_KEYBOARD_DISABLED: 'UI_KEYBOARD_DISABLED',
   PLATFORM_NOT_SUPPORTED: 'PLATFORM_NOT_SUPPORTED',
   BUSY: 'BUSY',
   SHUTDOWN: 'SHUTDOWN',

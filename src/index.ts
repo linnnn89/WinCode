@@ -3,6 +3,8 @@
 import { getDefaultConfig, WINCODE_VERSION } from './Core/Config.js';
 import { ToolRouter } from './Core/ToolRouter.js';
 import { absoluteWorkspace } from './Core/DynamicWorkspaces.js';
+import { resolveWorkspaceDirectory } from './Core/FileSystemBoundary.js';
+import { hasBackgroundTarget } from './Core/UiContracts.js';
 import { WinCodeMcpServer } from './Gateway/McpServer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -35,9 +37,38 @@ async function main() {
     return;
   }
 
+  const trustedGitRoots: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--trust-git') trustedGitRoots.push(await resolveWorkspaceDirectory(absoluteWorkspace(args[++i])));
+  }
   const config = getDefaultConfig(workspaceRoot);
+  config.trustedGitRoots = trustedGitRoots;
   config.workspaceRootSource = workspaceRootSource;
   if (dynamic) config.workspaceMode = 'dynamic';
+  if (args.includes('--background-ui')) config.backgroundUi = true;
+  if (args.includes('--isolated-keyboard')) {
+    if (config.backgroundUi) throw new Error('--isolated-keyboard cannot be combined with --background-ui.');
+    config.isolatedKeyboard = true;
+  }
+  const windowIndex = args.indexOf('--ui-write-window');
+  if (windowIndex !== -1) {
+    const parts = (args[windowIndex + 1] ?? '').split(':');
+    const [pid, hwnd, processStartFileTime] = parts;
+    const target = { pid: Number(pid), hwnd, processStartFileTime };
+    if (!config.backgroundUi || args.lastIndexOf('--ui-write-window') !== windowIndex || parts.length !== 3 ||
+        !/^[1-9][0-9]*$/.test(pid) || !hasBackgroundTarget(target) || !/^[1-9][0-9]{0,18}$/.test(processStartFileTime) ||
+        BigInt(processStartFileTime) > 0x7fffffffffffffffn)
+      throw new Error('--ui-write-window requires --background-ui and one PID:HWND:processStartFileTime binding from the launcher.');
+    config.uiWriteWindow = target;
+  }
+  const repomixIndex = args.indexOf('--repomix-cli');
+  if (repomixIndex !== -1) {
+    const entry = args[repomixIndex + 1];
+    if (!entry || !path.isAbsolute(entry) || (process.platform === 'win32' && path.parse(entry).root.length === 1) ||
+        !/\.(?:cjs|mjs|js)$/i.test(entry))
+      throw new Error('--repomix-cli requires an absolute JavaScript entry (.js, .cjs or .mjs).');
+    config.adapters.repomix.customCliPath = entry;
+  }
   // 此文件是用户显式选择的启动配置，不从目标仓库自动发现或接受 MCP 参数指定执行程序。
   const roslynIndex = args.indexOf('--roslyn-config');
   if (roslynIndex >= 0) {

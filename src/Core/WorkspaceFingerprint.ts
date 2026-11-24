@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { runGit } from './GitClient.js';
+import { gitRootIsTrusted, runGit } from './GitClient.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 
 export interface FingerprintOptions {
@@ -15,7 +15,7 @@ export class WorkspaceFingerprint {
   private fpMemo = new Map<string, { value: string; expiresAt: number; cheap: string }>();
   private fpInflight = new Map<string, { shared?: Promise<string> }>();
   private watchGeneration = new Map<string, number>();
-  constructor(private fingerprintMemoMs: number) {}
+  constructor(private fingerprintMemoMs: number, private readonly trustedGitRoots: readonly string[] = []) {}
 
   /** 切换缓存根时清空该实例的全部观察；调用方先排空业务请求。 */
   reset(): void { this.fpMemo.clear(); this.fpInflight.clear(); this.watchGeneration.clear(); }
@@ -82,16 +82,16 @@ export class WorkspaceFingerprint {
 
   private async cheapChangeProbe(resolvedRoot: string, operation?: OperationContext): Promise<string> {
     const gen = this.watchGeneration.get(resolvedRoot) ?? 0;
-    const candidates = [
-      path.join(resolvedRoot, '.git', 'HEAD'),
-      path.join(resolvedRoot, '.git', 'index'),
-      path.join(resolvedRoot, 'package.json'),
-    ];
+    checkOperation(operation);
+    const gitDir = path.join(resolvedRoot, '.git');
+    const git = gitRootIsTrusted(resolvedRoot, this.trustedGitRoots) ? await fs.lstat(gitDir).catch(() => null) : null;
+    const candidates = git?.isDirectory() ? [path.join(gitDir, 'HEAD'), path.join(gitDir, 'index')] : [];
+    candidates.push(path.join(resolvedRoot, 'package.json'));
     const parts = [`watch:${gen}`];
     for (const file of candidates) {
       checkOperation(operation);
       try {
-        const s = await fs.stat(file);
+        const s = await fs.lstat(file);
         parts.push(`${path.basename(file)}:${s.mtimeMs}:${s.size}`);
       } catch {
         parts.push(`${path.basename(file)}:missing`);
@@ -103,29 +103,32 @@ export class WorkspaceFingerprint {
   private async computeWorkspaceFingerprintUncached(resolvedRoot: string, operation?: OperationContext,
     onGitStatus?: FingerprintOptions['onGitStatus']): Promise<string> {
     try {
+      if (!gitRootIsTrusted(resolvedRoot, this.trustedGitRoots))
+        return await this.computeDirectoryFingerprintFallback(resolvedRoot, operation);
       const gitPath = path.join(resolvedRoot, '.git');
-      const hasGit = await fs.stat(gitPath).catch(() => null);
+      const git = await fs.lstat(gitPath).catch(() => null);
       checkOperation(operation);
 
-      if (hasGit) {
+      if (git?.isDirectory() || git?.isFile()) {
         try {
           const [headRes, statusRes] = await Promise.allSettled([
-            runGit(resolvedRoot, ['rev-parse', 'HEAD'], 3000, operation),
-            runGit(resolvedRoot, ['status', '--porcelain=v1', '-z'], 5000, operation),
+            runGit(resolvedRoot, this.trustedGitRoots, ['rev-parse', 'HEAD'], 3000, operation),
+            runGit(resolvedRoot, this.trustedGitRoots, ['status', '--porcelain=v1', '-z'], 5000, operation),
           ]);
           checkOperation(operation);
-          if (statusRes.status === 'rejected') throw statusRes.reason;
           const headCommit = headRes.status === 'fulfilled' ? headRes.value.stdout.trim() : '';
+          if (statusRes.status === 'rejected') {
+            rethrowOperationError(statusRes.reason, operation);
+            const directory = await this.computeDirectoryFingerprintFallback(resolvedRoot, operation);
+            return headCommit ? crypto.createHash('sha1').update(headCommit + '|' + directory).digest('hex') : directory;
+          }
           const gitStatusRaw = statusRes.value.stdout;
 
           let branchRef = '';
           if (!headCommit) {
             try {
-              const headContent = await fs.readFile(path.join(resolvedRoot, '.git', 'HEAD'), 'utf-8');
-              branchRef = headContent.trim();
-            } catch {
-              // ignore
-            }
+              branchRef = (await runGit(resolvedRoot, this.trustedGitRoots, ['symbolic-ref', '--quiet', 'HEAD'], 3000, operation)).stdout.trim();
+            } catch (error) { rethrowOperationError(error, operation); }
           }
 
           const rawEntries = gitStatusRaw.split('\0');
@@ -152,7 +155,7 @@ export class WorkspaceFingerprint {
               const fullPath = path.resolve(resolvedRoot, relPath);
               const pathKey = origPath ? `${relPath}<-${origPath}` : relPath;
               try {
-                const stat = await fs.stat(fullPath);
+                const stat = await fs.lstat(fullPath);
                 return `${statusType}:${pathKey}:${stat.mtimeMs}:${stat.size}`;
               } catch {
                 return `${statusType}:${pathKey}:deleted`;
@@ -165,35 +168,6 @@ export class WorkspaceFingerprint {
           return crypto.createHash('sha1').update(payload).digest('hex');
         } catch (error) {
           rethrowOperationError(error, operation);
-          try {
-            const gitHeadPath = path.join(resolvedRoot, '.git', 'HEAD');
-            const gitHead = await fs.readFile(gitHeadPath, 'utf-8').catch(() => null);
-            checkOperation(operation);
-            if (gitHead) {
-              let commitRef = gitHead.trim();
-              const match = commitRef.match(/ref:\s*refs\/heads\/([^\r\n]+)/);
-              if (match) {
-                const branchPath = path.join(resolvedRoot, '.git', 'refs', 'heads', match[1]);
-                const branchCommit = await fs.readFile(branchPath, 'utf-8').catch(() => null);
-                if (branchCommit) {
-                  commitRef = branchCommit.trim();
-                }
-              }
-              let indexStat = '';
-              checkOperation(operation);
-              try {
-                const s = await fs.stat(path.join(resolvedRoot, '.git', 'index'));
-                indexStat = `${s.mtimeMs}:${s.size}`;
-              } catch {
-                // ignore
-              }
-
-              const dirFp = await this.computeDirectoryFingerprintFallback(resolvedRoot, operation);
-              return crypto.createHash('sha1').update(`${commitRef}|${indexStat}|${dirFp}`).digest('hex');
-            }
-          } catch (error) {
-            rethrowOperationError(error, operation);
-          }
         }
       }
 
@@ -205,26 +179,33 @@ export class WorkspaceFingerprint {
   }
 
   private async computeDirectoryFingerprintFallback(dirPath: string, operation?: OperationContext): Promise<string> {
-    const maxFiles = 100, maxDepth = 3;
+    const maxFiles = 100, maxDepth = 3, maxEntries = 1000;
     const ignoredDirs = new Set(['node_modules', 'bin', 'obj', 'dist', '.git', '.vs', 'trash', '.deps', '.packages']);
     const stats: string[] = [];
+    let examined = 0;
 
-    const walk = async (currentDir: string, depth: number) => {
+    // Sample files in the project root before descending so one large subtree cannot crowd them out.
+    const folders = [{ currentDir: dirPath, depth: 0 }];
+    for (let index = 0; index < folders.length && examined < maxEntries && stats.length < maxFiles; index++) {
       checkOperation(operation);
-      if (depth > maxDepth || stats.length >= maxFiles) return;
+      const { currentDir, depth } = folders[index];
+      let directory;
       try {
-        const entries = await fs.readdir(currentDir, { withFileTypes: true });
-        for (const entry of entries) {
+        directory = await fs.opendir(currentDir, { bufferSize: 16 });
+        while (examined < maxEntries && stats.length < maxFiles) {
           checkOperation(operation);
-          if (stats.length >= maxFiles) break;
+          const entry = await directory.read();
+          if (!entry) break;
+          examined++;
+          checkOperation(operation);
           if (entry.isDirectory()) {
-            if (!ignoredDirs.has(entry.name) && !entry.name.startsWith('.')) {
-              await walk(path.join(currentDir, entry.name), depth + 1);
-            }
+            if (depth < maxDepth && !ignoredDirs.has(entry.name) && !entry.name.startsWith('.'))
+              folders.push({ currentDir: path.join(currentDir, entry.name), depth: depth + 1 });
           } else if (entry.isFile()) {
             try {
-              const s = await fs.stat(path.join(currentDir, entry.name));
-              stats.push(`${entry.name}:${s.mtimeMs}:${s.size}`);
+              const file = path.join(currentDir, entry.name);
+              const s = await fs.lstat(file);
+              stats.push(`${path.relative(dirPath, file)}:${s.mtimeMs}:${s.size}`);
             } catch {
               stats.push(entry.name);
             }
@@ -232,11 +213,12 @@ export class WorkspaceFingerprint {
         }
       } catch (error) {
         rethrowOperationError(error, operation);
-      }
-    };
-
-    await walk(dirPath, 0);
-    return crypto.createHash('sha1').update(stats.join('|')).digest('hex');
+      } finally { await directory?.close(); }
+    }
+    // An entry ceiling can leave every source file outside the sample. Do not reuse an older disk
+    // result on a new observation when the directory scan reached that ceiling.
+    if (examined >= maxEntries) stats.push(crypto.randomUUID());
+    return crypto.createHash('sha1').update(stats.sort().join('|')).digest('hex');
   }
 
 }

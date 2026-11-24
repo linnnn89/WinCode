@@ -2,6 +2,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { channel } from 'node:diagnostics_channel';
+import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
 
 import { WorkspaceManager } from '../src/Core/Workspace.js';
@@ -84,14 +86,11 @@ describe('workspace-files', () => {
       assert.ok(result.message.includes('Failed to move file to trash'));
     });
 
-    it('Security Boundary: moveToTrash strictly accepts only non-empty relative paths within workspace with zero rename calls', async () => {
-      // Intercept fs.rename to verify zero calls on rejected inputs
-      const originalRename = fs.rename;
-      let renameCallCount = 0;
-      (fs as any).rename = async (...args: any[]) => {
-        renameCallCount++;
-        return originalRename.apply(fs, args as any);
-      };
+    it('Security Boundary: rejected trash inputs never launch the move worker', async () => {
+      const workers: ChildProcess[] = [];
+      const observe = (message: unknown) => { workers.push((message as { process: ChildProcess }).process); };
+      const starts = channel('child_process');
+      starts.subscribe(observe);
 
       try {
         // 1. Empty or whitespace
@@ -129,6 +128,14 @@ describe('workspace-files', () => {
         assert.strictEqual(rootRes.success, false);
         assert.ok(rootRes.message.includes('outside the workspace boundary'));
 
+        const folder = await fs.mkdtemp(path.join(testCacheDir, 'regular-directory-'));
+        const marker = path.join(folder, 'keep.txt');
+        await fs.writeFile(marker, 'keep');
+        const dirResult = await ws.moveToTrash(path.relative(root, folder));
+        assert.strictEqual(dirResult.outcome, 'not_moved');
+        assert.strictEqual(dirResult.failureStage, 'validation');
+        assert.strictEqual(await fs.readFile(marker, 'utf8'), 'keep');
+
         // 8. Trash directory itself
         const trashDirRes = await ws.moveToTrash('trash', 'Trash directory itself');
         assert.strictEqual(trashDirRes.success, false);
@@ -159,10 +166,9 @@ describe('workspace-files', () => {
           await fs.rm(outsideTarget, { force: true }).catch(() => { });
         }
 
-        // CRITICAL: Verify rename was NEVER called for any of the above invalid/escaping inputs
-        assert.strictEqual(renameCallCount, 0, 'fs.rename call count must be ZERO for all rejected boundary inputs');
+        assert.ok(workers.every(worker => !worker.spawnargs?.includes('--move-to-trash')));
       } finally {
-        (fs as any).rename = originalRename;
+        starts.unsubscribe(observe);
       }
     });
 

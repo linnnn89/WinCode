@@ -3,11 +3,12 @@ import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
 import { IAdapter, AdapterHealth, AdapterLastError } from './IAdapter.js';
 import { WinCodeConfig, getDefaultTimeouts } from '../Core/Config.js';
 import { CacheManager } from '../Core/Cache.js';
+import { resolveWorkspaceFile } from '../Core/FileSystemBoundary.js';
 import { ResourceManager, TimeoutError, killProcessTree, toExternalOpFailure } from '../Core/ResourceManager.js';
 
 import { RepomixPackOptions, RepomixPackResult } from '../Core/ContextPacking.js';
@@ -75,7 +76,7 @@ export class RepomixAdapter implements IAdapter {
     if (!this.cliEntry) {
       this.isCliAvailable = false;
       const health: AdapterHealth = { available: true, source: 'fallback',
-        details: 'Repomix JavaScript CLI entry not found; using builtin packer. Install locally or configure an absolute customCliPath (.js/.cjs/.mjs); npx caches and shell wrappers are not executed.' };
+        details: 'No trusted Repomix CLI found. Using the builtin packer. Install Repomix in WinCode or start with --repomix-cli and an absolute JavaScript entry.' };
       this.healthCache = { at: Date.now(), value: health };
       return health;
     }
@@ -84,7 +85,7 @@ export class RepomixAdapter implements IAdapter {
     const health = await new Promise<AdapterHealth>((resolve) => {
       let isSettled = false;
       const proc = spawn(process.execPath, [this.cliEntry!, '--version'], {
-        cwd: this.config.workspaceRoot,
+        cwd: path.dirname(this.cliEntry!),
         windowsHide: true,
         shell: false,
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -169,30 +170,25 @@ export class RepomixAdapter implements IAdapter {
     const custom = this.config.adapters.repomix.customCliPath;
     // An invalid explicit override must not silently launch a different installation.
     if (custom !== undefined) return validEntry(custom);
-    const searchPaths = new Set([
-      ...(this.config.workspaceRootSource === 'request' ? [] :
-        createRequire(path.join(this.config.workspaceRoot, 'package.json')).resolve.paths('repomix') ?? []),
-      ...(createRequire(import.meta.url).resolve.paths('repomix') ?? []),
-    ]);
-    for (const base of searchPaths) {
-      const packageRoot = path.join(base, 'repomix');
+    // Only the WinCode installation supplies executable code during automatic probes.
+    const installRoot = fileURLToPath(new URL('../../', import.meta.url));
+    try {
+      const packageRoot = await resolveWorkspaceFile(installRoot, 'node_modules/repomix');
+      const manifestPath = await resolveWorkspaceFile(packageRoot, 'package.json');
+      const handle = await fs.open(manifestPath, 'r');
+      let manifest;
       try {
-        const manifestPath = path.join(packageRoot, 'package.json');
-        if ((await fs.stat(manifestPath)).size > 64 * 1024) continue;
-        const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-        const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.repomix;
-        if (manifest.name !== 'repomix' || typeof bin !== 'string' || path.isAbsolute(bin)) continue;
-        const entry = path.resolve(packageRoot, bin);
-        const relative = path.relative(packageRoot, entry);
-        if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
-        const realRoot = await fs.realpath(packageRoot);
-        const realEntry = await fs.realpath(entry);
-        const realRelative = path.relative(realRoot, realEntry);
-        if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) continue;
-        if (await validEntry(realEntry)) return realEntry;
-      } catch { /* Missing or malformed packages leave the builtin packer available. */ }
-    }
-    return null;
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.size > 65536) return null;
+        const bytes = Buffer.alloc(stat.size + 1);
+        const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+        if (bytesRead !== stat.size) return null;
+        manifest = JSON.parse(bytes.toString('utf8', 0, bytesRead));
+      } finally { await handle.close(); }
+      const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.repomix;
+      if (manifest.name !== 'repomix' || typeof bin !== 'string' || path.isAbsolute(bin)) return null;
+      return await validEntry(await resolveWorkspaceFile(packageRoot, bin));
+    } catch { return null; }
   }
 
   private trackProcess(proc: ChildProcess): void {

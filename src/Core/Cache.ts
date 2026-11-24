@@ -66,7 +66,8 @@ export class CacheManager {
     cacheDir: string,
     maxMemoryEntries = 500,
     maxDiskEntries = 500,
-    limits?: Partial<WinCodeCacheLimits>
+    limits?: Partial<WinCodeCacheLimits>,
+    trustedGitRoots?: readonly string[]
   ) {
     this.cacheDir = path.resolve(cacheDir);
     const defaults = getDefaultCacheLimits();
@@ -75,7 +76,7 @@ export class CacheManager {
     this.maxMemoryBytes = limits?.maxMemoryBytes ?? defaults.maxMemoryBytes;
     this.maxDiskBytes = limits?.maxDiskBytes ?? defaults.maxDiskBytes;
     this.maxEntryBytes = limits?.maxEntryBytes ?? defaults.maxEntryBytes;
-    this.workspaceFingerprint = new WorkspaceFingerprint(limits?.fingerprintMemoMs ?? defaults.fingerprintMemoMs);
+    this.workspaceFingerprint = new WorkspaceFingerprint(limits?.fingerprintMemoMs ?? defaults.fingerprintMemoMs, trustedGitRoots);
   }
 
   get memoryEntryCount(): number {

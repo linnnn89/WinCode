@@ -6,6 +6,31 @@ import { isWorkspacePathInside } from './WorkspaceContracts.js';
 import { checkOperation, type OperationContext } from './OperationContext.js';
 
 const execFileAsync = promisify(execFile);
+
+export function gitRootIsTrusted(root: string, trustedRoots: readonly string[] = []): boolean {
+  return trustedRoots.includes(path.resolve(root));
+}
+
+/** Expose only the host and repository path of a recognized Git network address. */
+export function publicGitRemote(output: string): string | undefined {
+  const value = output.trim();
+  if (!value || /[\s\\]/u.test(value) || /[\x00-\x1f\x7f]/u.test(value)) return undefined;
+  if (value.includes('://')) {
+    try {
+      const url = new URL(value);
+      if (!url.hostname || !['http:', 'https:', 'ssh:', 'git:', 'git+ssh:', 'ssh+git:', 'ftp:', 'ftps:'].includes(url.protocol)) return undefined;
+      url.username = '';
+      url.password = '';
+      url.search = '';
+      url.hash = '';
+      return url.href;
+    } catch { return undefined; }
+  }
+  // Git also accepts [user@]host:path. Leave ambiguous local and remote-helper syntax private.
+  if (/^[A-Za-z]:/.test(value)) return undefined;
+  const scp = /^(?:[^@:/?#]+@)?(\[[a-f\d:.]+\]|[a-z\d.-]+):([^@:#?]+)(?:[?#].*)?$/i.exec(value);
+  return scp ? scp[1] + ':' + scp[2] : undefined;
+}
 const supportedVersions = new Set<string>(); // At most the fixed launch-time candidate list below.
 // Capture the launch environment once, never search a queried repository's cwd.
 const candidates = [
@@ -30,7 +55,10 @@ export async function resolveGitExecutable(root: string, operation?: OperationCo
   throw Object.assign(new Error('No trusted Git executable is available outside the workspace.'), { code: 'GIT_UNAVAILABLE' });
 }
 
-export async function runGit(root: string, args: string[], timeout: number, operation?: OperationContext): Promise<{ stdout: string }> {
+export async function runGit(root: string, trustedRoots: readonly string[] | undefined, args: string[], timeout: number, operation?: OperationContext): Promise<{ stdout: string }> {
+  checkOperation(operation);
+  if (!gitRootIsTrusted(root, trustedRoots) || !gitRootIsTrusted(await fs.realpath(root), trustedRoots))
+    throw Object.assign(new Error('Native Git was not authorized for this workspace.'), { code: 'GIT_NOT_TRUSTED' });
   const executable = await resolveGitExecutable(root, operation);
   const remaining = () => {
     checkOperation(operation);
@@ -50,7 +78,7 @@ export async function runGit(root: string, args: string[], timeout: number, oper
     !/^(?:GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+))$/i.test(key)));
   const result = await execFileAsync(executable, ['--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', ...args], {
     cwd: root, windowsHide: true, shell: false, timeout: remaining(), signal: operation?.signal, maxBuffer: 1024 * 1024, encoding: 'utf8',
-    env: { ...env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0' },
+    env: { ...env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0', GIT_CEILING_DIRECTORIES: path.dirname(root) },
   });
   checkOperation(operation);
   return result;

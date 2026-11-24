@@ -47,6 +47,7 @@ function fakeCliProbe() {
   syncBuiltinESMExports();
   return {
     count: () => spawn.mock.callCount(),
+    entries: () => spawn.mock.calls.map(call => call.arguments[1]?.[0]),
     restore: () => { spawn.mock.restore(); syncBuiltinESMExports(); },
   };
 }
@@ -110,14 +111,21 @@ it('real Node CLI receives exact special-character paths and include argv withou
   assert.equal(adapter.activeProcessCount, 0);
 }));
 
-it('discovers installed package bin metadata without invoking npm or PATH wrappers', async () => realCliFixture(async (adapter, config, root) => {
+it('a workspace Repomix entry requires an explicit trusted path for its version probe', async () => realCliFixture(async (adapter, config, root) => {
   const packageRoot = path.join(root, 'node_modules', 'repomix');
   await fs.mkdir(packageRoot, { recursive: true });
-  await fs.copyFile(config.adapters.repomix.customCliPath!, path.join(packageRoot, 'cli.cjs'));
+  const entry = path.join(packageRoot, 'cli.cjs');
+  await fs.copyFile(config.adapters.repomix.customCliPath!, entry);
   await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'repomix', bin: { repomix: './cli.cjs' } }));
   delete config.adapters.repomix.customCliPath;
-  await adapter.initialize();
-  assert.equal((await adapter.packWorkspace()).source, 'repomix-cli');
+  const probe = fakeCliProbe();
+  try {
+    await adapter.initialize();
+    assert.ok(!probe.entries().includes(await fs.realpath(entry)));
+    config.adapters.repomix.customCliPath = entry;
+    await adapter.checkHealth(1000);
+    assert.equal(probe.entries().at(-1), entry);
+  } finally { probe.restore(); }
 }));
 
 for (const count of [0, 2, 1234]) {

@@ -157,7 +157,7 @@ export class ToolRouter {
       config.cacheDir,
       config.cacheLimits?.maxMemoryEntries ?? 500,
       config.cacheLimits?.maxDiskEntries ?? 500,
-      config.cacheLimits
+      config.cacheLimits, config.trustedGitRoots
     );
     this.workspace = new WorkspaceManager(config);
     this.repomix = new RepomixAdapter(config, this.cache, this.resources);

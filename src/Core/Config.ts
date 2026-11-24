@@ -49,6 +49,11 @@ export interface RoslynConfig {
 export interface WinCodeConfig {
   readonly workspaceRoot: string;
   workspaceMode?: 'fixed' | 'dynamic';
+  backgroundUi?: boolean;
+  uiWriteWindow?: { pid: number; hwnd: string; processStartFileTime: string };
+  isolatedKeyboard?: boolean;
+  /** Exact project roots authorized by the launcher to run native Git. */
+  trustedGitRoots?: readonly string[];
   workspaceRootSource?: 'argument' | 'cwd' | 'configuration' | 'request';
   cacheDir: string;
   trashDir: string;

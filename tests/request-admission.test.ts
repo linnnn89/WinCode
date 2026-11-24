@@ -100,7 +100,7 @@ it('trash cancellation during path validation leaves the source untouched and re
     if (String(args[0]) === originalPath) { entered.resolve(); await resume.promise; }
     return result;
   });
-  const rename = t.mock.method(fs, 'rename', fs.rename.bind(fs));
+  const prepare = t.mock.method(fs, 'mkdir', fs.mkdir.bind(fs));
   const pending = call('wincode_safe_move_to_trash', { filePath: 'keep.txt' }, controller.signal).catch(error => error);
   try {
     await entered.promise;
@@ -109,7 +109,7 @@ it('trash cancellation during path validation leaves the source untouched and re
     await until(() => operationSignal!.aborted, 'cancellation must reach the operation before validation resumes');
   } finally { resume.resolve(); await pending; heldPath.mock.restore(); }
   await until(() => router.admission.pendingCount === 0, 'cancelled operation must finish cleanup');
-  assert.equal(rename.mock.callCount(), 0);
+  assert.ok(prepare.mock.calls.every(call => String(call.arguments[0]) !== path.join(path.dirname(originalPath), 'trash')));
   assert.equal(await fs.readFile(originalPath, 'utf8'), 'keep');
   assert.equal(router.admission.snapshot().business.cancelled, 1);
 }));
@@ -153,29 +153,31 @@ it('workspace_open cancellation stops fingerprint, discovery and optional tree w
   await fs.writeFile(path.join(root, 'src', 'Api.ts'), 'export class Api {}');
   const originalSession = { ...router.session.current! };
   const open = router.openWorkspace.bind(router), list = router.workspace.listDirectory.bind(router.workspace);
-  const readDir = fs.readdir.bind(fs), openDir = fs.opendir.bind(fs), stat = fs.stat.bind(fs);
+  const openDir = fs.opendir.bind(fs), stat = fs.stat.bind(fs), lstat = fs.lstat.bind(fs);
+  const describeWorkspace = router.workspace.openWorkspace.bind(router.workspace);
   const gitStatus = router.workspace.getGitStatus.bind(router.workspace);
-  let received: AbortSignal | undefined, tree = false, entered = deferred(), resume = deferred();
+  let received: AbortSignal | undefined, discovering = false, tree = false, resume = deferred();
   let stage = '', lateStats = 0, lateDirectoryReads = 0, lateGit = 0, held = false;
-  const pause = async () => { held = true; entered.resolve(); await resume.promise; };
+  const pause = async () => { held = true; await resume.promise; };
   t.mock.method(router, 'openWorkspace', (target: string, options: any, signal?: AbortSignal) => {
     received = signal; return open(target, options, signal);
   });
   t.mock.method(router.workspace, 'listDirectory', (...args: Parameters<typeof list>) => { tree = true; return list(...args); });
+  t.mock.method(router.workspace, 'openWorkspace', (...args: Parameters<typeof describeWorkspace>) => {
+    discovering = true; return describeWorkspace(...args);
+  });
   t.mock.method(router.workspace, 'getGitStatus', (...args: Parameters<typeof gitStatus>) => {
     if (received?.aborted) lateGit++; return gitStatus(...args);
   });
-  t.mock.method(fs, 'readdir', async (...args: Parameters<typeof fs.readdir>) => {
-    const entries = await readDir(...args);
-    if (stage === 'fingerprint' && !held && String(args[0]) === root) await pause();
-    return entries;
+  t.mock.method(fs, 'lstat', (...args: Parameters<typeof fs.lstat>) => {
+    if (received?.aborted && held) lateStats++; return lstat(...args);
   });
   t.mock.method(fs, 'stat', (...args: Parameters<typeof fs.stat>) => {
     if (received?.aborted && held) lateStats++; return stat(...args);
   });
   t.mock.method(fs, 'opendir', async (...args: Parameters<typeof fs.opendir>) => {
     const directory = await openDir(...args);
-    if ((stage === 'discovery' && !tree) || (stage === 'tree' && tree)) {
+    if ((stage === 'fingerprint' && !discovering) || (stage === 'discovery' && discovering && !tree) || (stage === 'tree' && tree)) {
       const read = directory.read.bind(directory);
       directory.read = (async () => {
         if (received?.aborted && held) lateDirectoryReads++;
@@ -187,11 +189,11 @@ it('workspace_open cancellation stops fingerprint, discovery and optional tree w
     return directory;
   });
   for (stage of ['fingerprint', 'discovery', 'tree']) {
-    entered = deferred(); resume = deferred(); held = false; tree = false;
+    resume = deferred(); held = false; tree = false; discovering = false;
     const controller = new AbortController();
     const pending = call('workspace_open', { path: root, includeTree: true }, controller.signal).catch(error => error);
     try {
-      await entered.promise; controller.abort();
+      await until(() => held, 'Workspace open must reach ' + stage); controller.abort();
       await until(() => received?.aborted === true, 'Cancellation should reach the MCP handler');
     } finally { resume.resolve(); await pending; }
     await until(() => router.admission.pendingCount === 0, 'Cancelled open must release admission');

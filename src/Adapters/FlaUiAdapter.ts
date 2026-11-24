@@ -20,6 +20,8 @@ import {
   validateUiScope,
   validateUiAction,
   isUiAction,
+  hasBackgroundTarget,
+  sameUiWindow,
   UI_INSPECTION_VERSIONS,
   UiInspectResult,
   UiErrorCodes,
@@ -289,22 +291,31 @@ export class FlaUiAdapter implements IAdapter {
     operation?: OperationContext
   ): Promise<UiInspectResult> {
     const requestId = request.requestId || randomUUID();
-    try { validateUiQuery(request.query, request.readStates); validateUiScope(request.scopePath, request.action); }
-    catch (error) { return {schemaVersion: "1.0", protocolVersion: "1.0", requestId, success: false, errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message}; }
-    if (isUiAction(request.action)) {
-      // 拒绝必须发生在启动 Helper 之前：破坏性动作没有"参数不对但仍先执行"的余地。
-      try { validateUiAction(request); }
-      catch (error) { return {schemaVersion: "1.0", protocolVersion: "1.0", requestId, success: false, errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message}; }
-    }
-    const normRequest: UiInspectRequest & { requestId: string } = {
-      ...request,
-      requestId,
-    };
-    if ((request.backgroundOnly !== undefined && typeof request.backgroundOnly !== 'boolean') ||
-        (request.backgroundOnly && (!request.pid || !request.hwnd))) {
+    const action = request.action ?? 'inspect';
+    const backgroundOnly = this.config.backgroundUi && action !== 'listWindows' ? true : request.backgroundOnly;
+    if ((this.config.backgroundUi || backgroundOnly) &&
+        action !== 'inspect' && action !== 'setValue' && action !== 'listWindows')
       return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
-        errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: 'backgroundOnly requires explicit pid and hwnd.' };
+        errorCode: UiErrorCodes.UI_BACKGROUND_ONLY, errorMessage: 'Background UI permits window listing, inspection and direct ValuePattern writes.' };
+    try {
+      if (this.config.backgroundUi && request.backgroundOnly === false) throw new Error('This connection requires backgroundOnly.');
+      if ((request.backgroundOnly !== undefined && typeof request.backgroundOnly !== 'boolean') ||
+          (backgroundOnly && action !== 'listWindows' && !hasBackgroundTarget(request)))
+        throw new Error('backgroundOnly requires explicit pid and nonzero hwnd.');
+      validateUiQuery(request.query, request.readStates);
+      validateUiScope(request.scopePath, action);
+      if (isUiAction(action)) validateUiAction(request);
+    } catch (error) {
+      return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
+        errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message };
     }
+    const normRequest = { ...request, requestId, backgroundOnly };
+    if (action === 'type' && !this.config.isolatedKeyboard)
+      return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
+        errorCode: UiErrorCodes.UI_KEYBOARD_DISABLED, errorMessage: 'Global keyboard input requires an explicitly isolated keyboard session.' };
+    if (backgroundOnly && action === 'setValue' && !sameUiWindow(request, this.config.uiWriteWindow))
+      return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
+        errorCode: UiErrorCodes.UI_WRITE_TARGET_DENIED, errorMessage: 'The launcher did not authorize this window for background writes.' };
 
     if (this.shuttingDown) {
       return {
@@ -387,16 +398,26 @@ export class FlaUiAdapter implements IAdapter {
           };
         }
 
-        // An older host recognizes setExpanded but ignores scopePath. Check before sending any action.
-        if (normRequest.scopePath && isUiAction(normRequest.action)) {
-          const capability = await this.executeHost({ action: 'health', requestId: `${requestId}-scope`, pid: 0 },
+        // Older helpers can ignore new restrictions. Check before sending the target or input text.
+        const requiredVersion = this.config.backgroundUi || backgroundOnly || action === 'type' ? UI_INSPECTION_VERSIONS.PROTECTED_UI :
+          normRequest.scopePath && isUiAction(action) ? UI_INSPECTION_VERSIONS.PARENT_SCOPE : 0;
+        if (requiredVersion) {
+          const capability = await this.executeHost({ action: 'health', requestId: `${requestId}-capability`, pid: 0,
+            backgroundOnly: backgroundOnly || undefined },
             Math.max(1, deadline - Date.now()), executionSignal);
-          if (!capability.success) return { ...capability, requestId,
-            ...(deadlineController.signal.aborted && !signal?.aborted && capability.errorCode === UiErrorCodes.CANCELLED
-              ? { errorCode:UiErrorCodes.TIMEOUT, errorMessage:'UI inspection deadline exceeded during capability check.' } : {}) };
-          if ((capability.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.PARENT_SCOPE)
+          if (capability.success !== true) {
+            const timedOut = deadlineController.signal.aborted && !signal?.aborted && capability.errorCode === UiErrorCodes.CANCELLED;
+            return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
+              errorCode: timedOut ? UiErrorCodes.TIMEOUT : capability.errorCode ?? UiErrorCodes.HOST_ERROR,
+              errorMessage: timedOut ? 'UI inspection deadline exceeded during capability check.' : 'UI helper capability check failed.' };
+          }
+          if (!Number.isSafeInteger(capability.inspectionVersion) || (capability.inspectionVersion ?? 0) < requiredVersion)
             return { schemaVersion:'1.0', protocolVersion:'1.0', requestId, success:false,
-              errorCode:UiErrorCodes.VERSION_MISMATCH, errorMessage:'scopePath requires inspectionVersion 5; no action was sent.' };
+              errorCode:UiErrorCodes.VERSION_MISMATCH, errorMessage:`This UI request requires inspectionVersion ${requiredVersion}; no operation was sent.` };
+          if (executionSignal.aborted || Date.now() >= deadline)
+            return { schemaVersion:'1.0', protocolVersion:'1.0', requestId, success:false,
+              errorCode: signal?.aborted ? UiErrorCodes.CANCELLED : UiErrorCodes.TIMEOUT,
+              errorMessage:'UI operation interrupted during capability check.' };
         }
         const result = await this.executeHost(normRequest, Math.max(1, deadline - Date.now()), executionSignal);
         if (deadlineController.signal.aborted && !signal?.aborted && result.errorCode === UiErrorCodes.CANCELLED) {
@@ -429,6 +450,26 @@ export class FlaUiAdapter implements IAdapter {
   private parseHostResponse(stdoutData: string, request: UiInspectRequest & { requestId: string }): UiInspectResult {
     try {
       const parsed = JSON.parse(stdoutData.trim()) as UiInspectResult;
+      const protectedUi = this.config.backgroundUi || request.backgroundOnly;
+      if (protectedUi) {
+        const inspection = (request.action ?? 'inspect') === 'inspect';
+        const windowOperation = inspection || request.action === 'setValue';
+        if (parsed.success && windowOperation && (!sameUiWindow(request, parsed) || parsed.requestId !== request.requestId ||
+            request.action === 'setValue' && (parsed.action !== 'setValue' || parsed.actionMethod !== 'ValuePattern') ||
+            !Number.isSafeInteger(parsed.inspectionVersion) || parsed.inspectionVersion! < UI_INSPECTION_VERSIONS.PROTECTED_UI))
+          return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId, success: false,
+            errorCode: UiErrorCodes.VERSION_MISMATCH, errorMessage: 'Background inspection did not confirm the requested window and helper version.' };
+        if (parsed.screenshotPngBase64 || parsed.annotatedPngBase64) {
+          const verified = inspection && parsed.success === true && parsed.backgroundOnly === true &&
+            (request.capture === 'original' || request.capture === 'annotated') &&
+            (parsed.captureMethod === 'printWindow' || parsed.captureMethod === 'printWindowDwm');
+          if (!verified) {
+            delete parsed.screenshotPngBase64; delete parsed.annotatedPngBase64;
+            parsed.imageOmitted = true;
+            parsed.imageOmittedReason = 'The image source could not be verified as the requested window.';
+          }
+        }
+      }
       if (parsed.protocolVersion && parsed.protocolVersion !== '1.0') {
         return {
           schemaVersion: '1.0',
@@ -450,7 +491,8 @@ export class FlaUiAdapter implements IAdapter {
       }
       // 旧 Helper 不认得 action 字段，会退化成一次只读取证并返回 success=true。
       // 那种结果不能当作操作已执行，必须在协议层按版本拒绝。
-      const actionVersion = request.action === 'setExpanded' ? UI_INSPECTION_VERSIONS.EXPAND_COLLAPSE : UI_INSPECTION_VERSIONS.ACTIONS;
+      const actionVersion = request.action === 'type' || (request.backgroundOnly && request.action === 'setValue') ? UI_INSPECTION_VERSIONS.PROTECTED_UI :
+        request.action === 'setExpanded' ? UI_INSPECTION_VERSIONS.EXPAND_COLLAPSE : UI_INSPECTION_VERSIONS.ACTIONS;
       if (isUiAction(request.action) && parsed.success && (parsed.inspectionVersion ?? 0) < actionVersion) {
         return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId,
           success: false, errorCode: UiErrorCodes.VERSION_MISMATCH,
@@ -465,7 +507,8 @@ export class FlaUiAdapter implements IAdapter {
         requestId: request.requestId,
         success: false,
         errorCode: UiErrorCodes.HOST_ERROR,
-        errorMessage: `Failed to parse host JSON output: ${(jsonErr as Error).message}. Output head: ${stdoutData.slice(0, 300)}`,
+        errorMessage: this.config.backgroundUi || request.backgroundOnly ? 'Invalid response from background UI helper.' :
+          `Failed to parse host JSON output: ${(jsonErr as Error).message}. Output head: ${stdoutData.slice(0, 300)}`,
       };
     }
   }
@@ -510,7 +553,8 @@ export class FlaUiAdapter implements IAdapter {
     const payload = JSON.stringify({
       schemaVersion: request.schemaVersion ?? '1.0',
       requestId: request.requestId,
-      action: request.action ?? 'inspect',
+      action: request.action === 'type' ? 'isolatedType' :
+        request.backgroundOnly && request.action === 'setValue' ? 'boundSetValue' : request.action ?? 'inspect',
       query: request.query,
       scopePath: request.scopePath,
       readStates: request.readStates,
@@ -520,7 +564,9 @@ export class FlaUiAdapter implements IAdapter {
       maxWindows: request.maxWindows,
       pid: request.pid,
       hwnd: request.hwnd,
-      capture: request.capture ?? 'none',
+      // An older executable launched after a capability probe sees no screenshot or input action.
+      capture: request.backgroundOnly ? 'none' : request.capture ?? 'none',
+      windowCapture: request.backgroundOnly ? request.capture ?? 'none' : undefined,
       maxDepth: request.maxDepth ?? this.config.adapters.flaui?.maxDepth ?? UI_INSPECT_DEFAULTS.MAX_DEPTH,
       maxNodes: request.maxNodes ?? this.config.adapters.flaui?.maxNodes ?? UI_INSPECT_DEFAULTS.MAX_NODES,
       timeoutMs: timeoutMs,
@@ -588,7 +634,9 @@ export class FlaUiAdapter implements IAdapter {
         childProc = spawn(host.command, host.args, {
           windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, WINCODE_OWNER_PID: String(process.pid) },
+          env: { ...process.env, WINCODE_OWNER_PID: String(process.pid),
+            WINCODE_ISOLATED_KEYBOARD: this.config.isolatedKeyboard && !this.config.backgroundUi ? '1' : '0',
+            WINCODE_UI_WRITE_WINDOW: this.config.uiWriteWindow ? JSON.stringify(this.config.uiWriteWindow) : '' },
           cwd,
         });
 
@@ -653,7 +701,8 @@ export class FlaUiAdapter implements IAdapter {
               requestId: request.requestId,
               success: false,
               errorCode: UiErrorCodes.HOST_ERROR,
-              errorMessage: `Host exited with code ${code} without output. Stderr: ${stderrData.slice(0, 500)}`,
+              errorMessage: this.config.backgroundUi || request.backgroundOnly ? `Background helper exited with code ${code} without a response.` :
+                `Host exited with code ${code} without output. Stderr: ${stderrData.slice(0, 500)}`,
             });
             return;
           }

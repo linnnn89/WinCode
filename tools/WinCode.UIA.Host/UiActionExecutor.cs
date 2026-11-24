@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Input;
@@ -38,7 +39,7 @@ internal static class UiActionExecutor
             "click" => request.InputText == null,
             "setExpanded" => request.InputText == null && !request.ClearBefore && request.Expanded != null,
             "type" => request.InputText is { Length: > 0 and <= MaxInputLength },
-            "setValue" => request.InputText is { Length: <= MaxInputLength },
+            "setValue" => !request.ClearBefore && request.InputText is { Length: <= MaxInputLength },
             _ => false,
         };
     }
@@ -94,8 +95,8 @@ internal static class UiActionExecutor
         return WithScope(request.Action switch
         {
             "click" => Click(request, target, evidence, identity),
-            "type" => Type(request, automation, target, query, evidence, identity, cancellationToken),
-            "setValue" => SetValue(request, target, evidence, identity),
+            "type" => Type(request, automation, target, targetHwnd, evidence, identity, cancellationToken),
+            "setValue" => SetValue(request, target, targetHwnd, evidence, identity),
             "setExpanded" => SetExpanded(request, target, evidence, identity),
             _ => Failed(request, "UNKNOWN_ACTION", $"Unknown action: {request.Action}", identity),
         });
@@ -138,11 +139,25 @@ internal static class UiActionExecutor
     }
 
     private static InspectResponse Type(InspectRequest request, UIA3Automation automation, AutomationElement target,
-        UiQueryDto query, UiTargetDto evidence, ResolvedWindow identity, CancellationToken cancellationToken)
+        IntPtr targetHwnd, UiTargetDto evidence, ResolvedWindow identity, CancellationToken cancellationToken)
     {
         if (Disabled(target))
             return Failed(request, "TARGET_DISABLED", "Target control is disabled; no text was sent.", identity, evidence);
-        if (!FocusConfirmed(automation, target, query, cancellationToken))
+        var window = NativeWindows.GetAncestor(targetHwnd, NativeWindows.GA_ROOT);
+        bool InForeground() => window != IntPtr.Zero && NativeWindows.GetForegroundWindow() == window;
+        bool HasTargetFocus()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!InForeground()) return false;
+            try
+            {
+                var focused = automation.FocusedElement();
+                return focused != null && automation.Compare(target, focused) && InForeground();
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { return false; }
+        }
+        if (!FocusConfirmed(target, InForeground, HasTargetFocus, cancellationToken))
             return Failed(request, "FOCUS_FAILED",
                 "Keyboard focus could not be confirmed on the target control; no text was sent.",
                 identity, evidence);
@@ -150,9 +165,21 @@ internal static class UiActionExecutor
         var text = request.InputText!;
         try
         {
-            // 焦点已确认落在目标控件，后续键盘输入才会进入该控件。
-            if (request.ClearBefore) ClearFocusedInput();
-            Keyboard.Type(text);
+            InspectResponse FocusLost() => Failed(request, "FOCUS_FAILED",
+                "Keyboard focus changed. Input stopped. Inspect the target for partial changes before retrying.", identity, evidence);
+            if (request.ClearBefore)
+            {
+                if (!HasTargetFocus()) return FocusLost();
+                Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+                if (!HasTargetFocus()) return FocusLost();
+                Keyboard.Type(VirtualKeyShort.DELETE);
+                Thread.Sleep(FocusPollMs);
+            }
+            foreach (var character in text)
+            {
+                if (!HasTargetFocus()) return FocusLost();
+                Keyboard.Type(character);
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception error)
@@ -162,13 +189,31 @@ internal static class UiActionExecutor
         return Succeeded(request, evidence, identity, request.ClearBefore ? "keyboard:clear+type" : "keyboard:type", "typed", text.Length);
     }
 
-    private static InspectResponse SetValue(InspectRequest request, AutomationElement target, UiTargetDto evidence, ResolvedWindow identity)
+    private sealed record WriteWindow(int Pid, string Hwnd, string ProcessStartFileTime);
+
+    private static bool BoundWriteAllowed(IntPtr hwnd, int pid, AutomationElement element)
+    {
+        try {
+            var binding = JsonSerializer.Deserialize<WriteWindow>(Environment.GetEnvironmentVariable("WINCODE_UI_WRITE_WINDOW") ?? "", HostJson.JsonOptions);
+            if (binding == null || binding.Pid != pid || !TryReadWindowHandle(binding.Hwnd, out long handle) || hwnd.ToInt64() != handle ||
+                !long.TryParse(binding.ProcessStartFileTime, out long start) || NativeWindows.GetAncestor(hwnd, NativeWindows.GA_ROOT) != hwnd)
+                return false;
+            using var process = Process.GetProcessById(pid);
+            if (process.StartTime.ToFileTimeUtc() != start || !element.Properties.ProcessId.TryGetValue(out int owner) || owner != pid)
+                return false;
+            return NativeWindows.GetWindowThreadProcessId(hwnd, out var windowPid) != 0 && windowPid == pid &&
+                NativeWindows.GetWindowThreadProcessId(NativeWindows.GetForegroundWindow(), out var foregroundPid) != 0 &&
+                foregroundPid != 0 && foregroundPid != pid;
+        } catch { return false; }
+    }
+
+    private static InspectResponse SetValue(InspectRequest request, AutomationElement target, IntPtr hwnd, UiTargetDto evidence, ResolvedWindow identity)
     {
         if (Disabled(target))
             return Failed(request, "TARGET_DISABLED", "Target control is disabled; its value was not written.", identity, evidence);
         if (!target.Patterns.Value.TryGetPattern(out var value))
             return Failed(request, "NO_VALUE_PATTERN",
-                "Target control does not expose ValuePattern; use the type action instead.", identity, evidence);
+                "Target control does not expose ValuePattern for direct writes.", identity, evidence);
 
         bool readOnly = false;
         try { readOnly = value.IsReadOnly.Value; }
@@ -177,6 +222,8 @@ internal static class UiActionExecutor
         if (readOnly)
             return Failed(request, "VALUE_READONLY", "Target control reports a read-only value.", identity, evidence);
 
+        if (request.BackgroundOnly && !BoundWriteAllowed(hwnd, identity.Pid, target))
+            return Failed(request, "UI_WRITE_TARGET_DENIED", "The target must be the launcher's bound window in a matching background process.", identity, evidence);
         try { value.SetValue(request.InputText!); }
         catch (OperationCanceledException) { throw; }
         catch (Exception error)
@@ -198,34 +245,23 @@ internal static class UiActionExecutor
         return Succeeded(request, evidence, identity, method, status);
     }
 
-    /// <summary>请求焦点后复查 UIA 键盘焦点确实落在同一选择器上，才允许后续输入。</summary>
-    private static bool FocusConfirmed(UIA3Automation automation, AutomationElement target, UiQueryDto query, CancellationToken cancellationToken)
+    /// <summary>只在已处于前台的目标窗口中请求一次焦点，失去前台立即停止。</summary>
+    private static bool FocusConfirmed(AutomationElement target, Func<bool> inForeground, Func<bool> hasTargetFocus, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (hasTargetFocus()) return true;
+        if (!inForeground()) return false;
         try { target.Focus(); }
         catch (OperationCanceledException) { throw; }
         catch { return false; }
 
         var elapsed = Stopwatch.StartNew();
-        while (elapsed.ElapsedMilliseconds < FocusWaitMs)
+        while (inForeground() && elapsed.ElapsedMilliseconds < FocusWaitMs)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                var focused = automation.FocusedElement();
-                if (focused != null && UiTreeReader.MatchesQuery(focused, query) == true) return true;
-            }
-            catch (OperationCanceledException) { throw; }
-            catch { /* 焦点窗口切换过程中读取失败可重试。 */ }
+            if (hasTargetFocus()) return true;
             Thread.Sleep(FocusPollMs);
         }
         return false;
-    }
-
-    private static void ClearFocusedInput()
-    {
-        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
-        Keyboard.Type(VirtualKeyShort.DELETE);
-        Thread.Sleep(FocusPollMs);
     }
 
     private static bool Disabled(AutomationElement element)

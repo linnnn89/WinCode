@@ -5,11 +5,12 @@ import { isWorkspacePathInside, validateTrashPath, type TrashMoveResult, type Pr
 export { type TrashMoveResult, invalidTrashResult, type ProjectIdentity, type WorkspaceTreeItem, type WorkspaceGitStatus, type WorkspaceMetadata, type WorkspaceOpenOptions, type WorkspaceDirectoryOptions, type WorkspaceDirectoryResult, type WorkspaceOpenResult, validateWorkspaceDirectoryOptions, validateTrashPath } from './WorkspaceContracts.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { runGit } from './GitClient.js';
+import { gitRootIsTrusted, publicGitRemote, runGit } from './GitClient.js';
 import { assertLinkFreePath, assertWorkspaceDirectory, resolveWorkspaceDirectory } from './FileSystemBoundary.js';
 import { checkOperation, rethrowOperationError, type OperationContext } from './OperationContext.js';
 import { WinCodeConfig } from './Config.js';
 import { randomUUID } from 'node:crypto';
+import { moveValidatedFile, TrashMoveUnconfirmed } from './TrashFileMove.js';
 
 export class WorkspaceManager {
   private config: WinCodeConfig;
@@ -118,8 +119,17 @@ export class WorkspaceManager {
    */
   async getGitStatus(operation?: OperationContext, observedClean?: boolean): Promise<WorkspaceGitStatus> {
     const gitTimeout = this.config.timeouts?.gitMs ?? 5000;
+    const trusted = this.config.trustedGitRoots;
+    checkOperation(operation);
+    if (!gitRootIsTrusted(this.root, trusted)) {
+      const absent = await fs.lstat(path.join(this.root, '.git')).then(() => false,
+        (e: NodeJS.ErrnoException) => e.code === 'ENOENT');
+      checkOperation(operation);
+      return absent ? { isGit: false } : { isGit: null, status: 'unknown', errorCode: 'GIT_NOT_TRUSTED' };
+    }
+    const git = (args: string[]) => runGit(this.root, trusted, args, gitTimeout, operation);
     try {
-      if ((await runGit(this.root, ['rev-parse', '--is-inside-work-tree'], gitTimeout, operation)).stdout.trim() !== 'true') return { isGit: false };
+      if ((await git(['rev-parse', '--is-inside-work-tree'])).stdout.trim() !== 'true') return { isGit: false };
     } catch (error) {
       rethrowOperationError(error, operation);
       const failure = error as NodeJS.ErrnoException & { stderr?: string };
@@ -127,17 +137,18 @@ export class WorkspaceManager {
       return { isGit: null, status: 'unknown', errorCode: failure.code === 'GIT_UNAVAILABLE' ? 'GIT_UNAVAILABLE' : 'GIT_QUERY_FAILED' };
     }
     const [branch, head, status, remote] = await Promise.allSettled([
-      runGit(this.root, ['rev-parse', '--abbrev-ref', 'HEAD'], gitTimeout, operation),
-      runGit(this.root, ['rev-parse', '--short', 'HEAD'], gitTimeout, operation),
-      observedClean ?? runGit(this.root, ['status', '--porcelain'], gitTimeout, operation).then(result => !result.stdout.trim()),
-      runGit(this.root, ['remote', 'get-url', 'origin'], gitTimeout, operation),
+      git(['rev-parse', '--abbrev-ref', 'HEAD']),
+      git(['rev-parse', '--short', 'HEAD']),
+      observedClean ?? git(['status', '--porcelain']).then(result => !result.stdout.trim()),
+      git(['remote', 'get-url', 'origin']),
     ]);
     checkOperation(operation);
     const clean = status.status === 'fulfilled' ? status.value : undefined;
+    const remoteUrl = remote.status === 'fulfilled' ? publicGitRemote(remote.value.stdout) : undefined;
     return { isGit: true,
       ...(branch.status === 'fulfilled' ? { branch: branch.value.stdout.trim() } : {}),
       ...(head.status === 'fulfilled' ? { headCommit: head.value.stdout.trim() } : {}),
-      ...(remote.status === 'fulfilled' ? { remoteUrl: remote.value.stdout.trim() } : {}),
+      ...(remoteUrl === undefined ? {} : { remoteUrl }),
       ...(clean === undefined ? { status: 'unknown', errorCode: 'GIT_QUERY_FAILED' } : { isClean: clean, status: clean ? 'clean' : 'dirty' }),
     };
   }
@@ -267,10 +278,12 @@ export class WorkspaceManager {
     let failureStage: NonNullable<TrashMoveResult['failureStage']> = 'validation';
     let destinationPath = '';
     let moved = false;
+    let pinnedSource: fs.FileHandle | undefined;
     try {
       // Resolve symlinks and Windows junctions before any move.
       const realRoot = await this.getRealPath(this.root);
       const realTarget = await this.getRealPath(targetPath);
+      checkOperation(operation);
       const realTrash = await this.getRealPath(this.config.trashDir);
 
       if (!this.isPathInside(realRoot, realTarget)) {
@@ -282,6 +295,13 @@ export class WorkspaceManager {
       }
 
       if (!this.isPathInside(realRoot, realTrash)) return invalidTrashResult('Failed to move file to trash: Trash destination resolves outside the workspace.');
+      const source = await fs.lstat(targetPath, { bigint: true });
+      if (!source.isFile()) return invalidTrashResult('Failed to move file to trash: Only regular files can be moved.');
+      if (process.platform !== 'win32') return invalidTrashResult('Verified file moves require the published Windows helper.');
+      pinnedSource = await fs.open(realTarget, 'r');
+      const pinned = await pinnedSource.stat({ bigint: true });
+      if (!pinned.isFile() || pinned.ino === 0n || pinned.ino !== source.ino || pinned.dev !== source.dev)
+        return invalidTrashResult('Failed to move file to trash: Could not pin the selected file.');
       await assertLinkFreePath(this.config.trashDir);
 
       failureStage = 'prepare';
@@ -311,8 +331,10 @@ export class WorkspaceManager {
       failureStage = 'move';
       await assertLinkFreePath(this.config.trashDir);
       if (await this.getRealPath(targetPath) !== realTarget) throw new Error('Trash source changed during preparation.');
-      checkOperation(operation);
-      await fs.rename(targetPath, destinationPath);
+      const current = await fs.lstat(targetPath, { bigint: true });
+      if (!current.isFile() || current.dev !== source.dev || current.ino !== source.ino)
+        return invalidTrashResult('Failed to move file to trash: Source file changed during preparation.');
+      await moveValidatedFile(realRoot, realTarget, realTrash, trashFileName, pinned, operation);
       moved = true;
 
       // After the move, finish recording its location rather than cancelling metadata recovery evidence.
@@ -329,7 +351,7 @@ export class WorkspaceManager {
           },
           null,
           2
-        )
+        ), { flag: 'wx' }
       );
 
       return {
@@ -339,6 +361,9 @@ export class WorkspaceManager {
         message: `File safely moved to trash: ${path.relative(this.root, destinationPath)}`,
       };
     } catch (err) {
+      if (err instanceof TrashMoveUnconfirmed) return { success: false, outcome: 'partial', failureStage: 'move',
+        errorCode: 'TRASH_MOVE_UNCONFIRMED', originalPath: targetPath, trashPath: destinationPath,
+        message: err.message + ' Check the original and trash paths before retrying.' };
       if (!moved) rethrowOperationError(err, operation);
       const detail = err instanceof Error ? err.message : String(err);
       return {
@@ -351,6 +376,6 @@ export class WorkspaceManager {
           ? `File was moved to ${destinationPath}, but metadata was not completed: ${detail}. Preserve this path; do not retry the move or assume it was rolled back.`
           : `Failed to move file to trash: ${detail}`,
       };
-    }
+    } finally { await pinnedSource?.close(); }
   }
 }

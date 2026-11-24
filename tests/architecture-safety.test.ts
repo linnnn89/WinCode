@@ -194,9 +194,9 @@ it('Git status recognizes linked worktrees and never reports clean after Git fai
   git('init'); await fs.writeFile(path.join(main, 'fixture.txt'), 'initial'); git('add', 'fixture.txt');
   git('-c', 'user.name=WinCode Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture');
   git('worktree', 'add', '--detach', linked, 'HEAD');
-  assert.equal((await new WorkspaceManager(getDefaultConfig(linked)).getGitStatus()).isGit, true);
+  assert.equal((await new WorkspaceManager({ ...getDefaultConfig(linked), trustedGitRoots: [linked] }).getGitStatus()).isGit, true);
   await fs.writeFile(path.join(main, 'fixture.txt'), 'changed');
-  const workspace = new WorkspaceManager(getDefaultConfig(main));
+  const workspace = new WorkspaceManager({ ...getDefaultConfig(main), trustedGitRoots: [main] });
   assert.equal((await workspace.getGitStatus()).isClean, false);
   const monitor = path.join(main, 'fixture-fsmonitor');
   await fs.writeFile(monitor, '#!/bin/sh\nprintf called > fsmonitor-ran.txt\nexit 1\n', { mode: 0o755 });
@@ -206,7 +206,7 @@ it('Git status recognizes linked worktrees and never reports clean after Git fai
   assert.equal(await fs.readFile(marker, 'utf8'), 'called', 'positive control must execute the fixture monitor');
   await fs.unlink(marker);
   await workspace.getGitStatus();
-  await new WorkspaceFingerprint(0).computeWorkspaceFingerprint(main);
+  await new WorkspaceFingerprint(0, [main]).computeWorkspaceFingerprint(main);
   assert.equal(await fs.stat(marker).then(() => true, () => false), false, 'WinCode read-only probes must disable executable fsmonitor configuration');
   await fs.writeFile(path.join(main, '.git', 'config'), '[invalid config');
   assert.notEqual((await workspace.getGitStatus()).isClean, true);

@@ -32,6 +32,18 @@ public static class Program
 
     public static void Main(string[] args)
     {
+        if (args.FirstOrDefault() == "--move-to-trash") {
+            Console.OutputEncoding = new UTF8Encoding(false);
+            try {
+                using var guard = OwnerProcessGuard.Attach();
+                TrashFileMove.Run(args, guard?.Token ?? CancellationToken.None);
+                Console.WriteLine("MOVED");
+            } catch (Exception error) {
+                Console.Error.WriteLine(error.Message);
+                Environment.ExitCode = 1;
+            }
+            return;
+        }
         try
         {
             SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -69,6 +81,21 @@ public static class Program
                 return;
             }
 
+            if (request.Action == "boundSetValue") {
+                if (!request.BackgroundOnly) {
+                    WriteErrorResponse(request.RequestId, "UI_WRITE_TARGET_DENIED", "A bound write requires background mode.");
+                    return;
+                }
+                request.Action = "setValue";
+            }
+            if (request.Action is "type" or "isolatedType") {
+                if (request.BackgroundOnly || Environment.GetEnvironmentVariable("WINCODE_ISOLATED_KEYBOARD") != "1") {
+                    WriteErrorResponse(request.RequestId, "UI_KEYBOARD_DISABLED", "Global keyboard input is disabled for this connection.");
+                    return;
+                }
+                request.Action = "type";
+            }
+            if (request.BackgroundOnly && request.WindowCapture != null) request.Capture = request.WindowCapture;
             if (request.Action == "health" || request.Action == "ping")
             {
                 WriteSuccessResponse(request.RequestId, new InspectResponse
@@ -91,6 +118,16 @@ public static class Program
                 return;
             }
 
+            if (request.BackgroundOnly) {
+                if (request.Action is not (null or "inspect" or "setValue")) {
+                    WriteErrorResponse(request.RequestId, "UI_BACKGROUND_ONLY", "Background UI permits inspection and direct ValuePattern writes.");
+                    return;
+                }
+                if (request.Pid <= 0 || string.IsNullOrWhiteSpace(request.Hwnd)) {
+                    WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "backgroundOnly requires explicit pid and hwnd.");
+                    return;
+                }
+            }
             if (!UiScopeResolver.Valid(request)) {
                 WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "Invalid scopePath; supported for inspect and setExpanded only.");
                 return;
@@ -121,12 +158,6 @@ public static class Program
                 WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "Either 'pid' or 'hwnd' must be provided.");
                 return;
             }
-            if (request.BackgroundOnly && (request.Pid <= 0 || string.IsNullOrWhiteSpace(request.Hwnd)))
-            {
-                WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "backgroundOnly requires explicit pid and hwnd.");
-                return;
-            }
-
             if (!ValidQuery(request.Query)) {
                 WriteErrorResponse(request.RequestId, "INVALID_ARGUMENT", "Invalid query filters or budgets.");
                 return;

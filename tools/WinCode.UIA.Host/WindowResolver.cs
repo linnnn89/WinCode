@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Text;
@@ -78,6 +79,14 @@ internal static class WindowResolver
         GetWindowRect(hwnd, out RECT winRect);
         return winRect;
     }
+    internal static bool TryReadWindowHandle(string? text, out long value)
+    {
+        var raw = text?.Trim() ?? string.Empty;
+        bool hex = raw.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
+        return long.TryParse(hex ? raw.AsSpan(2) : raw.AsSpan(), hex ? NumberStyles.AllowHexSpecifier : NumberStyles.None,
+            CultureInfo.InvariantCulture, out value) && value > 0;
+    }
+
     internal static IntPtr ResolveTargetWindow(
         InspectRequest request,
         out int resolvedPid,
@@ -90,30 +99,19 @@ internal static class WindowResolver
 
         if (!string.IsNullOrWhiteSpace(request.Hwnd))
         {
-            var raw = request.Hwnd.Trim();
-            long hwndVal;
-            if (raw.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            {
-                hwndVal = Convert.ToInt64(raw[2..], 16);
+            if (!TryReadWindowHandle(request.Hwnd, out long value)) {
+                errorCode = "INVALID_ARGUMENT";
+                return IntPtr.Zero;
             }
-            else
-            {
-                hwndVal = Convert.ToInt64(raw);
+            var handle = new IntPtr(value);
+            GetWindowThreadProcessId(handle, out var windowPid);
+            if (request.Pid > 0 && windowPid != request.Pid) {
+                errorCode = "HWND_PID_MISMATCH";
+                resolvedPid = 0;
+                return IntPtr.Zero;
             }
-
-            var handle = new IntPtr(hwndVal);
-            if (handle != IntPtr.Zero)
-            {
-                GetWindowThreadProcessId(handle, out var windowPid);
-                if (request.Pid > 0 && windowPid != request.Pid)
-                {
-                    errorCode = "HWND_PID_MISMATCH";
-                    resolvedPid = 0;
-                    return IntPtr.Zero;
-                }
-                resolvedPid = (int)windowPid;
-                return handle;
-            }
+            resolvedPid = (int)windowPid;
+            return handle;
         }
 
         var targetPid = (uint)request.Pid;

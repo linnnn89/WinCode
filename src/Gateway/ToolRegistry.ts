@@ -13,9 +13,6 @@ function publishedTools(source: ToolDefinition[]): Tool[] {
     .map(alias => ({ ...definition.tool, name: alias.name, description: alias.description ?? definition.tool.description }))]);
 }
 
-/** Compatibility export for callers inspecting the published contract, never a second dispatch list. */
-export const WINCODE_TOOLS: Tool[] = structuredClone(publishedTools(definitions));
-
 type InputSchema = { type?: string; properties?: Record<string, InputSchema>; items?: InputSchema };
 
 function declaredArguments(value: unknown, schema: InputSchema): unknown {
@@ -30,30 +27,54 @@ function declaredArguments(value: unknown, schema: InputSchema): unknown {
   return value;
 }
 
+function connectionDefinitions(dynamic: boolean, backgroundUi: boolean, isolatedKeyboard: boolean) {
+  const snapshot = definitions.map(definition => ({ ...definition, tool: structuredClone(definition.tool),
+    aliases: structuredClone(definition.aliases) }));
+  if (dynamic) for (const { tool, workspaceControl, desktopOnly, requestLane } of snapshot) {
+    if (desktopOnly) continue;
+    const schema = tool.inputSchema;
+    const selector = { type: 'string', minLength: 1, maxLength: 4096,
+      description: 'Absolute directory of the current task or the project named by the user. Send it on each project request, including after workspace_open.' };
+    if (workspaceControl) {
+      tool.description = 'Open or confirm the project at path for this request. Other calls independently select their project with workspacePath. Returns a bounded project summary.';
+      schema.properties = { ...schema.properties, path: selector };
+    } else {
+      schema.properties = { ...schema.properties, workspacePath: selector };
+      if (requestLane !== 'status') schema.required = [...(schema.required ?? []), 'workspacePath'];
+    }
+  }
+  for (const { tool } of snapshot) {
+    const schema = tool.inputSchema;
+    if (tool.name === 'wincode_ui_type' && (backgroundUi || !isolatedKeyboard)) {
+      tool.description = 'Set the value of one uniquely matched control using UI Automation ValuePattern. Supply mode="setValue".' +
+        (backgroundUi ? ' Background writes require the PID and HWND bound by the launcher.' : '');
+      schema.properties = { ...schema.properties, mode: { type: 'string', enum: ['setValue'] },
+        clearBefore: { type: 'boolean', enum: [false] } };
+      schema.required = [...(schema.required ?? []), ...(backgroundUi ? ['pid', 'hwnd'] : []), 'mode'];
+    } else if (backgroundUi && (tool.name === 'wincode_ui_inspect' || tool.name === 'wincode_ui_review')) {
+      tool.description = (tool.description ?? '').replace(' Requires either pid or hwnd.', '') +
+        ' This connection requires both PID and HWND and uses background-only capture.';
+      schema.properties = { ...schema.properties, backgroundOnly: { type: 'boolean', enum: [true], default: true } };
+      schema.required = [...(schema.required ?? []), 'pid', 'hwnd'];
+    }
+  }
+  return snapshot;
+}
+
+/** Snapshot of the default connection's published contract. */
+export const WINCODE_TOOLS: Tool[] = publishedTools(connectionDefinitions(false, false, false));
+
 export class ToolRegistry {
   private readonly entries = new Map<string, { definition: ToolDefinition; validate: ReturnType<AjvJsonSchemaValidator['getValidator']> }>();
   private readonly published: Tool[];
   readonly schemaHash: string;
 
-  constructor(dynamic = false) {
+  constructor(dynamic = false, backgroundUi = false, isolatedKeyboard = false) {
     const validator = new AjvJsonSchemaValidator(new Ajv({ strict: false, allErrors: false,
       coerceTypes: false, useDefaults: false, removeAdditional: false }));
-    const snapshot = definitions.map(definition => ({ ...definition, tool: structuredClone(definition.tool),
-      aliases: structuredClone(definition.aliases) }));
-    if (dynamic) for (const { tool, workspaceControl, desktopOnly, requestLane } of snapshot) {
-      if (desktopOnly) continue;
-      const schema = tool.inputSchema;
-      const selector = { type: 'string', minLength: 1, maxLength: 4096,
-        description: 'Absolute directory of the current task or the project named by the user. Send it on each project request, including after workspace_open.' };
-      if (workspaceControl) {
-        tool.description = 'Open or confirm the project at path for this request. Other calls independently select their project with workspacePath. Returns a bounded project summary.';
-        schema.properties = { ...schema.properties, path: selector };
-      } else {
-        schema.properties = { ...schema.properties, workspacePath: selector };
-        if (requestLane !== 'status') schema.required = [...(schema.required ?? []), 'workspacePath'];
-      }
-    }
-    this.published = structuredClone(publishedTools(snapshot));
+    const snapshot = connectionDefinitions(dynamic, backgroundUi, isolatedKeyboard);
+    this.published = structuredClone(publishedTools(snapshot).filter(tool => !backgroundUi ||
+      (tool.name !== 'wincode_ui_click' && tool.name !== 'wincode_ui_set_expanded')));
     this.schemaHash = toolsContractHash(this.published);
     for (const definition of snapshot) {
       // SDK Tool accepts generic JSON values for extension keywords; the validator

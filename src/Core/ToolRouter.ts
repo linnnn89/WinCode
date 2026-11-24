@@ -256,12 +256,14 @@ export class ToolRouter {
     return this.runCode(signal, operation => this.context.prepareContext(options, operation));
   }
 
+  get continuationWorkspacePath(): string | undefined { return this.workspace.continuationWorkspacePath; }
+
   searchText(options: TextSearchOptions, signal?: AbortSignal) {
-    return this.runCode(signal, operation => searchText(this.config, options, operation));
+    return this.runCode(signal, operation => searchText(this.config, options, operation, this.continuationWorkspacePath));
   }
 
   fileOutline(options: FileOutlineOptions, signal?: AbortSignal) {
-    return this.runCode(signal, operation => fileOutline(this.config, options, operation));
+    return this.runCode(signal, operation => fileOutline(this.config, options, operation, this.continuationWorkspacePath));
   }
 
   analyzeWorkspace(maxDepth?: number, signal?: AbortSignal) {
@@ -411,9 +413,12 @@ export class ToolRouter {
         Boolean(previousRoot) && path.resolve(previousRoot) === resolved && Boolean(this.session.current);
       if (sameWorkspace && !knownRoslyn?.restartRequired && !knownRoslyn?.cleanupFailed) {
         checkOperation(operation);
-        const fp = await this.cache.computeWorkspaceFingerprint(resolved, { fresh: true }, operation);
+        let gitClean: boolean | undefined;
+        const fp = await this.cache.computeWorkspaceFingerprint(resolved, {
+          fresh: true, onGitStatus: isClean => { gitClean = isClean; },
+        }, operation);
         checkOperation(operation);
-        const result = await this.workspace.openWorkspace(resolved, options, operation);
+        const result = await this.workspace.openWorkspace(resolved, options, operation, gitClean);
         checkOperation(operation);
         this.session.touch();
         this.session.setFingerprint(fp);
@@ -628,7 +633,7 @@ export class ToolRouter {
   async reviewUi(request: UiInspectRequest, candidateFiles: string[], signal?: AbortSignal, textQueries?: string[], candidateCodeFiles?: string[]): Promise<UiReviewResult> {
     // MCP owns the request slot across both stages, preventing workspace changes between them.
     return reviewUi((input, abort) => this.inspectUi(input, abort),
-      this.config.workspaceRoot, request, candidateFiles, signal, textQueries, candidateCodeFiles);
+      this.config.workspaceRoot, request, candidateFiles, signal, textQueries, candidateCodeFiles, this.continuationWorkspacePath);
   }
 
   async dispose(): Promise<void> {

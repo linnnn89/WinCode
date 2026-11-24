@@ -286,6 +286,61 @@ it('workspace_open cancellation between descriptor operations stops reads and cl
   assert.equal(body(await call('workspace_open', { path: root })).workspace, root);
 }));
 
+it('MCP project graph cancellation stops descriptor I/O at every boundary and closes acquired handles', async t => fixture(async ({ root, router, call }) => {
+  const descriptor = path.join(root, 'Review.csproj');
+  await fs.writeFile(descriptor, '<Project Sdk="Microsoft.NET.Sdk"><!--' + 'x'.repeat(48 * 1024) + '--></Project>');
+  const physicalDescriptor = await fs.realpath(descriptor);
+  const tree = router.workspace.getDirectoryTree.bind(router.workspace);
+  const realpath = fs.realpath.bind(fs), open = fs.open.bind(fs);
+  let signal: AbortSignal | undefined, controller = new AbortController(), stopAt = '';
+  let opened = 0, closed = 0;
+  const late: string[] = [];
+  async function observe<T>(stage: string, run: () => Promise<T>): Promise<T> {
+    if (signal?.aborted) late.push(stage);
+    const result = await run();
+    if (signal && stage === stopAt) {
+      controller.abort();
+      await until(() => signal?.aborted === true, 'The server must observe descriptor cancellation');
+    }
+    return result;
+  }
+  // Discovery reads the project once. The graph starts its own descriptor pass after the tree.
+  t.mock.method(router.workspace, 'getDirectoryTree', async (...args: Parameters<typeof tree>) => {
+    const result = await tree(...args);
+    signal = args[1]?.signal;
+    return result;
+  });
+  t.mock.method(fs, 'realpath', (...args: Parameters<typeof fs.realpath>) =>
+    observe(String(args[0]) === root ? 'root' : 'file', () => realpath(...args)));
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+    if (!signal || String(args[0]) !== physicalDescriptor) return open(...args);
+    const handle = await observe('open', () => open(...args));
+    opened++;
+    const stat = handle.stat.bind(handle), read = handle.read.bind(handle), close = handle.close.bind(handle);
+    let checkedSize = false;
+    t.mock.method(handle, 'stat', () => {
+      const stage = checkedSize ? 'verify-size' : 'stat'; checkedSize = true;
+      return observe(stage, stat);
+    });
+    t.mock.method(handle, 'read', (buffer: Buffer, offset: number, length: number, position: number) =>
+      observe('read', () => read(buffer, offset, length, position)));
+    t.mock.method(handle, 'close', async () => { await close(); closed++; });
+    return handle;
+  });
+  for (const stage of ['root', 'file', 'open', 'stat', 'read', 'verify-size']) {
+    stopAt = stage; signal = undefined; controller = new AbortController();
+    await assert.rejects(call('wincode_analyze_workspace', { maxDepth: 1 }, controller.signal));
+    await until(() => router.admission.pendingCount === 0, 'The cancelled graph request must settle');
+    assert.equal(controller.signal.aborted, true, stage);
+    assert.deepEqual(late, [], stage);
+    assert.equal(closed, opened, stage);
+  }
+  stopAt = ''; signal = undefined;
+  const result = await call('wincode_analyze_workspace', { maxDepth: 1 });
+  assert.notEqual(result.isError, true);
+  assert.equal(body(result).projectGraph.projects[0].name, 'Review');
+}));
+
 it('a cancelled running call holds its capacity until asynchronous cleanup actually finishes', async () => fixture(async ({ call, router }) => {
   const entered = deferred(), cleanup = deferred(), mutex = new Mutex(), controller = new AbortController();
   (router.text as any).findSymbolsDetailed = (query: string, _kind: unknown, _path: unknown, operation: any) =>

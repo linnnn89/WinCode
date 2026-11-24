@@ -4,13 +4,14 @@ import type { WinCodeConfig } from '../Core/Config.js';
 
 export interface ToolValidationContext {
   paths: Pick<WinCodeConfig, 'workspaceRoot' | 'trashDir'>;
-  tools: Tool[];
+  listTools: () => Tool[];
+  normalizePath?: (value: string) => string;
 }
 
 export interface ToolExecutionContext {
   router: ToolRouter;
   signal?: AbortSignal;
-  tools: Tool[];
+  listTools: () => Tool[];
   schemaHash: string;
   unbound?: boolean;
 }

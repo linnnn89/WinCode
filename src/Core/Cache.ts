@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { getDefaultCacheLimits, WinCodeCacheLimits } from './Config.js';
 
-import { WorkspaceFingerprint } from './WorkspaceFingerprint.js';
+import { WorkspaceFingerprint, type FingerprintOptions } from './WorkspaceFingerprint.js';
 import type { OperationContext } from './OperationContext.js';
 import { assertLinkFreePath } from './FileSystemBoundary.js';
 
@@ -740,7 +740,7 @@ export class CacheManager {
   }
 
   /** 保留 CacheManager 的既有入口，由独立组件管理指纹观察。 */
-  computeWorkspaceFingerprint(root: string, options?: { fresh?: boolean }, operation?: OperationContext): Promise<string> {
+  computeWorkspaceFingerprint(root: string, options?: FingerprintOptions, operation?: OperationContext): Promise<string> {
     return this.workspaceFingerprint.computeWorkspaceFingerprint(root, options, operation);
   }
   noteFilesystemChange(root: string): void { this.workspaceFingerprint.noteFilesystemChange(root); }

@@ -112,7 +112,9 @@ The agent can use `workspace_open` to obtain the project summary, `wincode_list_
 
 With `--dynamic-workspace`, the agent supplies the current task's absolute directory as `workspacePath` on every project call, including follow-up reads. For example, `wincode_search_text({"workspacePath":"C:/projects/App","query":"Save"})` searches App. `workspace_open` selects its project with `path`. Simultaneous requests have independent roots, caches and file watchers. Up to four requested projects stay open. A fifth replaces the least recently used idle project, or returns `WORKSPACE_BUSY` while all four are in use. Other open projects can serve requests during eviction. A project whose cleanup fails retains its slot and reports `WORKSPACE_RECOVERY_REQUIRED` with `restart_gateway`. Desktop-only tools still take a PID or window handle.
 
-Fixed mode is the default when the dynamic flag is absent. It binds to `--workspace` or the launch directory. Opening another project returns `WORKSPACE_MISMATCH`. To use Roslyn on a dynamic connection, add `--workspace <authorized-root> --roslyn-config <absolute-config>`. That project owns the Roslyn configuration. Other projects use local text.
+On dynamic connections, search, outline and context accept absolute file arguments under either the long or the Windows 8.3 spelling of the selected root. Source `nextRequest` objects already include the originating workspace and can be passed directly to `wincode_prepare_context`.
+
+Fixed mode is the default when the dynamic flag is absent. It binds to `--workspace` or the launch directory. Opening another project returns `WORKSPACE_MISMATCH`. To use Roslyn on a dynamic connection, add `--workspace <authorized-root> --roslyn-config <absolute-config>`. The authorized project's Windows long path and 8.3 short path share one session and Roslyn snapshot. Other projects use local text.
 
 See the [Skill and MCP setup guide](WinCode-Skill制作与MCP配置指南.md) for client configuration and the optional agent Skill. After rebuilding, reconnect the client's MCP server to load the updated process and tool schemas.
 
@@ -289,7 +291,9 @@ npm run delivery:verify
 
 动态模式下，智能体在每次项目工具调用及续读时，把当前任务或用户点名的项目绝对目录填入 `workspacePath`。例如 `wincode_search_text({"workspacePath":"I:/WinCode","query":"openWorkspace"})` 搜索 WinCode。`workspace_open` 使用已有的 `path` 参数。并发请求各自绑定目标目录、缓存和文件监听。网关最多保留四个按请求打开的项目，第五个会替换最久未使用的空闲项目。健康名额都在使用或初始化时返回 `WORKSPACE_BUSY`。回收期间其他已打开的项目可以继续处理请求。清理失败的项目继续占用一个名额，访问该项目时会返回 `WORKSPACE_RECOVERY_REQUIRED` 和 `restart_gateway`。纯桌面工具继续使用 PID 或窗口句柄。
 
-省略动态标志即为固定模式，工作区由 `--workspace` 或启动目录确定。请求打开其他项目会返回 `WORKSPACE_MISMATCH`。动态连接也可加 `--workspace <已授权项目> --roslyn-config <配置绝对路径>`，只有该项目使用 Roslyn，其他项目使用本地文本。
+动态连接上的文本搜索、文件大纲和上下文读取都接受项目内的绝对文件路径。项目根可使用 Windows 长路径或 8.3 短路径。源码结果里的 `nextRequest` 已带上原项目，可以直接传给 `wincode_prepare_context`。
+
+省略动态标志即为固定模式，工作区由 `--workspace` 或启动目录确定。请求打开其他项目会返回 `WORKSPACE_MISMATCH`。动态连接也可加 `--workspace <已授权项目> --roslyn-config <配置绝对路径>`。通过 Windows 长路径或 8.3 短路径访问该项目时，共用同一会话和 Roslyn 快照。其他项目使用本地文本。
 
 客户端配置和可选的智能体 Skill 安装方式见 [Skill 与 MCP 配置指南](WinCode-Skill制作与MCP配置指南.md)。重新构建后，需要重新连接客户端中的 MCP 服务器，才能加载更新后的进程和工具参数定义。
 

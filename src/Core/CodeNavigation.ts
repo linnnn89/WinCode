@@ -24,6 +24,27 @@ export function navigationPath(value: unknown, root: string): string {
   return path.relative(root, full).replace(/\\/g, '/') || '.';
 }
 
+/** Short names change the spelling of a directory component, never its depth or volume.
+ * The Gateway must confirm every alternate root before dispatching these relative arguments. */
+export function dynamicNavigationPath(value: string, root: string, rootsToConfirm: Set<string>): string {
+  if (!path.isAbsolute(value)) return value;
+  const full = path.resolve(value);
+  const volume = path.parse(full).root;
+  const rootVolume = path.parse(root).root;
+  if (path.relative(volume, rootVolume) !== '' || (process.platform === 'win32' &&
+    (path.parse(value).root.length < 2 || /^[\\/]{2}[?.][\\/]/.test(value)))) throw new Error('Path is outside-workspace.');
+  const depth = root.slice(rootVolume.length).split(path.sep).filter(Boolean).length;
+  const parts = full.slice(volume.length).split(path.sep).filter(Boolean);
+  if (parts.length < depth) throw new Error('Path is outside-workspace.');
+  const prefix = path.join(volume, ...parts.slice(0, depth));
+  const relative = navigationPath(value, prefix);
+  if (prefix !== root) {
+    if (process.platform !== 'win32') throw new Error('Path is outside-workspace.');
+    rootsToConfirm.add(prefix);
+  }
+  return relative;
+}
+
 export function validateTextSearch(options: TextSearchOptions, root: string) {
   if (typeof options.query !== 'string' || !options.query.trim() || options.query.length > 256 || /[\r\n\0]/.test(options.query))
     throw new Error('query must be a non-empty single-line literal of at most 256 characters.');
@@ -42,8 +63,8 @@ export function validateFileOutline(options: FileOutlineOptions, root: string) {
     maxOutputChars: boundedInteger(options.maxOutputChars, 8000, 2048, 32768, 'maxOutputChars') };
 }
 
-function nextRead(file: string, line: number, fileLineCount: number) {
-  return { task: 'Inspect the located source; text matches and declarations are not semantic identity.',
+function nextRead(file: string, line: number, fileLineCount: number, workspacePath?: string) {
+  return { ...(workspacePath && { workspacePath }), task: 'Inspect the located source; text matches and declarations are not semantic identity.',
     lineRanges: [{ file: file.replace(/\\/g, '/'), startLine: Math.max(1, line - 8), endLine: Math.min(fileLineCount, line + 16) }] };
 }
 
@@ -102,7 +123,7 @@ function boundedResponse(data: NavigationResponse, maxCharacters: number): Navig
   return data;
 }
 
-export async function searchText(config: WinCodeConfig, options: TextSearchOptions, operation?: OperationContext) {
+export async function searchText(config: WinCodeConfig, options: TextSearchOptions, operation?: OperationContext, workspacePath?: string) {
   const { scopePaths, maxResults, maxOutputChars } = validateTextSearch(options, config.workspaceRoot);
   // Escaping keeps regex punctuation literal; matching itself cannot introduce user regex backtracking.
   const literal = new RegExp(options.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), options.caseSensitive ? '' : 'i');
@@ -117,14 +138,14 @@ export async function searchText(config: WinCodeConfig, options: TextSearchOptio
         const end = Math.min(lines[index].length, match.index + options.query.length + 80);
         yield { file: file.replace(/\\/g, '/'), line: index + 1, column: match.index + 1,
           preview: lines[index].slice(start, end), previewStartColumn: start + 1,
-          previewTruncated: start > 0 || end < lines[index].length, nextRequest: nextRead(file, index + 1, lines.length) };
+          previewTruncated: start > 0 || end < lines[index].length, nextRequest: nextRead(file, index + 1, lines.length, workspacePath) };
       }
     }, scopePaths, operation);
   return boundedResponse({ ...scanMetadata(scan), scope: 'literal-text', query: options.query,
     caseSensitive: options.caseSensitive ?? false, scopePaths, matches: scan.items }, maxOutputChars);
 }
 
-export async function fileOutline(config: WinCodeConfig, options: FileOutlineOptions, operation?: OperationContext) {
+export async function fileOutline(config: WinCodeConfig, options: FileOutlineOptions, operation?: OperationContext, workspacePath?: string) {
   const { file, maxSymbols, maxOutputChars } = validateFileOutline(options, config.workspaceRoot);
   let fileLineCount: number | null = null, sizeBytes: number | null = null;
   const declarationsSupported = declarationExtensions.includes(path.extname(file).toLowerCase());
@@ -133,9 +154,9 @@ export async function fileOutline(config: WinCodeConfig, options: FileOutlineOpt
       fileLineCount = content.split(/\r?\n/).length;
       sizeBytes = byteLength;
       return declarationsSupported ? parseTextDeclarations(content, relativeFile, extension, () => checkOperation(operation))
-        .map(symbol => ({ ...symbol, file: symbol.file.replace(/\\/g, '/'), nextRequest: nextRead(file, symbol.line, fileLineCount!) })) : [];
+        .map(symbol => ({ ...symbol, file: symbol.file.replace(/\\/g, '/'), nextRequest: nextRead(file, symbol.line, fileLineCount!, workspacePath) })) : [];
     }, file, operation);
   return boundedResponse({ ...scanMetadata(scan), scope: 'file-declarations', file, fileLineCount, sizeBytes,
-    ...(fileLineCount !== null ? { nextRequest: nextRead(file, 1, fileLineCount) } : {}),
+    ...(fileLineCount !== null ? { nextRequest: nextRead(file, 1, fileLineCount, workspacePath) } : {}),
     declarationsSupported, symbols: scan.items }, maxOutputChars);
 }

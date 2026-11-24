@@ -14,7 +14,7 @@ import type { PreparedContextResult } from '../Core/Context.js';
 
 export function rangeCoverage(data: PreparedContextResult, originalEvidence: PreparedContextResult['evidence'],
   originalIssues: PreparedContextResult['fileIssues'], requestedRanges: NonNullable<PreparedContextResult['requestedLineRanges']>,
-  coverageDetailLimit: number) {
+  coverageDetailLimit: number, workspacePath?: string) {
     if (!requestedRanges.length) return null;
     let completeItems = 0;
     let partialItems = 0;
@@ -64,7 +64,7 @@ export function rangeCoverage(data: PreparedContextResult, originalEvidence: Pre
       // Keep the original gap intact; suggest only its intersection with the observed file.
       const correctedEnd = issue === 'line-range-out-of-bounds' ? fileIssue?.fileLineCount : undefined;
       const correction = correctedEnd !== undefined && requested.startLine <= correctedEnd ? {
-        task: 'Read the valid portion of the requested range; the original request exceeded EOF.',
+        workspacePath, task: 'Read the valid portion of the requested range; the original request exceeded EOF.',
         lineRanges: [{ file: requested.file, startLine: requested.startLine, endLine: Math.min(requested.endLine, correctedEnd) }],
         maxTokens: data.metrics.budgetTokens,
       } : undefined;
@@ -76,7 +76,7 @@ export function rangeCoverage(data: PreparedContextResult, originalEvidence: Pre
         ...(retryBlocked ? { retryBlockedReason: 'maximum-budget-without-progress',
           nextAction: 'The requested source cannot fit completely at maxTokens=65536. Use a file reader for the remaining long line instead of repeating this request.' } :
           retry ? { nextRequest: {
-          task: 'Read the missing source lines.',
+          workspacePath, task: 'Read the missing source lines.',
           lineRanges: [{ file: requested.file, startLine: retry.startLine, endLine: retry.endLine }],
           maxTokens: retryBudget,
         } } : correction ? { nextRequest: correction } : {}),

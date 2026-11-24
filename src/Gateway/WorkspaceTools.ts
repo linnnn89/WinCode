@@ -66,10 +66,11 @@ export const WORKSPACE_TOOLS = [
     allowDuringWorkspaceRecovery: true,
     requestLane: 'status',
     validate: (args, context) => {
-      if (args.toolName !== undefined && !context.tools.some(tool => tool.name === args.toolName))
+      if (args.toolName !== undefined && !context.listTools().some(tool => tool.name === args.toolName))
         throw new Error(`Tool is not registered in this instance: ${args.toolName}`);
     },
-    execute: async (args, { router, tools, schemaHash, unbound }) => {
+    execute: async (args, { router, listTools, schemaHash, unbound }) => {
+      const tools = listTools();
       const selectedTool = tools.find(tool => tool.name === args.toolName);
       const health = await router.getRuntimeHealth();
       const workspace = unbound ? null : health.activeWorkspace;

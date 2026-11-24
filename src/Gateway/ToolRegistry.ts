@@ -27,8 +27,9 @@ function declaredArguments(value: unknown, schema: InputSchema): unknown {
   return value;
 }
 
-function connectionDefinitions(dynamic: boolean, backgroundUi: boolean, isolatedKeyboard: boolean) {
-  const snapshot = definitions.map(definition => ({ ...definition, tool: structuredClone(definition.tool),
+function connectionDefinitions(dynamic: boolean, backgroundUi: boolean, isolatedKeyboard: boolean, shortcutWindowBound = false) {
+  const enabled = definitions.filter(definition => definition.tool.name !== 'wincode_ui_shortcut' || (backgroundUi && shortcutWindowBound));
+  const snapshot = enabled.map(definition => ({ ...definition, tool: structuredClone(definition.tool),
     aliases: structuredClone(definition.aliases) }));
   if (dynamic) for (const { tool, workspaceControl, desktopOnly, requestLane } of snapshot) {
     if (desktopOnly) continue;
@@ -69,10 +70,10 @@ export class ToolRegistry {
   private readonly published: Tool[];
   readonly schemaHash: string;
 
-  constructor(dynamic = false, backgroundUi = false, isolatedKeyboard = false) {
+  constructor(dynamic = false, backgroundUi = false, isolatedKeyboard = false, shortcutWindowBound = false) {
     const validator = new AjvJsonSchemaValidator(new Ajv({ strict: false, allErrors: false,
       coerceTypes: false, useDefaults: false, removeAdditional: false }));
-    const snapshot = connectionDefinitions(dynamic, backgroundUi, isolatedKeyboard);
+    const snapshot = connectionDefinitions(dynamic, backgroundUi, isolatedKeyboard, shortcutWindowBound);
     this.published = structuredClone(publishedTools(snapshot).filter(tool => !backgroundUi ||
       (tool.name !== 'wincode_ui_click' && tool.name !== 'wincode_ui_set_expanded')));
     this.schemaHash = toolsContractHash(this.published);

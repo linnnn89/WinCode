@@ -117,6 +117,9 @@ internal static class UiTreeReader
         Read("name", element.Properties.Name, v => node.Name = Clip(v, "name"));
         Read("automationId", element.Properties.AutomationId, v => node.AutomationId = Clip(v, "automationId"));
         Read("className", element.Properties.ClassName, v => node.ClassName = Clip(v, "className"));
+        if (node.ClassName == UiActionExecutor.WpfShortcutClass)
+            Read("shortcutStatus", element.Properties.ItemStatus, v => node.ShortcutStatus =
+                v is "ready" or "pending" or "routed" or "failed" ? v : "unknown");
         Read("controlType", element.Properties.ControlType, v => node.ControlType = v.ToString());
         Read("isEnabled", element.Properties.IsEnabled, v => node.IsEnabled = v);
         Read("isOffscreen", element.Properties.IsOffscreen, v => node.IsOffscreen = v);

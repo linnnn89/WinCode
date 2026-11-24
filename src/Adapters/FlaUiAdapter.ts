@@ -294,9 +294,9 @@ export class FlaUiAdapter implements IAdapter {
     const action = request.action ?? 'inspect';
     const backgroundOnly = this.config.backgroundUi && action !== 'listWindows' ? true : request.backgroundOnly;
     if ((this.config.backgroundUi || backgroundOnly) &&
-        action !== 'inspect' && action !== 'setValue' && action !== 'listWindows')
+        action !== 'inspect' && action !== 'setValue' && action !== 'listWindows' && action !== 'wpfShortcut')
       return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
-        errorCode: UiErrorCodes.UI_BACKGROUND_ONLY, errorMessage: 'Background UI permits window listing, inspection and direct ValuePattern writes.' };
+        errorCode: UiErrorCodes.UI_BACKGROUND_ONLY, errorMessage: 'Background UI permits window listing, inspection, authorized ValuePattern writes and declared WPF shortcuts.' };
     try {
       if (this.config.backgroundUi && request.backgroundOnly === false) throw new Error('This connection requires backgroundOnly.');
       if ((request.backgroundOnly !== undefined && typeof request.backgroundOnly !== 'boolean') ||
@@ -310,6 +310,9 @@ export class FlaUiAdapter implements IAdapter {
         errorCode: UiErrorCodes.INVALID_ARGUMENT, errorMessage: (error as Error).message };
     }
     const normRequest = { ...request, requestId, backgroundOnly };
+    if (action === 'wpfShortcut' && (!this.config.backgroundUi || !sameUiWindow(request, this.config.uiShortcutWindow)))
+      return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
+        errorCode: UiErrorCodes.UI_WRITE_TARGET_DENIED, errorMessage: 'The launcher did not authorize this window for WPF shortcuts.' };
     if (action === 'type' && !this.config.isolatedKeyboard)
       return { schemaVersion: '1.0', protocolVersion: '1.0', requestId, success: false,
         errorCode: UiErrorCodes.UI_KEYBOARD_DISABLED, errorMessage: 'Global keyboard input requires an explicitly isolated keyboard session.' };
@@ -399,7 +402,8 @@ export class FlaUiAdapter implements IAdapter {
         }
 
         // Older helpers can ignore new restrictions. Check before sending the target or input text.
-        const requiredVersion = this.config.backgroundUi || backgroundOnly || action === 'type' ? UI_INSPECTION_VERSIONS.PROTECTED_UI :
+        const requiredVersion = action === 'wpfShortcut' ? UI_INSPECTION_VERSIONS.WPF_SHORTCUT :
+          this.config.backgroundUi || backgroundOnly || action === 'type' ? UI_INSPECTION_VERSIONS.PROTECTED_UI :
           normRequest.scopePath && isUiAction(action) ? UI_INSPECTION_VERSIONS.PARENT_SCOPE : 0;
         if (requiredVersion) {
           const capability = await this.executeHost({ action: 'health', requestId: `${requestId}-capability`, pid: 0,
@@ -453,9 +457,14 @@ export class FlaUiAdapter implements IAdapter {
       const protectedUi = this.config.backgroundUi || request.backgroundOnly;
       if (protectedUi) {
         const inspection = (request.action ?? 'inspect') === 'inspect';
-        const windowOperation = inspection || request.action === 'setValue';
+        const shortcut = request.action === 'wpfShortcut';
+        const windowOperation = inspection || request.action === 'setValue' || shortcut;
         if (parsed.success && windowOperation && (!sameUiWindow(request, parsed) || parsed.requestId !== request.requestId ||
             request.action === 'setValue' && (parsed.action !== 'setValue' || parsed.actionMethod !== 'ValuePattern') ||
+            shortcut && (parsed.action !== 'wpfShortcut' || parsed.actionMethod !== 'WpfRoutedKey' ||
+              parsed.status !== 'shortcut-requested' || parsed.backgroundOnly !== true ||
+              parsed.actionTarget?.automationId !== request.targetAutomationId || parsed.actionTarget?.className !== 'WinCode.WpfBackgroundShortcut.v1' ||
+              (parsed.inspectionVersion ?? 0) < UI_INSPECTION_VERSIONS.WPF_SHORTCUT) ||
             !Number.isSafeInteger(parsed.inspectionVersion) || parsed.inspectionVersion! < UI_INSPECTION_VERSIONS.PROTECTED_UI))
           return { schemaVersion: '1.0', protocolVersion: '1.0', requestId: request.requestId, success: false,
             errorCode: UiErrorCodes.VERSION_MISMATCH, errorMessage: 'Background inspection did not confirm the requested window and helper version.' };
@@ -636,7 +645,8 @@ export class FlaUiAdapter implements IAdapter {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, WINCODE_OWNER_PID: String(process.pid),
             WINCODE_ISOLATED_KEYBOARD: this.config.isolatedKeyboard && !this.config.backgroundUi ? '1' : '0',
-            WINCODE_UI_WRITE_WINDOW: this.config.uiWriteWindow ? JSON.stringify(this.config.uiWriteWindow) : '' },
+            WINCODE_UI_WRITE_WINDOW: this.config.uiWriteWindow ? JSON.stringify(this.config.uiWriteWindow) : '',
+            WINCODE_UI_SHORTCUT_WINDOW: this.config.backgroundUi && this.config.uiShortcutWindow ? JSON.stringify(this.config.uiShortcutWindow) : '' },
           cwd,
         });
 

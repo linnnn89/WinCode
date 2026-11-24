@@ -119,8 +119,8 @@ public static class Program
             }
 
             if (request.BackgroundOnly) {
-                if (request.Action is not (null or "inspect" or "setValue")) {
-                    WriteErrorResponse(request.RequestId, "UI_BACKGROUND_ONLY", "Background UI permits inspection and direct ValuePattern writes.");
+                if (request.Action is not (null or "inspect" or "setValue" or "wpfShortcut")) {
+                    WriteErrorResponse(request.RequestId, "UI_BACKGROUND_ONLY", "Background UI permits inspection, authorized ValuePattern writes and declared WPF shortcuts.");
                     return;
                 }
                 if (request.Pid <= 0 || string.IsNullOrWhiteSpace(request.Hwnd)) {

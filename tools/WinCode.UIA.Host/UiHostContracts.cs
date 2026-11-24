@@ -79,8 +79,8 @@ public sealed record HostBuildIdentity(string Version, string? InformationalVers
 public class InspectResponse
 {
     public HostBuildIdentity HostIdentity { get; } = HostBuildIdentity.Current;
-    /// <summary>7 增加绑定窗口写入、独立桌面发键协议以及可验证的窗口截图。</summary>
-    public int InspectionVersion { get; set; } = 7;
+    /// <summary>8 支持已授权窗口中由应用声明的 WPF 快捷键。</summary>
+    public int InspectionVersion { get; set; } = 8;
     public ScopeResultDto? ScopeResult { get; set; }
     public long? HelperPeakWorkingSetBytes { get; set; }
     public QueryResultDto? QueryResult { get; set; }
@@ -129,6 +129,7 @@ public class UiNodeDto
 {
     public List<string>? PropertyIssues { get; set; }
     public UiStatesDto? States { get; set; }
+    public string? ShortcutStatus { get; set; }
     public int Id { get; set; }
     public int? ParentId { get; set; }
     public string? AutomationId { get; set; }

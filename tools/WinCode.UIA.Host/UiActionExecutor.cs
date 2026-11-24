@@ -24,8 +24,9 @@ internal static class UiActionExecutor
     private const int FocusPollMs = 20;
     private const int MaxInputLength = 4096;
     private const int MaxMessageLength = 200;
+    internal const string WpfShortcutClass = "WinCode.WpfBackgroundShortcut.v1";
 
-    internal static bool IsAction(string? action) => action is "click" or "type" or "setValue" or "setExpanded";
+    internal static bool IsAction(string? action) => action is "click" or "type" or "setValue" or "setExpanded" or "wpfShortcut";
 
     /// <summary>协议层前置校验：定位条件组合、字段形状与输入文本长度必须先成立。</summary>
     internal static bool ValidActionRequest(InspectRequest request)
@@ -37,6 +38,9 @@ internal static class UiActionExecutor
         return request.Action switch
         {
             "click" => request.InputText == null,
+            "wpfShortcut" => request.BackgroundOnly && request.Pid > 0 && !string.IsNullOrWhiteSpace(request.Hwnd) &&
+                request.TargetAutomationId != null && request.TargetName == null && request.TargetControlType == null &&
+                request.InputText == null && !request.ClearBefore && request.Expanded == null,
             "setExpanded" => request.InputText == null && !request.ClearBefore && request.Expanded != null,
             "type" => request.InputText is { Length: > 0 and <= MaxInputLength },
             "setValue" => !request.ClearBefore && request.InputText is { Length: <= MaxInputLength },
@@ -55,6 +59,8 @@ internal static class UiActionExecutor
                 $"Could not resolve target window for PID {request.Pid} / HWND {request.Hwnd}.", candidateWindows);
 
         using var automation = new UIA3Automation();
+        // Windows normally focuses a control before Invoke or SetValue. Shared-desktop calls must bypass that step.
+        if (request.BackgroundOnly) automation.NativeAutomation2.AutoSetFocus = 0;
         var root = automation.FromHandle(targetHwnd);
         if (root == null)
             return Failed(request, "UIA_ELEMENT_NOT_AVAILABLE",
@@ -94,6 +100,9 @@ internal static class UiActionExecutor
 
         return WithScope(request.Action switch
         {
+            "wpfShortcut" => RequestWpfShortcut(request, target, targetHwnd, evidence, identity, cancellationToken),
+            "click" when evidence.ClassName == WpfShortcutClass => Failed(request, "UI_WRITE_TARGET_DENIED",
+                "This shortcut requires a shortcut window binding.", identity, evidence),
             "click" => Click(request, target, evidence, identity),
             "type" => Type(request, automation, target, targetHwnd, evidence, identity, cancellationToken),
             "setValue" => SetValue(request, target, targetHwnd, evidence, identity),
@@ -191,10 +200,10 @@ internal static class UiActionExecutor
 
     private sealed record WriteWindow(int Pid, string Hwnd, string ProcessStartFileTime);
 
-    private static bool BoundWriteAllowed(IntPtr hwnd, int pid, AutomationElement element)
+    private static bool BoundWriteAllowed(IntPtr hwnd, int pid, AutomationElement element, string bindingVariable)
     {
         try {
-            var binding = JsonSerializer.Deserialize<WriteWindow>(Environment.GetEnvironmentVariable("WINCODE_UI_WRITE_WINDOW") ?? "", HostJson.JsonOptions);
+            var binding = JsonSerializer.Deserialize<WriteWindow>(Environment.GetEnvironmentVariable(bindingVariable) ?? "", HostJson.JsonOptions);
             if (binding == null || binding.Pid != pid || !TryReadWindowHandle(binding.Hwnd, out long handle) || hwnd.ToInt64() != handle ||
                 !long.TryParse(binding.ProcessStartFileTime, out long start) || NativeWindows.GetAncestor(hwnd, NativeWindows.GA_ROOT) != hwnd)
                 return false;
@@ -222,7 +231,7 @@ internal static class UiActionExecutor
         if (readOnly)
             return Failed(request, "VALUE_READONLY", "Target control reports a read-only value.", identity, evidence);
 
-        if (request.BackgroundOnly && !BoundWriteAllowed(hwnd, identity.Pid, target))
+        if (request.BackgroundOnly && !BoundWriteAllowed(hwnd, identity.Pid, target, "WINCODE_UI_WRITE_WINDOW"))
             return Failed(request, "UI_WRITE_TARGET_DENIED", "The target must be the launcher's bound window in a matching background process.", identity, evidence);
         try { value.SetValue(request.InputText!); }
         catch (OperationCanceledException) { throw; }
@@ -231,6 +240,23 @@ internal static class UiActionExecutor
             return Failed(request, "ACTION_FAILED", Shorten(error.Message), identity, evidence);
         }
         return Succeeded(request, evidence, identity, "ValuePattern", "value-set", request.InputText!.Length);
+    }
+
+    private static InspectResponse RequestWpfShortcut(InspectRequest request, AutomationElement target, IntPtr hwnd,
+        UiTargetDto evidence, ResolvedWindow identity, CancellationToken cancellationToken)
+    {
+        if (evidence.AutomationId != request.TargetAutomationId || evidence.ClassName != WpfShortcutClass ||
+            evidence.ControlType != "Custom" || !target.Properties.FrameworkId.TryGetValue(out var framework) || framework != "WPF" ||
+            !target.Patterns.Invoke.TryGetPattern(out var invoke))
+            return Failed(request, "TARGET_NOT_REGISTERED", "The control is not an application-declared WPF shortcut.", identity, evidence);
+        if (evidence.IsEnabled != true)
+            return Failed(request, "TARGET_DISABLED", "The shortcut is disabled or its enabled state is unavailable.", identity, evidence);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!BoundWriteAllowed(hwnd, identity.Pid, target, "WINCODE_UI_SHORTCUT_WINDOW"))
+            return Failed(request, "UI_WRITE_TARGET_DENIED", "The authorized shortcut window must be in a matching background process.", identity, evidence);
+        var response = RunPattern(request, evidence, identity, "WpfRoutedKey", "shortcut-requested", invoke.Invoke);
+        response.BackgroundOnly = true;
+        return response;
     }
 
     private static InspectResponse RunPattern(InspectRequest request, UiTargetDto evidence, ResolvedWindow identity,

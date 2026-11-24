@@ -1,305 +1,209 @@
-# WinCode 架构与数据流
+# WinCode 架构与数据流说明
 
-**适用源码版本：0.17.0；更新：2026-10-08（北京时间）。[PR #52](https://github.com/linnnn89/WinCode/pull/52) 已合并为 `4789771f`，PR 检查及合并后 CI 成功。尚未发布 GitHub Release。未完成任务见[迭代计划](docs/next-iteration.md)。**
+适用源码版本：**0.17.1**。本文描述当前仓库源码中已实现的分层架构、请求数据流、资源上限与工程边界；未完成的改进与待验证项统一维护在 [迭代计划](docs/next-iteration.md)，版本演进记录见 [CHANGELOG](CHANGELOG.md)。
 
-本说明描述当前源码中已实现的结构。历史实测结果按需从对应 PR 或 Git 历史查询。源码版本、磁盘构建和客户端当前连接是三个不同对象，不能互相替代。
+> 注意区分三个独立状态：**源码版本**、**磁盘构建产物**（`dist/` 与原生 Release 目录）以及**客户端当前连接的进程**。更新源码或构建产物后，必须由客户端重连 MCP 服务器才能加载新进程。
 
-N4 实现：`DesignTimeBuild` 使用已有 SDK 的 ProjectCollection 做原项目求值，保留原中间目录的 Compile 排除规则及自定义导入；目标运行仍交给 MSBuildWorkspace，使用每 Host UUID 的私有 IntermediateOutputPath。Configuration/TargetFramework 必须为字面目录段，规范化后的输出必须位于所属 UUID 内；原求值的无效项目异常保持 `PROJECT_LOAD_FAILED`。输入扫描仅过滤已判定不参与默认编译的原中间产物，实际文档/显式输入仍校验，自定义 Compile 保守处理。`OwnedBuildOutputs` 记录原生所有权清单，正常关闭回收；`RoslynHostClient` 在实际退出后调用 `DesignTimeArtifacts` 回收所属命名空间。内部 inputPolicy 为 2，缺失/旧策略 Host 的拒绝和进程回收已有专项测试。当前发布目录通过交付身份核验；复杂 target、任意动态项目图及断电后的孤儿产物仍不在本地通过范围内。
+## 1. 整体定位与模块分层
 
-项目引用加载：入口及多目标项目继续使用显式指定的框架；单目标引用项目先按自身声明求值，再通过所属 Host 目录中的 props 将框架覆盖限定到该引用项目。覆盖在 Directory.Build.props/SDK 包导入前生效，并保留原 CustomBeforeDirectoryBuildProps 导入，避免入口的全局 Windows 框架污染普通 .NET 类库的依赖解析。此策略不承诺为多目标引用自动挑选最近兼容框架。分析器/生成器仍被排除；queryComplete=false 和 incomplete 是保守契约，不能因编译诊断清零就改为全项目完整。
+WinCode 是运行在本机的 **MCP 工具网关**：接收编程智能体的结构化请求，采集有界的代码或桌面 UI 证据，并将正文与完整性/不确定性元数据一并返回。模型推理位于客户端侧；WinCode 自身不包含模型推理服务或向量数据库。
 
-## 1. 整体定位与结构
-
-WinCode 是一个运行在本机的 **MCP 工具网关**：接收编码 Agent 的结构化请求，组织代码或桌面证据，再把正文与证据边界一起返回。Agent 的模型推理在客户端侧；WinCode 自身没有模型推理服务或向量数据库。
-
-主体采用**分层单体 + 外部工具适配器 + 进程外桌面取证**。每个 ToolRouter 固定一个工作区。原生 Gateway 可按请求选择不同的 ToolRouter，外部上游与 UI Helper 各有独立生命周期。
+整体采用**分层网关 + 外部工具适配器 + 进程外原生辅助程序（Host）**结构。原生辅助进程的隔离用于控制超时、故障回收与依赖边界，**不构成操作系统级安全沙盒**。
 
 ```mermaid
 flowchart TB
-  Client["Codex / 其他 MCP 客户端\n模型推理、请求选择、用户授权"]
+  Client["MCP 客户端（Codex 等）\n模型推理 · 工具选择 · 启动授权"]
   subgraph Node["WinCode Node 进程"]
-    Gate["Gateway\nMCP 接入 · 工具契约 · 参数校验 · 响应封装"]
-    Router["ToolRouter\n组件装配 · 用例入口 · 固定根与资源恢复 · 生命周期"]
-    Use["用例与证据处理\nContext / Architecture / Impact / Refactor / UiReview"]
-    State["横向状态与资源\nWorkspace · Session · Cache · Watch · ResourceManager"]
-    Adapters["适配器\nLocalTextAdapter / RoslynAdapter · RepomixAdapter · FlaUiAdapter"]
+    Gate["Gateway\nMCP 接入 · Schema 校验 · 准入限流 · 响应封装"]
+    Dyn["DynamicWorkspaces（动态模式可选）\n最多 4 个按需工作区实例 · LRU 回收"]
+    Router["ToolRouter（单工作区协调中心）\n组件装配 · 用例调度 · 同根恢复 · 生命周期"]
+    Use["用例与证据处理\nContext · Architecture · Impact · Refactor · UiReview"]
+    State["状态与边界管理\nWorkspace · Session · Cache · Watch · ResourceManager"]
+    Adapters["适配器层\nLocalTextAdapter · RoslynAdapter · RepomixAdapter · FlaUiAdapter"]
+    Gate --> Dyn
     Gate --> Router
+    Dyn --> Router
     Router --> Use
     Router --> State
     Use --> Adapters
     Router --> Adapters
   end
   Client <-->|"MCP / stdio"| Gate
-  Adapters <-->|"有界 JSONL / stdio"| CodeHost["WinCode.Code.Host\n直接 Roslyn / MSBuildWorkspace"]
-  Adapters <-->|"Node 直启 JS / 输出文件"| Repomix["已安装的 Repomix CLI\n缺失时使用内置打包器"]
-  Adapters <-->|"stdin 请求 / stdout JSON"| Host[".NET UIA Host\nFlaUI · Win32 · 截图 · 审计"]
-  Host -->|"只读取证"| App["目标 Windows 应用\n独立 PID / HWND"]
-  State <--> Disk["本地文件系统\n源码 · 项目文件 · 缓存 · trash"]
-  Tray["可选 WinForms 托盘/设置\n被动状态 · 用户手动释放"] <-->|"同用户/会话认证 Named Pipe"| Router
+  Adapters <-->|"有界 JSONL / stdio"| CodeHost["WinCode.Code.Host\nRoslyn / MSBuildWorkspace"]
+  Adapters <-->|"Node 直启 JS 入口"| Repomix["已安装的 Repomix CLI\n未安装时回退内置打包器"]
+  Adapters <-->|"stdin JSON / stdout JSON"| Host["WinCode.UIA.Host\nFlaUI · Win32 · 截图 · 审计 · 文件移动校验"]
+  Host -->|"有界取证 / 受控 UIA 操作"| App["目标 Windows 应用\n独立 PID / HWND"]
+  State <--> Disk["本地文件系统\n源码 · 项目声明 · 缓存 · 本地回收目录"]
+  Tray["可选 WinForms 托盘（WinCode.Tray）\n被动状态查看 · 手动释放 Roslyn 内存"] <-->|"同用户/会话认证 Named Pipe"| Router
   Use -->|"有界读取"| Disk
+  Host -->|"--move-to-trash 句柄校验"| Disk
   CodeHost --> Disk
   Repomix --> Disk
 ```
 
-图中箭头表示主要调用或数据联系，不表示每条请求都经过全部组件。原生 Host 的进程隔离用于故障与生命周期控制，**不等于操作系统安全沙盒**。
+### 核心模块职责
 
-Codex 可选择 Skill 按需入口：首次使用才创建交互执行会话，`SkillSessionCli` 使用现有 MCP SDK 连接上图中的 Gateway，后续查询复用同一连接。入口启动或读取本地状态不会创建 Gateway；首次工具请求完成工作区、构建和提供方核验后才派发业务。完整 MCP 结果和原始图片作为本地附件交付，入口不重写工具契约或自动重放请求。关闭/所属入口死亡沿用 Gateway 与原生 Host 的清理链路。该模式需禁用客户端自动启动的 WinCode 条目，不能通过 Gateway 内部延迟初始化实现客户端侧零进程；使用方法见 [Skill 会话手册](skills/wincode/references/diagnostics.md#skill-按需会话)。
+| 层 / 模块 | 核心职责 | 设计边界与源码入口 |
+| --- | --- | --- |
+| 启动层 | 解析 CLI 参数（工作区模式、Git/UI/Roslyn 授权），装配服务并管理优雅退出 | [index.ts](src/index.ts) |
+| 可选 Skill 客户端 | 持久终端按需连接、会话复用、本地结果文件回执及客户端只读/单层展开 UI 编排 | [SkillSession.ts](src/Client/SkillSession.ts)、[SkillSessionCli.ts](src/Client/SkillSessionCli.ts)、[ReadonlyUiRecipes.ts](src/Client/ReadonlyUiRecipes.ts) |
+| Gateway | 生成连接级工具列表与 Schema、剔除未知参数、控制并发准入与响应裁剪 | [McpServer.ts](src/Gateway/McpServer.ts)、[ToolRegistry.ts](src/Gateway/ToolRegistry.ts) |
+| 工作区路由与协调 | `ToolRouter` 绑定单个工作区根并管理其锁与恢复；`DynamicWorkspaces` 在动态模式下按请求目录调度多个 `ToolRouter` | [ToolRouter.ts](src/Core/ToolRouter.ts)、[DynamicWorkspaces.ts](src/Core/DynamicWorkspaces.ts) |
+| 核心契约与边界 | 定义符号、上下文、UI 操作、取消信号、文件系统与句柄回收站边界 | [CodeQueries.ts](src/Core/CodeQueries.ts)、[UiContracts.ts](src/Core/UiContracts.ts)、[FileSystemBoundary.ts](src/Core/FileSystemBoundary.ts)、[TrashFileMove.ts](src/Core/TrashFileMove.ts) |
+| 用例层 | 项目图分析、上下文组装、变更影响评估、重构检查清单、UI→源码候选映射 | [Context.ts](src/Core/Context.ts)、[CompositeTools](src/CompositeTools) |
+| 适配器层 | 封装子进程协议、超时、取消与错误分类；严格区分 `local-text` 与 `roslyn` 数据来源 | [Adapters](src/Adapters) |
+| 原生辅助程序 | `WinCode.UIA.Host`（UIA 取证/操作、窗口截图、审计、普通文件校验移动）；`WinCode.Code.Host`（Roslyn 语义快照）；`WinCode.Tray`（可选托盘） | [WinCode.UIA.Host](tools/WinCode.UIA.Host/Program.cs)、[WinCode.Code.Host](tools/WinCode.Code.Host/WorkspaceSession.cs)、[WinCode.Tray](tools/WinCode.Tray/Program.cs) |
+| 构建与交付层 | 锁定依赖还原、原生 Release 发布、回归验证、交付清单与 Skill 同步 | [check.mjs](scripts/check.mjs)、[delivery-manifest.mjs](scripts/delivery-manifest.mjs)、[sync-skill.mjs](scripts/sync-skill.mjs) |
 
-0.17.0 的客户端可显式调用 readonly-ui／checkbox-audit，或调用独立的 expand-ui 导航。后者接受实际祖先 scopePath，在所选父范围内定位、最多展开一次，并通过再次解析父路径读回子控件状态；不是服务器批处理、原子快照或自动递归引擎。标准 inspect/review/setExpanded 的路径需 UIA Host inspectionVersion 5，旧 Host 不可忽略范围继续操作。click/type 的定位契约保持原样；应用事件可能带来前台变化。具体字段与结果边界见 [UI 手册](skills/wincode/references/ui.md) 和 [客户端工作流](docs/hybrid-readonly-orchestration.md)。
+**工具暴露策略**：`ToolRegistry` 根据启动配置生成连接级工具表并计算 `schemaHash`。默认标准连接发布 **20 个**工具名称（19 个主工具 + 列出的别名 `wincode_analyze_change_impact`，另有隐藏兼容别名 `wincode_workspace_open`）；启用 `--background-ui` 时移除 `wincode_ui_click` 与 `wincode_ui_set_expanded`（18 个）；在此基础上通过 `--ui-shortcut-window` 绑定后台窗口后，额外暴露 `wincode_ui_shortcut`（19 个）。`ExtensionManager` 仅保留内部兼容接口，无外部插件加载机制。
 
-| 层 / 模块 | 负责什么 | 设计边界与源码入口 |
-|---|---|---|
-| 启动层 | 解析 workspace/development 参数，创建 Router 和 MCP Server，处理退出 | [index.ts](src/index.ts)；当前入口以默认配置和 CLI 参数启动，不是通用配置中心 |
-| 可选 Skill 客户端 | 按需连接、任务内复用、附件交付与显式关闭 | [SkillSession](src/Client/SkillSession.ts)、[SkillSessionCli](src/Client/SkillSessionCli.ts)；运行于持久执行会话，不注册第二个 MCP 服务器或常驻服务 |
-| Gateway | 列举工具、校验输入、执行工具、封装结果 | [McpServer](src/Gateway/McpServer.ts)、[ToolRegistry](src/Gateway/ToolRegistry.ts)；不直接调用适配器字段 |
-| ToolRouter | 创建并组合组件，提供用例入口，协调请求与工作区生命周期 | [ToolRouter](src/Core/ToolRouter.ts)；这是装配与协调中心，不只是名称路由表 |
-| 核心能力契约 | 定义符号、引用、打包、UI、操作取消等数据类型 | [CodeQueries](src/Core/CodeQueries.ts)、[ContextPacking](src/Core/ContextPacking.ts)、[UiContracts](src/Core/UiContracts.ts)、[OperationContext](src/Core/OperationContext.ts) |
-| 用例层 | 项目结构分析、上下文组织、影响评估、重构建议、UI→源码候选 | [Context](src/Core/Context.ts)、[CompositeTools](src/CompositeTools)；消费窄接口，保留来源与不完整状态 |
-| 适配器层 | 上游协议、响应解析、超时、失败降级及子进程管理 | [Adapters](src/Adapters)；Roslyn 与 local-text 的来源分开标识 |
-| 原生 Host | 按 PID/HWND 取证，执行有界 UIA 搜索及截图 | [Program.cs](tools/WinCode.UIA.Host/Program.cs)、[BoundedUiSearch](tools/WinCode.UIA.Host/BoundedUiSearch.cs)、[UiAudit](tools/WinCode.UIA.Host/UiAudit.cs) |
-| 构建交付层 | 锁定构建、回归、stdio 验证、产物身份、Skill 一致性 | [check.mjs](scripts/check.mjs)、[delivery-manifest](scripts/delivery-manifest.mjs)、[sync-skill](scripts/sync-skill.mjs) |
-
-`ExtensionManager` 目前保留兼容接口，没有内置注册项，不承担实际插件生态或工具发现职责。Gateway 当前列出 19 个工具名称，其中包含影响分析别名；工具名称数量不等于独立业务能力数量。
-
-## 2. 一次请求怎样通过系统
+## 2. 请求处理生命周期与准入限流
 
 ```mermaid
 sequenceDiagram
   participant A as MCP 客户端
-  participant G as Gateway / Registry
-  participant R as ToolRouter
+  participant G as Gateway / ToolRegistry
+  participant R as DynamicWorkspaces / ToolRouter
   participant U as 用例 / 适配器
-  participant E as 文件或外部进程
-  A->>G: tools/call：名称 + JSON 参数
-  G->>G: 检查退出/取消、工具名称、Schema
-  G->>G: 剔除未知字段，检查已知字段组合
-  alt 参数无效
-    G-->>A: 错误；业务能力不执行
-  else tools/list 或 hello
-    G->>G: 获取 4 个轻量槽之一，直接读取已知状态
-    G-->>A: 状态或 SERVER_BUSY
-  else 普通请求
-    G->>G: 校验 64 KiB 参数并获取 32 个业务槽之一
-    G->>R: acquireRequestSlot(signal)
-    R->>R: 等待同根恢复结束，增加在途计数
-    G->>U: 经 Router 执行对应能力
-    U->>E: 有界读取 / 上游 RPC / Helper 请求
-    E-->>U: 数据、错误或不完整结果
-    U-->>G: 结果 + 来源 + 覆盖/降级状态
-    G->>G: 按该工具的响应规则封装、裁剪
-    G-->>A: MCP 文本 / 可选图片
-    G->>R: finally 释放在途计数
-  else 固定模式 workspace_open
-    G->>R: 先校验固定根；一致时才进入工作区互斥锁
-    alt 请求其他根
-      R-->>G: WORKSPACE_MISMATCH，不排空、不修改资源
-    else 同根健康确认
-      R->>R: 读取概览，保留 Host，不等待业务排空
-    else 同根已知故障恢复
-      R->>R: 排空、重绑或重置；失败保留恢复状态
-    end
-    R-->>G: 工作区摘要或领域错误
-    G-->>A: 有界摘要
+  participant E as 本地文件或原生子进程
+  A->>G: tools/call（工具名 + JSON 参数）
+  G->>G: 检查关闭状态、原始 JSON <= 64 KiB、工具名与 Schema
+  G->>G: 剔除未声明字段，校验已知字段约束（无隐式类型转换）
+  alt 参数不合法或未知工具
+    G-->>A: 返回参数错误或 JSON-RPC -32602
+  else tools/list 或 wincode_hello_world
+    G->>G: 申请 4 个轻量状态槽之一，读取已知内存状态
+    G-->>A: 返回状态摘要或 SERVER_BUSY
+  else 业务请求
+    G->>G: 申请 32 个并发业务槽之一（排队计入请求总 deadline）
+    G->>R: 解析固定根或动态 workspacePath，获取在途槽位
+    G->>U: 传入剩余 deadline 与取消 signal 执行能力
+    U->>E: 有界文件扫描 / Code Host RPC / UIA Host 单次调用
+    E-->>U: 返回数据、局部缺口或领域错误
+    U-->>G: 结果 + 数据源标识 + 完整性元数据
+    G->>G: 检查截止时间，按输出预算序列化裁剪
+    G-->>A: 返回 MCP JSON 文本块（及可选截图块）
+    G->>R: 异步清理完成后归还在途槽位与业务容量
   end
 ```
 
-**输入契约只有一个注册来源。** WorkspaceTools、CodeTools、UiTools 将 Schema、额外校验和执行函数组织在同一工具定义中；ToolRegistry 同时生成工具列表和分发索引，并计算 schemaHash。
+### 准入、超时与取消规则
 
-**容忍未知字段，严格校验已知字段。** 未声明字段可出现在协议请求中，但会在递归整理参数时被剔除，不能影响业务或原生请求；声明字段不做字符串→数字等隐式类型转换。例如，拼错 `lineRanges` 不会自动启用范围检索。
+- **单一契约源与字段清洗**：`WorkspaceTools`、`CodeTools`、`UiTools` 在同一处定义 Schema、附加校验与执行器。协议层容忍未声明字段但会在进入业务逻辑前递归剔除，且不对已声明字段做字符串转数字等隐式转换。
+- **双通道容量控制**：每个 Gateway 实例最多同时受理 **32 个**未完成业务请求与 **4 个**轻量状态请求（`hello` / `tools/list`）；原始参数在归一化前限制为 **64 KiB UTF-8 JSON**。满额时直接返回 `SERVER_BUSY`（`workStarted: false`），不抢占在途请求。
+- **公平互斥与截止时间传递**：Roslyn、UIA 与工作区恢复各自维护 FIFO 互斥队列，取消排队中的请求会立即移除等待节点；已进入执行的请求取消后，须等待子进程或句柄实际清理完毕才归还容量。只读工具若在返回后已超过请求 deadline 则按超时处理；具有副作用的工具（如文件移入回收站或已执行的 UI 动作）在收尾阶段超时仍保留实际已发生的状态结果（如 `completed` / `partial`），避免调用方误判为“未执行”而重复操作。
 
-互斥等待节点采用 FIFO，排队取消会立即删除实际节点，正在执行的任务仍在清理完成后归还执行权。运行中取消在实际清理后才归还受理容量。启动、同根恢复和适配器等待共用一份受理归属与 deadline；启动等待取消后从 Set 删除实际节点，不为每轮取消保留 Promise 回调。
-
-**有界受理和实际执行分开。** 每实例最多 32 个未完成业务请求（含 workspace_open），hello/tools/list 共享 4 个轻量槽。既有 Roslyn/UI/恢复互斥决定 FIFO 等待；其他已有并行能力继续并行。满额在执行前返回 SERVER_BUSY，不驱逐先来者或自动重放。恢复占用业务容量，但不计入它自己等待排空的 inFlight；关闭和手动释放同时考虑未完成受理与实际清理。
-
-原始参数含未知字段，在归一化前按 UTF-8 JSON 限制为 64 KiB。外层预算包含排队，Router/Adapter 使用剩余 deadline。Router 与准入租约使用同一截止时复用计时器；独立更短的预算保留自己的计时器，异常路径按实际操作上下文保留 REQUEST_TIMEOUT。MCP 在工具执行返回后再次检查截止，只读工具不返回已过期的成功结果；回收站工具保留已确定的 completed/partial 及实际路径，移动前仍检查取消，移动后完成元数据收尾。租约收尾同时读取实际失败和取消原因，使同步截止检查或更短的适配器预算也计入 timedOut，实际清理完成后才归还容量。客户端取消/断连仍不保证最终响应送达，也不表示副作用回滚。health.admission 给出计数和等待/执行耗时；hello 仅读取缓存磁盘观察，诊断才刷新统计。这些限制不能消除 SDK 解析帧的瞬时内存，也不提供挂起 OS I/O 的强制终止保证。
-
-## 3. 代码证据的数据流
+## 3. 代码分析与上下文数据流
 
 ```mermaid
 flowchart LR
-  Input["任务 + 已知位置"] --> Route{"已有何种定位信息？"}
-  Route -->|"lineRanges"| Lines["按指定文件/行范围读取"]
-  Route -->|"scopeFiles + symbol"| Local["文件内声明匹配\n局部窗口，语义覆盖不完整"]
-  Route -->|"scopeFiles"| Files["指定文件预览\n或有预算的全文"]
-  Route -->|"尚无明确范围"| Discover["任务关键词 / 候选 / focusAreas\nRoslyn 查询或本地文本"]
-  Discover --> Select["候选排序与去重\n选取有限文件"]
-  Lines --> Evidence["Evidence\n文件 · 实际行范围 · 正文 · 定位方式"]
+  Input["任务描述 + 定位参数"] --> Route{"提供了何种范围？"}
+  Route -->|"lineRanges"| Lines["按指定文件与行区间读取"]
+  Route -->|"scopeFiles + symbol"| Local["文件内声明附近窗口读取\nsymbolCoverage = unknown"]
+  Route -->|"scopeFiles"| Files["限定文件预览或有预算全文"]
+  Route -->|"未指定排他范围"| Discover["提取关键词 / candidateFiles / focusAreas\nRoslyn 或 local-text 批量扫描（最多 4 词）"]
+  Discover --> Select["候选排序与去重"]
+  Lines --> Evidence["收集源码片段与行级边界"]
   Local --> Evidence
   Files --> Evidence
   Select --> Evidence
-  Evidence --> Pack["需要时补充打包\n显式候选闭集使用内置打包"]
-  Pack --> Budget["ContextResponse 最终序列化\n正文、元数据、转义共同计费"]
-  Budget --> Result["最终可见证据\n覆盖范围 · 缺失原因 · 后续请求"]
+  Evidence --> Pack["按需打包（显式候选闭集走内置打包）"]
+  Pack --> Budget["ContextResponse 最终序列化裁剪\n正文 + 元数据 + 转义共同计入预算"]
+  Budget --> Result["输出源码证据 + coverage + nextRequest"]
 ```
 
-### 3.1 三种数据不要混用
+### 3.1 三类代码证据及其边界
 
-| 数据 | 生产者 → 使用者 | 必须随数据保留的信息 |
-|---|---|---|
-| 符号 / 引用 | LocalTextAdapter / RoslynAdapter → Context、Impact、Refactor | `source`、快照绑定的 `location`、文件、行、`queryComplete`、歧义及截断 |
-| 源码正文 | 文件读取 / 打包 → ContextResponse → Agent | 实际起止行、末行是否完整、`locationKind`、省略原因与范围覆盖 |
-| 项目结构 | Workspace / DotNetGraph → ArchitectureAnalyzer | 从 `.sln`、`.csproj` 等文件提取的声明关系；不代表 MSBuild 动态求值后的实际编译图 |
+| 证据类别 | 生产模块 → 消费模块 | 保留的关键边界信息 |
+| --- | --- | --- |
+| 符号与引用 | `LocalTextAdapter` / `RoslynAdapter` → `Context`、`Impact`、`Refactor` | `source`（`local-text` 或 `roslyn`）、快照绑定的 `location`、`queryComplete`、歧义候选及裁剪计数 |
+| 源码片段 | 文件读取 / 打包 → `ContextResponse` | 实际起止行、尾行是否完整（`endLineComplete`）、`coverage`、缺失区间与续读 `nextRequest` |
+| 项目声明图 | `ProjectDiscovery` / `DotNetGraph` → `ArchitectureAnalyzer` | 从 `.sln`、`.csproj` XML 提取的静态声明关系（已忽略 XML 注释），不执行 MSBuild 动态求值 |
 
-`prepare_context.candidateFiles` 是优先候选，不承诺排除其他发现路径；`scopeFiles` 与 `lineRanges` 才明确限定相应读取范围。RepomixAdapter **内部**收到显式 `candidateFiles` 时则视为闭集，避免转入全仓 CLI 打包。这两个层次的同名参数不能混为一谈。
+- **同名参数的作用域差异**：`wincode_prepare_context` 中的 `candidateFiles` 仅表示优先候选（不排除其他发现结果），排他读取须用 `scopeFiles` 或 `lineRanges`；而在 `RepomixAdapter` 内部收到显式文件集时则作为闭集打包，避免回退为全仓 CLI 扫描。
+- **`local-text` 扫描与批量合并**：默认单文件上限 256 KiB、单次扫描总读取上限 8 MiB、最多枚举 5000 项；声明提取前先经词法掩码（`CSharpLexicalMask` / `ScriptLexicalMask`）过滤注释与字符串，单行规范化长度超过 16384 字符或存在未闭合结构时标记 `lexical-uncertainty` 且不缓存。`prepare_context` 在无显式范围时默认将最多 4 个提取关键词合并为同一次目录扫描；若任一词命中达 500 条或触发扫描截断，则在剩余预算内回退为逐词查询以保留各自诊断信息。
 
-### 3.2 语义链与降级链
+### 3.2 Roslyn 语义分析与设计时构建隔离
 
-默认只启用本地文本能力；显式配置直接 Roslyn 后，首次语义搜索才启动自有 Code Host。ready 核对版本、协议、配置、输入策略及进程树保障；不启动外部 Serena，也不在 Roslyn 出错时切换提供方。
+- **按需加载与不静默降级**：显式传入 `--roslyn-config` 后，首次执行符号查询时才启动 `WinCode.Code.Host`（校验版本、协议版本 `2` 与输入策略 `2`）。Roslyn 报错时直接返回明确错误码，不会暗中切换回 `local-text`。
+- **私有中间目录与多框架引用保护**：设计时求值先通过已安装 SDK 的 `ProjectCollection` 读取原项目（保留原有的中间目录排除规则与自定义导入），再交由 `MSBuildWorkspace` 在每个 Host 实例独立的 UUID 私有 `IntermediateOutputPath` 下运行，退出时由 `OwnedBuildOutputs` / `DesignTimeArtifacts` 回收。单目标被引用类库按其自身声明框架求值，通过 Host 私有 props 限定框架覆盖范围，防止 Windows 入口框架污染普通 .NET 类库的依赖解析（多目标被引用项目仍需兼容显式配置，分析器与源生成器当前被排除，故 `queryComplete` 保持 `false`）。
+- **快照定位与引用输出控制**：符号查询返回带 `snapshotId` 的完整 `location`，供引用查找、影响分析与重构规划精确消歧。`wincode_find_references` 同时受 Roslyn `limit`（1–1000，默认 100）与最终 JSON `maxOutputChars`（2048–32768，默认 8000）约束，裁剪仅作用于外发 JSON，不影响影响分析内部的引用聚合；身份不唯一或查询不完整时，影响分析保持保守风险评估，零引用不构成可安全删除的证明。
 
-真实符号结果返回 snapshotId/project/file/position 身份，选定后传给引用、影响分析和重构。旧定位先校验，再分析；不按名字重选重载。本地文本扫描仍有文件数、字节数和时间预算，并明确语义能力未配置。
-
-0.13.0 退役外部 Serena 配置、连接及旧 source；local-text 与 roslyn 均不能仅凭来源证明完整性。ImpactAnalyzer 对身份不唯一或查询不完整保留 UNKNOWN；零引用不构成可安全删除的证明。
-
-公开引用接口可在 symbolLocation 上指定 Roslyn `limit`（1–1000，默认 100），复用 Host 原有限制，不提供分页。影响报告的 `referencesCount` 为实际聚合条数，`totalReferences` 为查询范围内已知总数（未知为 null），`referencesTruncated` 表示引用返回是否被裁剪（未知为 null）。这些字段不把局部引用扩展成全仓覆盖，也不改变 UNKNOWN 规则。
-
-### 3.3 输出预算位于最后一公里
-
-普通代码导航由 CodeNavigation 复用 LocalTextScanner：字面量搜索在排他目录/文件范围内进行，文件概览读取实际行数、字节数及文本声明，均返回 prepare_context 续读请求。路径范围先整体校验，实际读取再检查真实路径；扫描预算与最终 JSON 预算分别生效。LocalTextScanner 保留具名文件问题和省略计数，不把词法不确定性隐藏成完整结果。导航不启动语义 Host，也不改变所配置的提供方。
-
-引用工具由 ReferenceResponse 对最终格式化 JSON 执行 `maxOutputChars` 预算（默认 8000，范围 2048–32768，UTF-16 字符），包含缩进、转义和元数据；与 Roslyn 条数 limit 同时生效。按完整条目裁剪引用、候选和文件问题，返回 `returnedReferences`、`outputOmissions` 和实际预算，保留已知总数及精确身份；输出省略时标记 truncated/queryComplete，必要元数据超预算则明确返回 OUTPUT_BUDGET_EXCEEDED。裁剪不修改原始查询对象，因此不会缩小影响分析内部采用的引用集合，也不约束 Host 查找阶段的计算量。
-
-`maxTokens` 当前按 UTF-16 字符数 / 4 估算，最终 MCP 文本块的 JSON 转义、元数据及 legacy 附加文本共同占预算。它不是模型 tokenizer 的精确结果。
-
-ContextResponse 在最终裁剪后重新计算范围覆盖，区分读取阶段不足和响应预算不足，并给出缺失区间或后续请求。符号窗口没有解析方法结束边界，`symbolCoverage=unknown` 不能被显示的几行正文替代。
-
-## 4. 桌面取证与源码候选的数据流
-
-Gateway 可显式输出 compact 格式：UiCompact 保留快照节点 ID、树结构与状态，省略节点几何/类名，把重复 C# 候选提取为 candidateIds 引用的共享表；截图仍属于同一快照。展开请求是新的实时 UI 查询，不是原快照续页；几何详情和查询唯一性由 full 响应重新验证。默认 full 契约保留，序列化裁剪使用独立副本。
+## 4. 桌面 UI 取证、受控操作与源码映射数据流
 
 ```mermaid
 flowchart TB
-  Req["PID / HWND / query / capture"] --> Validate["Gateway + UiContracts 参数校验"]
-  Validate --> Mutex["FlaUiAdapter 串行锁\n外部截止时间 / 取消"]
-  Mutex --> Native["启动自有 Release Host\n一份请求，收集 JSON 响应"]
-  Native --> Audit["审计准入 + 目标窗口归属复核"]
-  Audit --> Search["有界 UIA 搜索\n节点数 / 深度 / 时间"]
-  Search --> Unique{"完整搜索且唯一命中？"}
-  Unique -->|"是"| Snapshot["选中子树 / 状态 / 可选截图"]
-  Unique -->|"否"| Partial["歧义、未找到或不完整\n返回候选，不猜测子树"]
-  Snapshot --> Return["响应预算、审计结束、Host 清理\n协议/能力版本核对"]
+  Req["PID / HWND / scopePath / query / action"] --> Validate["Gateway + UiContracts 参数与模式校验"]
+  Validate --> Mutex["FlaUiAdapter 实例内 FIFO 互斥锁\n检查所需 inspectionVersion"]
+  Mutex --> Native["按请求拉起一次性 Release UIA Host\n跨实例共用审计目录时受命名 Mutex 保护"]
+  Native --> Audit["显示无焦点 REC/WinCoding 浮层 + 写入审计开始记录\n复核窗口身份与前台/后台归属"]
+  Audit --> Search["解析 scopePath 祖先链 → 执行有界 UIA 搜索"]
+  Search --> Unique{"搜索完整（SearchComplete）且唯一命中？"}
+  Unique -->|"是（inspect/review）"| Snapshot["读取选中子树、可选状态与可选截图"]
+  Unique -->|"是（action）"| Act["校验控件启用状态与 UIA Pattern\n执行 click / setExpanded / setValue / type / wpfShortcut"]
+  Unique -->|"否"| Partial["返回未找到、歧义候选或搜索不完整错误\n绝不猜测操作目标"]
+  Snapshot --> Return["封装结果 · 记录审计结束 · 退出并回收 Host"]
+  Act --> Return
   Partial --> Return
-  Return --> UiReview["UiReview 复用同一次快照"]
-  UiReview --> Xaml["指定 XAML 候选\n属性字面量与节点对应"]
-  Xaml --> CSharp["指定 C# 候选\n赋值、处理器、方法声明位置"]
-  CSharp --> Out["runtime evidence + source candidates\n行号 / 哈希 / nextRequest"]
+  Return --> UiReview["若为 wincode_ui_review：在同一快照上匹配候选 XAML 与 C#"]
+  UiReview --> Out["返回 UI 证据 + 候选源码行号/哈希 + nextRequest"]
 ```
 
-- UIA 属性和截图来自目标应用的实际窗口；应用是否提供 AutomationId/Name 决定可检索程度。缺失可访问性信息不等于网关查询代码故障。
-- 有查询条件时，只有 `SearchComplete` 且恰好一个命中才展开选中子树；找到一个节点但搜索未完成，仍不能声称唯一。
-- `backgroundOnly` 要求 PID/HWND，走后台捕获政策；图像质量为 `unknown` 或低变化提示时，不声称截图一定可读。
-- UI→XAML→C# 是候选证据链。动态绑定、模板、资源字典没有被完整求值；保持 `runtimeSourceVerified=false`。源码候选读取失败时保留已取得的 UI 快照。
-- Host 使用 UIA/Win32 读取目标窗口；取消与超时清理自有 Helper，不终止目标应用。该设计不提供点击、输入或聊天生成能力。
-- 审计保存开始/结束等简要记录；达到阈值时提醒或拒绝新 UI 访问。日志是本地可写文件，不提供防篡改保证。
-- 同一 Gateway 的 UI 请求在适配器内排队；不同 Gateway 共用审计目录时，由原生命名 Mutex 保护整个操作，发生重叠会返回 `AUDIT_BUSY`。双连接测试应检查这一返回及后续恢复，不能假定两个请求都能同时成功。
+### UI 取证与操作的关键约束
 
-## 5. 状态、存储与生命周期
+- **版本能力门控**：`WinCode.UIA.Host` 当前传输协议为 `1.0`，`inspectionVersion` 为 **`8`**（查询与状态需 `>=2`，基础动作需 `>=3`，`setExpanded` 需 `>=4`，`scopePath` 父路径需 `>=5`，后台策略与绑定窗口写值需 `>=7`，绑定窗口后台 WPF 快捷键需 `>=8`）。请求高版本能力遇到旧 Host 时在派发前即拒绝（`VERSION_MISMATCH`）。
+- **受控语义操作边界**：所有动作均要求单次完整搜索唯一命中目标，不使用坐标鼠标模拟，也不主动调用窗口激活或置顶（但目标应用自身的事件逻辑仍可能弹窗或改变焦点）：
+  - 普通连接支持 `click`（`Invoke` / `Toggle` / `SelectionItem`）、`setExpanded`（`ExpandCollapse`）与 `setValue`（`ValuePattern`）；逐键输入 `type` 仅在 `--isolated-keyboard` 开启且目标窗口已位于前台并确认焦点时可用。
+  - `--background-ui` 连接禁用 `click`、`setExpanded` 与 `type`；仅当启动者通过 `--ui-write-window` 或 `--ui-shortcut-window` 绑定 `<PID>:<HWND>:<processStartFileTime>` 且确认目标进程**不拥有当前前台窗口**时，才分别允许对该窗口执行 `setValue` 或触发应用显式声明的 `WinCode.WpfBackgroundShortcut.v1` 控件（`wpfShortcut`）。
+- **截图与源码关联边界**：`compact` 输出保留节点 ID、层级、状态与属性缺口，省略几何矩形并将重复 C# 候选提取为共享引用表。后台截图仅使用 `PrintWindow`（不回退屏幕截图），需结合 `captureQuality` 判断画面有效性。UI→XAML→C# 为静态文本候选映射（`runtimeSourceVerified: false`），不解析动态绑定或运行时 `DataContext`。
+- **并发审计锁**：不同 Gateway 实例若同时操作 UI，原生层通过命名 Mutex 保护 `%LOCALAPPDATA%/WinCode/logs/ui-audit`；重叠请求会立即收到 `AUDIT_BUSY`（容量接近 2 MiB 上限时拒绝新访问，不静默删除审计日志）。
 
-### 5.1 数据在哪里
+## 5. 状态存储、多工作区生命周期与资源清理
 
-| 数据位置 | 保存内容 | 生命周期 / 边界 |
-|---|---|---|
-| Node 进程内 | 当前 session、请求计数、适配器连接状态、内存缓存、资源记录 | 每 Gateway 一个活动工作区；退出后不保留这些内存状态 |
-| 启动配置的 `cacheDir`，默认 `.cache/wincode` | 缓存 JSON、打包临时文件、overflow 正文 | 使用固定根的 namespace；不同连接可共享物理目录，真实 Gateway 8 个交错场景已验证正文完整性/归属和失效重建，附件长期保留与瞬时硬配额未实现 |
-| 工作区源码与项目文件 | 输入证据 | 代码分析通常读取；不会因为生成重构计划就自动修改源码 |
-| 配置的 `trashDir` | 被移动的文件和 `.meta.json` 元数据 | `safe_move_to_trash` 是实际写操作；路径/真实路径检查后移动，非永久删除 |
-| `%LOCALAPPDATA%/WinCode/logs/ui-audit` | UI 取证审计 | 有容量准入；不自动删除审计来恢复访问 |
-| `dist/`、Host Release 发布目录 | Gateway 与原生交付产物 | 构建/交付脚本管理；客户端进程不会因文件更新自动重载 |
-| `test-tmp/` | 检查报告、隔离夹具、本轮获准安装的真实上游 | 开发验收数据，不提交到 Git；真实上游安装不等于默认连接已配置 |
-| 已安装 Skill 目录 | Agent 使用手册 | 独立于源码和运行进程；同步前备份，之后核对内容 |
+### 5.1 本地存储位置与完整性校验
 
-缓存按工作区 namespace 分区。local-text 每次沿用 8 MiB 总读取、5000 个目录项等现有扫描预算，按文件路径和内容 SHA-256 复用声明解析；不再用有界工作区提示复用整份查询结果。内置打包读取候选后，以有序路径/内容元组计算身份，再命中相同内容；没有可核验输入清单的 CLI 结果不复用。解析结果使用同一内存 LRU，不另开无界缓存。内存默认预算 32 MiB，磁盘默认 128 MiB（含 overflow），单项默认 2 MiB；这些**不是整个 Node 进程 RSS 的硬上限**。磁盘字节/条目限制通过启动和周期维护收敛，每实例写队列不是跨进程锁，多个进程写入期间可能超过清理目标。
+| 存储位置 | 保存内容 | 生命周期与安全边界 |
+| --- | --- | --- |
+| Node 进程内存 | 会话状态、准入计数、内存 LRU 缓存（默认上限 32 MiB）、子进程跟踪 | 随进程退出释放；预算限制缓存对象而非整个 Node 进程 RSS |
+| `cacheDir`（默认 `.cache/wincode`） | 版本化缓存 JSON 与超长正文附件（默认磁盘清理目标 128 MiB，单项上限 2 MiB） | 按工作区 namespace 隔离，固定目录句柄并拒绝符号链接；命中时校验键归属、大小与 SHA-256，异步回填受状态代次保护 |
+| 目标工作区文件 | 源码与项目配置 | 分析工具只读访问；仅 `wincode_safe_move_to_trash` 执行文件移动 |
+| `trashDir`（默认 `trash/`） | 被移入回收目录的原文件及 `.meta.json` | 拒绝链接路径，经 `WinCode.UIA.Host.exe --move-to-trash` 校验普通文件句柄后移动；元数据写入失败时返回 `partial` 及恢复路径 |
+| `%LOCALAPPDATA%/WinCode/logs/ui-audit` | UI 检查与操作审计记录 | 本地可写日志（1 MiB 提醒、近 2 MiB 准入拒绝），非防篡改存储 |
+| `dist/` 与 `tools/.../publish/` | 编译后的 Gateway、原生 Release 组件及 `delivery-manifest.json` | 由构建脚本密封校验；磁盘文件更新不会自动热重载运行中的连接 |
+| `test-tmp/` | 测试报告、隔离夹具与按需会话结果文件（`skill-sessions/`） | 被 Git 忽略的本地运行目录；可能含源码或窗口内容，切勿公开提交 |
 
-缓存 JSON 的完整性摘要绑定命名空间键、时间/TTL、输入 fingerprint、正文和附件身份，不能把另一个键的合法 JSON 换到当前文件名后仍算命中。内存和磁盘命中均核对附件大小及 SHA-256，使用同一个文件句柄、64 KiB 缓冲区和既有磁盘预算限量读取；只核验存在性/mtime 不足以发现同大小内容损坏。JSON 以已打开文件的大小加一个探测字节限定读取，读取期间增长或缩小即未命中。缺失、损坏或旧缓存缺少摘要元数据时重算，目录布局、公开 MCP 格式和清理所有权保持。无法复用的附件仍保留受管元数据供既有 TTL/容量清理处理。
+- **Git 执行边界**：`GitClient` 从工作区外的系统安装路径解析 Git（要求 `>=2.36`），使用参数数组直调（禁用 shell）并强制关闭可执行 `fsmonitor`；仅在 `--trust-git` 显式授权的工作区执行，否则返回 `GIT_NOT_TRUSTED` 并回退为有界目录指纹。
 
-同一 CacheManager 内的异步读取也受状态校验保护：内存校验恢复后，只有 Map 中仍为原条目时才能刷新 LRU 或删除失败条目；磁盘读取先等待已接受的写入/清空完成，回填前核对状态代次。写入、内容记忆更新、清理和工作区重置会使正在进行的磁盘读取失效；即使改的是其他键，也保守返回未命中。代次仅用一个计数器，正常命中/磁盘回填不会使并行读取互相失效。过期/超大文件的删除进入既有写队列并在执行时核对代次，防止旧读取删除本实例较新的落盘值。15 项回归覆盖这些交错和正常并行命中；这项保护不提供跨进程事务或附件保留租约。
+### 5.2 动态工作区、固定工作区与同根恢复
 
-源码、磁盘状态和多个调用之间不存在数据库式快照事务；Watcher/fingerprint/TTL 也不能保证每次观察均与外部写入同步。工作区 fingerprint 只作有界变更提示，watcher 不能成为唯一新鲜度依据。摘要校验不是跨调用租约；已返回的附件未来仍可能过期，需要重新请求。双 Gateway 编辑回读及双 Host 旧定位拒绝/重载已验证，不代表多文件并发写入具有一致快照。大附件摘要读取成本和长期磁盘趋势仍需实测。
+- **动态模式（`--dynamic-workspace`）**：按请求的真实目录（兼容标准长路径与 Windows 8.3 短路径）分配独立的 `ToolRouter`（各自拥有缓存、监听器与回收目录），共享实例级 32/4 准入槽与 UI 互斥锁。最多保留 **4 个**按需工作区，打开第 5 个时回收最久未使用的已初始化空闲工作区；若全部在忙则返回 `WORKSPACE_BUSY`；清理失败的实例保留槽位并标记 `WORKSPACE_RECOVERY_REQUIRED`（需 `restart_gateway`）。启动时通过 `--workspace` + `--roslyn-config` 授权的 Roslyn 项目常驻保留，其余项目使用 `local-text`。
+- **固定模式（默认）**：绑定 `--workspace` 或启动目录，请求其他目录直接返回 `WORKSPACE_MISMATCH`（附带由统一纯函数生成的连接配置指引，不修改客户端文件）。
+- **健康确认 vs. 故障恢复**：固定模式下对同一根目录调用 `workspace_open` 时，若当前状态健康则直接读取概览并保留热态 Roslyn 快照与监听器（不阻塞在途查询）；仅在处于已知故障状态时才暂停新请求、等待在途请求排空并重绑监听器与上游适配器。
 
-本轮磁盘边界收敛：`GitClient` 从启动环境的工作区外安装位置解析绝对 Git，使用 argv、禁止 shell，并要求支持布尔 fsmonitor 配置的 Git 2.36+；查询强制关闭 fsmonitor。linked worktree 与 Git 管理子目录由 Git 判断；状态失败返回 unknown，不推断 clean。`FileSystemBoundary` 检查路径及实际目标；Cache 初始化/维护/overflow 和 trash 写入拒绝路径中的链接，Cache 同时固定已打开目录的文件系统身份。版本化 JSON 名称与头标记约束清理所有权；旧版/无法识别的文件保留、重算，不计入受管磁盘配额。预先存在的 junction 已有回归，并发恶意替换的原子隔离没有实现。
+### 5.3 关闭与子进程回收
 
-架构概览不再另走无总量限制的旧树/项目读取：共用 ProjectDiscovery、WorkspaceBrowser 和 OperationContext。发现上限 2000 项、树 500 项；图上限 16 个项目/64 KiB 单文件/256 KiB 合计、入口枚举 2000 项，返回完整性与遗漏；整份报告上限 32768 UTF-16 字符。取消后的读取在实际返回并关闭句柄后结束归属，不靠外层超时提前释放。文本声明先规范化空白并拒绝超过 16384 字符的规范化单行，避免原有重叠可选空白匹配；不是完整语法分析器。
+收到关闭信号或客户端 EOF 时，Gateway 拒绝新请求、触发活动操作取消信号、等待在途任务收尾，并按序停止文件监听、各适配器子进程、缓存写队列与会话资源。进程树回收同时校验父子进程创建时间顺序（防止因 Windows PID 复用误杀无关进程），且绝不触碰被检查的目标应用进程。
 
-### 5.2 动态路由、固定工作区与同根恢复
+## 6. 核心防线速查（Gate G1–G11）
 
-动态模式在验证参数时确定请求的绝对目录，按真实目录复用独立的 ToolRouter，从请求入队到完成都使用同一根。所有项目共用连接的 32 个业务名额、4 个状态名额和桌面 UI 互斥锁。每个项目持有自己的监听器、会话、缓存和回收站。四个按需工作区用满时只回收已完成初始化且空闲的项目。通过启动参数显式授权的 Roslyn 项目单独保留，其他目录只用本地文本，Repomix 从 WinCode 的安装环境查找。
+| 关口 | 所在层 | 执行的检查 | 明确不承诺的事项 |
+| --- | --- | --- | --- |
+| **G1 工具契约** | `ToolRegistry` | 工具名、类型、数值范围、互斥参数组合校验；剔除未知字段 | 容忍拼写错误的额外字段不代表该字段生效 |
+| **G2 准入与工作区** | `Gateway` / `ToolRouter` | 64 KiB 原始参数上限；32/4 槽位限流；固定根或 4 槽动态路由校验 | 不等于 OS 多租户隔离或进程总内存硬上限 |
+| **G3 路径与扫描预算** | `Workspace` / `Context` | 真实路径边界、链接拒绝、文件数与总读取字节预算 | 应用层路径校验不是对抗并发替换的原子文件系统事务 |
+| **G4 外部组件拉起** | `Adapters` | 显式授权检查、超时控制、Node 直启 Repomix JS、参数数组调 Git | 不替用户审查第三方已安装脚本本身的代码安全性 |
+| **G5 语义完整性** | `LocalText` / `Roslyn` / `Impact` | 快照身份匹配、重载消歧、词法与生成器覆盖标记 | 零引用或局部文本匹配不构成“可安全删除代码”的证明 |
+| **G6 UI 准入与写保护** | `WinCode.UIA.Host` / `UiAudit` | `REC` 浮层就绪、审计容量、PID-HWND-启动时间绑定、前台进程拒绝 | 其他外部自动化工具的操作不在本模块审计范围内 |
+| **G7 UI 搜索与返回** | `WinCode.UIA.Host` / `FlaUiAdapter` | `inspectionVersion` 门控、祖先 `scopePath` 唯一解析、`SearchComplete` 判定 | `PrintWindow` 返回成功不保证硬件加速画面可读；源码候选不代表运行时绑定已证实 |
+| **G8 最终输出裁剪** | `ContextResponse` / `ReferenceResponse` | 按最终序列化字符预算裁剪，精确报告覆盖区间与省略计数 | UTF-16 字符估算值不等于具体大模型的精确 Token 数 |
+| **G9 生命周期回收** | `OperationContext` / `ResourceManager` | 共享 deadline、取消传播、创建时间校验的自有子进程树回收 | 底层单次阻塞式系统 I/O 未必能毫秒级立即中断 |
+| **G10 交付清单校验** | `delivery-manifest.mjs` | 校验 Gateway、全部 Release Host 文件与四份受管 Skill 手册哈希一致 | 本地哈希校验不是加密数字签名；磁盘更新不自动重连客户端进程 |
+| **G11 远端分支保护** | GitHub Actions / Branch Rules | 强制 PR、Node 22/24 回归与三项 CodeQL 检查通过、禁止强推 | CI 通过不代表交互式桌面或真实第三方目标应用已完成验收 |
 
-WORKSPACE_MISMATCH 的 connectionGuide 与 CLI `--print-connection` 由同一纯配置生成器提供绝对命令、参数和核对步骤；不读取其他客户端设置、不注册或启动进程、不切换工作区。目标路径存在性仍由真正的连接初始化验证。
+## 7. 维护架构约束
 
-启动时捕获并保护 config.workspaceRoot，内部 setRoot 与 openWorkspace 也校验固定根。显式 CLI 路径须为绝对路径；缺省绑定 cwd。初始化前验证目录已存在且路径无链接，其他根或 junction 别名不能作为切换入口。这不是对抗并发文件系统替换的原子沙盒。
+[tests/architecture-boundaries.test.ts](tests/architecture-boundaries.test.ts) 自动守卫分层依赖方向（如 `Gateway` 不得绕过 `ToolRouter` 直接访问 `Adapters`、`CompositeTools` 不得直接导入具体 `Adapter`、`Core` 不得反向依赖 `Gateway`）。新增工具或能力时，请遵循以下原则：
 
-独立实例指向同一物理项目时，设计时输出按 Host UUID 隔离。原 editorconfig/AssemblyAttributes.cs 写入竞争已有本地生产回归：真实 A/B/A 三个 MCP 进程同时冷加载，项目引用、嵌套根、外部构建、取消/崩溃及兄弟查询分别验证。分阶段启动同根 Host 的 N3 诊断结果仍不用于证明并发隔离；共享持久缓存和目标窗口属于另外的边界。
-
-健康同根确认：`固定根校验 → 工作区互斥锁 → 读取概览/刷新提示 → 保留 Host、快照、watcher 和 session`。它不设置恢复屏障、不等待普通查询排空；取消只读确认不会制造恢复门。
-
-同根已知恢复：`固定根校验 → 工作区互斥锁 → 暂停普通请求进入 → 等待旧请求结束 → 验证固定根 → 更新 namespace/session/fingerprint → 重绑 watcher → 按状态重置相关上游 → 恢复请求准入`。SDK 重启要求、清理失败及部分重绑定不能走健康确认捷径。
-
-其他根在以上步骤前返回 WORKSPACE_MISMATCH。旧请求不能在限定时间内结束时，拒绝同根恢复；等待期间可取消。开始恢复后完成必要收尾，失败保留恢复门；当前实现不承诺跨文件系统、适配器与缓存的事务性回滚。
-
-### 5.3 取消与退出
-
-代码用例把客户端 signal 与操作 deadline 传入扫描/上游路径。本地文本用例采用文件扫描预算；Roslyn 用例采用显式加载、查询与文件扫描预算；具体外部操作还有各自超时。UI 另有 Helper 超时，默认 10 秒。原生调用或单次磁盘 I/O 不一定能立即中断。
-
-关闭时拒绝新请求、取消代码操作、等待在途请求，并依次尝试停止 watcher、各适配器、扩展兼容项，刷新缓存写入、关闭 session 和资源管理器。主要关闭路径保留聚合错误，重复 dispose 共享结果；不能仅凭进程计数为零证明所有清理成功。ResourceManager 保存有限的进程内清理记录，真实验收另检查已知自有 PID 是否退出。
-
-## 6. 检查关口：阻止什么，依据是什么
-
-| 关口 | 位置 | 检查 / 处理 | 不能据此声称什么 |
-|---|---|---|---|
-| G1 工具契约 | ToolRegistry | 名称、类型、范围、字段组合；未知字段剔除 | 容忍拼写错误不表示对应能力生效 |
-| G2 请求与工作区 | Gateway / ToolRouter | 固定根校验；32/4 受理容量；64 KiB 参数；共享 deadline；同根恢复排空 | 不是 OS 多租户安全隔离或 RSS 硬上限 |
-| G3 文件与范围 | Workspace、Context、UI 源码 mapper | 相对/真实路径、工作区边界、候选数量、文件/读取预算 | 路径检查不是 OS 沙盒或完整文件事务 |
-| G4 上游启动 | 各 Adapter | 配置禁用、可用性、超时；Repomix Node 直启 JS | 已安装脚本本身的可信性没有因此被证明 |
-| G5 语义身份 | LocalTextAdapter / RoslynAdapter / ImpactAnalyzer | 完整身份、重载、歧义、协议错误、完成状态 | fallback、零引用或非空结果不等于安全重构 |
-| G6 UI 准入 | Host / UiAudit | PID-HWND 归属、后台策略、审计容量、搜索预算 | computer-use 其他链路的窗口归属不是本模块证据 |
-| G7 UI 返回 | Host / FlaUiAdapter | 文本/图片/管道预算、协议与 inspectionVersion | 像素有变化不等于画面可用，候选不等于绑定已证实 |
-| G8 最终正文 | ContextResponse / UiResponse | 最终序列化预算、截断、省略与范围信息 | 正文覆盖不等于任务推理充分，估算字符不等于精确 token |
-| G9 生命周期 | OperationContext / ResourceManager / Router | deadline、取消、自有进程关闭、缓存写入排空 | 单一 dispose 返回或资源计数不是全部外部进程的证据 |
-| G10 交付一致性 | 构建清单 / delivery verify | Gateway、完整 Host 发布文件、配置与 Skill 的版本/哈希 | 内容一致性不是数字签名，磁盘新版不等于连接新版 |
-| G11 合并 | GitHub 保护与 CI | Node 22/24 + 三项 CodeQL、PR、管理员约束、禁止 force push/删除 | CI 绿色不证明真实桌面已验收，也不证明所有安全告警关闭 |
-
-G1–G10 分布在运行时和本地交付工具中；G11 依赖远端仓库配置。人工授权、是否接受重构方案、是否安装真实上游等，仍属于客户端/维护流程的决策，不能把 Skill 的文字说明当成服务器权限系统。
-
-## 7. 从源码到客户端实际使用
-
-```mermaid
-flowchart LR
-  Source["源码 / 契约 / 依赖锁"] --> Build["锁定构建\nNode 22/24 · 固定 .NET SDK"]
-  Build --> Check["check\n类型检查 · 核心回归 · 新 stdio"]
-  Check --> Manifest["交付清单\nGateway + 全部 Host 文件 + Skill"]
-  Manifest --> PR["PR 精确提交 CI\n必需检查通过"]
-  PR --> Merge["保护规则下合并"]
-  Merge --> Disk["主分支构建 / Skill 同步"]
-  Disk --> Reconnect["客户端重新建立连接"]
-  Reconnect --> Identity["hello：实例 / buildId / schemaHash\n核对实际请求行为"]
-  Build -.-> Desktop["独立验收\n桌面 WPF / TavernDesk"]
-```
-
-`hello` 从 0.12.1 起只读已知状态；主动检查使用 `diagnose_project`。未知值明确保留为 unknown/null，历史健康结果可能陈旧。Gateway 初始化仍会初始化适配器，轻量 hello 不表示整个启动过程没有探测成本。
-
-当前分支保护强制 Node 22/24 回归和 CodeQL 的 JavaScript/TypeScript、C#、Actions 三项检查，对管理员生效；按单维护者政策要求的 GitHub approval 数量为 0。**因此独立审核仍是额外流程，不是仓库规则已保证的事实。**
-
-真实 Roslyn Host/MCP 验收纳入 Node 22 CI，使用生成项目并核对 BuildHost 与目标子进程清理；桌面验收仍单独显式执行。是否通过以该次报告为准。
-
-## 8. 当前设计的工程成熟度与明确边界
-
-已经形成的结构约束包括：统一工具契约、Router 用例入口、Core 能力接口、适配器进程边界、工作区生命周期、证据元数据、最终输出预算以及可复查的交付清单。[架构边界测试](tests/architecture-boundaries.test.ts) 检查 Gateway 不跨过 Router 访问适配器、CompositeTools 不导入 Adapter、Core 不反向依赖 Gateway 等具体规则。
-
-维护时仍应认识以下边界：
-
-1. **ToolRouter 同时承担装配、状态和生命周期协调。** 当前职责集中且可定位；扩展功能应走既有用例与契约，不继续把具体上游访问塞进 Gateway。
-2. **结果协议有工具族差异。** UI 使用 success/errorCode 等字段，代码结果侧重 source/completeness，Gateway 失败由同一对象生成 JSON 文本与 structuredContent；UI/trash 保留领域形状，未知工具走协议错误，不能把所有结果说成同一信封。
-3. **检查是分路径落实的。** 范围读取、候选 mapper、目录扫描和 trash 各自设边界；不能把某条路径的检查推广到所有低层文件调用。
-4. **生成计划与执行修改分开。** 重构工具提供建议与检查清单；代码修改、编译、Git 提交与 PR 操作由外部工程协作工具执行。trash 是需要特别识别的实际文件写入口。
-5. **运行时一致性仍需客户端参与。** Gateway 实例身份、原生 Host 身份与交付清单提供核对依据，但系统没有自动替客户端重连旧 MCP 实例的能力。
-
-本说明的架构图、数据表与关口表共同描述当前实现；新增功能应说明接入哪条数据流、使用哪个现有契约、在哪个关口拒绝或降级，以及如何留下真实验收证据。
-
-当前待办见[迭代计划](docs/next-iteration.md)。单项目 Roslyn 的实际客户端证据不代表所有动态项目图均已验证；条件性性能研究也不表示已发现泄漏。
-
-## 2026-09-09 职责拆分
-
-WorkspaceManager 保留可变根、Git 与回收站事务；WorkspaceBrowser 和 ProjectDiscovery 负责只读发现。LocalTextAdapter 委托 LocalTextScanner 与 TextDeclarations；CacheManager 委托 WorkspaceFingerprint（文本缓存提示，不冒充语义快照）。ContextManager 拆出符号收集及格式化方法，ContextResponse 委托纯范围覆盖计算。UIA Host 将 Win32、窗口解析、抓图、树读取及 DTO 分离；FlaUiAdapter 的协议解析与自有进程调度分离。ToolRouter 的工作区锁、排空与恢复状态继续集中，避免把同一事务拆成多个状态源。
-
-验收脚本共享 SDK 选择及进程观察函数；Host 场景分为语义/队列与输入变化模块，Gateway 将真实 MSBuild 生命周期故障独立。两份历史混合大测试按功能拆成 13 个套件，各自拥有缓存目录。
-
-0.13.1 的 TextDeclarations 在声明匹配前使用 CSharpLexicalMask/ScriptLexicalMask，前者与 UiCodeMapper 共用；未闭合/不支持词法结构令本地扫描不完整且不缓存。TSX/JSX 的 scoped context 使用同一规则。影响报告只保留一份 JSON，E4 领域/恢复专项进入 Node 22 CI。
+1. 在既有工具族契约中声明精确 Schema，保持“生成建议/读取证据”与“实际副作用操作（如回收站移动、UI 动作）”职责分明。
+2. 注意不同工具族的响应结构差异（UI 与回收站工具保留 `success`/`errorCode`/`outcome` 等领域字段，代码工具侧重 `source`/`queryComplete`/`coverage`），不要强行假设单一通用响应信封。
+3. 变更工具契约或受管手册后，执行 `npm run check` 更新交付清单，并在客户端重连后通过 `wincode_hello_world` 核对实际生效的 `buildId` 与 `schemaHash`。

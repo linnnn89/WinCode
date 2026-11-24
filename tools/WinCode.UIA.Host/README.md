@@ -1,16 +1,17 @@
 # WinCode.UIA.Host
 
-0.16.0 的 Windows UI Automation（FlaUI.UIA3）一次性进程：执行有界取证，并在调用方显式请求时执行一个语义 UI 操作。实现入口为 [Program.cs](Program.cs)，面向 Agent 的规范参数见 [UI 手册](../../skills/wincode/references/ui.md)，整体数据流见 [架构说明](../../WinCode-架构与数据流说明.md)。
+WinCode **0.17.1** 使用的 Windows 原生辅助程序（基于 FlaUI.UIA3 与 Win32 API）。采用按请求拉起的一次性进程模型：每次启动处理单个窗口发现、UIA 控件读取、受控 UI 操作或受校验的文件移动请求，输出响应后立即退出。实现入口见 [Program.cs](Program.cs)，MCP 工具参数见 [UI 手册](../../skills/wincode/references/ui.md)，整体数据流见 [架构与数据流说明](../../WinCode-架构与数据流说明.md)。
 
-## 职责和边界
+## 职责与边界
 
-接收 stdin JSON，执行有界窗口发现、UIA 取证或一个语义 UI 操作，输出 stdout JSON 后退出。Gateway 的 FlaUIAdapter 管理自有 Host 的超时、取消和进程回收；被检查的应用不属于其进程所有权。原生 Helper 在开始工作前验证所属 Gateway 的进程身份；所属进程退出时取消并按既有宽限清理自身。Gateway 启动保留配置/交付检查，实际 UIA 健康探测延后到显式诊断或首次操作。
+- **UIA 取证与受控操作**：从 `stdin` 读取单次 JSON 请求，执行有界窗口枚举、控件树读取或单个语义化 UI 操作，向 `stdout` 输出单行 JSON 后退出。
+- **进程归属保护**：启动工作前通过 `OwnerProcessGuard` 校验父进程（Gateway）身份；当所属 Gateway 退出或请求超时取消时，Helper 自动中止并退出，**绝不终止被检查的目标应用进程**。
+- **句柄校验文件移动（`--move-to-trash`）**：供 `wincode_safe_move_to_trash` 调用，在原生层校验普通文件句柄与目标边界后将文件移入本地回收目录。
+- **后台写保护与键盘隔离**：默认仅执行只读检查。`--background-ui` 模式下禁用普通点击、展开与按键输入；`setValue`（`ValuePattern`）与 `wpfShortcut`（触发目标窗口显式声明的 `WinCode.WpfBackgroundShortcut.v1` 控件）均须核对启动者绑定的 `<PID>:<HWND>:<processStartFileTime>` 且确认目标进程**不处于前台**后才允许执行。逐键输入（`type`）默认关闭，仅在启动者显式传入 `--isolated-keyboard` 的独立交互会话且目标控件已确认前台焦点时可用。
 
-Host 默认执行只读检查。语义操作通过 UIA 模式作用于唯一匹配的控件。后台连接的 `boundSetValue` 核实启动者绑定的进程、启动时间、顶层窗口、控件进程和当前前台归属，再调用 ValuePattern。键盘输入默认关闭，只有启动者显式启用 `--isolated-keyboard` 的独立交互会话才可使用。
+## 内部请求与响应协议
 
-## 请求与结果
-
-下面是内部 stdin 请求示例，PID/HWND 必须替换为实际目标；`schemaVersion`、`requestId`、`action` 和 `timeoutMs` 是内部 Host 协议字段，不应照搬为 MCP 工具参数。
+以下为 Gateway 与 Host 之间的**内部 `stdin` 协议示例**（`schemaVersion`、`requestId`、`action`、`timeoutMs` 为内部协议字段，不属于外部 MCP 工具参数）：
 
 ```json
 {
@@ -29,7 +30,7 @@ Host 默认执行只读检查。语义操作通过 UIA 模式作用于唯一匹�
 }
 ```
 
-语义操作使用同一协议，用 `action` 选择动作，并以 `targetAutomationId`/`targetName`/`targetControlType` 唯一定位控件：
+语义操作复用同一协议，通过 `action`（`click` / `setExpanded` / `setValue` / `type` / `wpfShortcut`）与精确选择器定位唯一控件：
 
 ```json
 {
@@ -43,27 +44,17 @@ Host 默认执行只读检查。语义操作通过 UIA 模式作用于唯一匹�
 }
 ```
 
-已启用的键盘操作要求非空 `inputText`，可选 `clearBefore`。`setValue` 通过 ValuePattern 写入，空字符串可清空值。
-这三个取值下 `query`/`readStates`/`capture` 都不参与。结果中的 `actionMethod` 是实际使用的模式，`actionTarget` 是目标控件身份证据，
-`inputLength` 是接受的字符数（输入文本不回显）；`success:true` 只代表调用被接受，不代表应用已产生预期副作用，需要证据时另发一次 `inspect`。
-目标缺失、歧义、搜索不完整、控件禁用、无可用模式、只读值或焦点未确认都会以明确错误码拒绝，并发生在实际调用之前。`ACTION_FAILED` 不属于这一类：`type` 的 `clearBefore` 可能已清空旧内容，操作也可能由提供程序部分完成，因此它不是“未执行”，需要先只读观察实际状态。
+- **版本标识**：传输协议版本为 `1.0`；当前 `inspectionVersion` 为 **`8`**（`2` 查询与状态、`3` 基础动作、`4` 展开/折叠、`5` `scopePath` 祖先范围、`7` 后台取证策略与绑定窗口 `setValue`、`8` 绑定窗口后台 WPF 声明式快捷键 `wpfShortcut`）。`hostIdentity` 返回程序集版本、构建配置与目标框架。
+- **操作结果解释**：响应中的 `actionMethod` 标明实际调用的 UIA 模式（如 `InvokePattern`、`ValuePattern`、`WpfRoutedKey`），`actionTarget` 记录目标控件属性证据，`inputLength` 记录已写入字符长度（不回显输入原文）。`success: true` 仅代表 UIA 调用本身已完成，需另行调用 `inspect` 核实业务界面变化。
+- **拒绝与部分执行区分**：目标未找到、歧义、搜索未完成、控件禁用、缺少所需 Pattern、只读值、未注册快捷键控件或前台/焦点校验未通过均在实际调用前拒绝并返回明确 `errorCode`。若返回 `ACTION_FAILED` 或中途超时，部分副作用（如 `clearBefore` 清空文本或控件内部回调）可能已发生，调用方须先只读检查当前状态，切勿盲目重发动作。
 
-传输协议版本为 `1.0`。当前 `inspectionVersion` 为 `7`，支持绑定窗口直接赋值、显式授权的键盘输入和单独的窗口截图参数。实际 Host 的 `hostIdentity` 提供程序集版本、构建配置和目标框架。
+## 截图、DPI 与本地审计
 
-结果应结合 `success/errorCode`、目标窗口、搜索完整性与匹配数量、截断原因、状态证据、截图信息和审计状态解释。查询字段按大小写精确 AND 匹配；只有遍历完整且唯一才展开命中子树。截断后的单个候选不能认定唯一，未知状态不等于 false，多窗口歧义不能自动挑第一个。
+- **DPI 与坐标**：启用 `PerMonitorV2` DPI 感知，返回的矩形与截图尺寸均为物理像素（因 DWM 阴影扩展边框差异，子控件相对窗口根矩形可能出现小幅负偏移）。
+- **窗口截图边界**：优先使用 `PrintWindow`；`backgroundOnly: true` 要求同时指定 `pid` 与 `hwnd`，禁用桌面屏幕回退，最小化窗口不作为有效后台截图返回。部分硬件加速窗口可能返回全黑或陈旧画面，须结合 `captureMethod` 与 `captureQuality`（如 `suspect-low-variation`）核对。
+- **提示浮层与审计日志**：每次 UI 检查与操作期间均显示无焦点 `REC / WinCoding` 提示浮层，并在 `%LOCALAPPDATA%/WinCode/logs/ui-audit` 写入本地审计记录（多实例并发时由命名 Mutex 互斥，冲突返回 `AUDIT_BUSY`）。
+- **独立托盘说明**：可选的 `WinCode.Tray` 是独立的 WinForms 进程，不属于本 UIA Host 的常驻模式；退出托盘不会停止 MCP 或目标应用。
 
-## 截图与坐标
+## 构建与校验
 
-采用 PerMonitorV2 DPI 感知，矩形和截图坐标为物理像素。DWM 扩展边框与 UIA 根矩形可能不同，因此相对坐标出现负偏移不自动意味着定位错误。
-
-截图优先尝试 PrintWindow；成功与图像内容取决于目标应用及渲染状态，不能保证所有 GPU/WPF 窗口都可正确捕获。`backgroundOnly=true` 要求明确 PID/HWND，禁用桌面屏幕回退；最小化窗口不作为后台截图成功处理。非后台限制模式才允许按实现尝试桌面 DC/屏幕回退。
-
-读取 `captureMethod` 和 `captureQuality`，区分截图 API 返回成功与画面内容可信；质量检测不是语义识别。树查询、截图、审计分别有自己的结果边界，不因获得一张 PNG 就宣称全部取证完成。
-
-可选 WinForms Tray 是另一个发布组件，不是本 UIA Host 的常驻模式；关闭托盘不应关闭 MCP 或被检查应用。跨实例 HWND 隔离、非默认 DPI 与历史偶发捕获失败的验证范围见工作记录，不能由核心测试通过推断全部支持。
-
-## 构建与验证
-
-从仓库根目录运行 `npm run check` 完成锁定还原、Release Host 构建与交付校验；需要交互桌面时另运行 `npm run check:desktop`。构建要求固定 SDK 10.0.303，framework-dependent Host 需要 .NET 10 Windows Desktop 运行时。完整命令与报告边界见 [贡献指南](../../CONTRIBUTING.md)。
-
-生产默认只使用发布的 Release Host；Debug/dotnet-run 回退需显式开发模式。更新 Host 后核对完整交付文件集和实际响应身份，不能只替换一个 DLL。
+在仓库根目录执行 `npm run check` 完成锁定还原、Release 发布与交付清单校验；桌面交互测试执行 `npm run check:desktop`。构建要求 `.NET SDK 10.0.303`，运行发布产物需要 `.NET 10 Windows Desktop` 运行时。生产环境仅加载完整的 Release 发布目录，切勿单独替换某个 DLL（详见 [贡献指南](../../CONTRIBUTING.md)）。
